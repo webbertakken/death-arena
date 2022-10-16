@@ -53,7 +53,7 @@ struct Name(String);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let player_handle = asset_server.load("textures/car1.png");
-    let enemy_handle = asset_server.load("textures/bevy.png");
+    // let enemy_handle = asset_server.load("textures/bevy.png");
     let rock_handle = asset_server.load("textures/rock.png");
 
     // 2D orthographic camera
@@ -76,14 +76,14 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // enemy that snaps to face the player spawns on the bottom and left
     commands
         .spawn_bundle(SpriteBundle {
-            texture: enemy_handle.clone(),
+            texture: rock_handle.clone(),
             transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 0.0),
             ..default()
         })
         .insert(SnapToPlayer);
     commands
         .spawn_bundle(SpriteBundle {
-            texture: enemy_handle,
+            texture: rock_handle.clone(),
             transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 0.0),
             ..default()
         })
