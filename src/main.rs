@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_inspector_egui::WorldInspectorPlugin;
 use gameplay::GameplayPlugins;
 
 mod gameplay;
@@ -15,5 +16,6 @@ fn main() {
         })
         .add_plugins(DefaultPlugins)
         .add_plugins(GameplayPlugins)
+        .add_plugin(WorldInspectorPlugin::new())
         .run();
 }
