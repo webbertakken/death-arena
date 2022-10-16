@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use bevy::{math::Vec3Swizzles, prelude::*, time::FixedTimestep};
+use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
 const TIME_STEP: f32 = 1.0 / 60.0;
 const BOUNDS: Vec2 = Vec2::new(1200.0, 640.0);
