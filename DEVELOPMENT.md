@@ -2,6 +2,12 @@
 
 ## Setup
 
+- Initiate lfs
+
+```powershell
+git lfs install
+```
+
 - Install Rust, using the `rustup` method ([docs](https://www.rust-lang.org/tools/install))
 
 ```powershell

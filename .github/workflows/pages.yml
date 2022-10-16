@@ -1,0 +1,66 @@
+name: Pages 📄
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Create LFS file list
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Restore LFS cache
+        uses: actions/cache@v2
+        id: lfs-cache
+        with:
+          path: .git/lfs
+          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Git LFS Pull
+        run: |
+          git lfs pull
+          git add .
+          git reset --hard
+
+      - name: Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os }}-build-web
+
+      - name: Install Bevy deps + LLD linker
+        run: sudo apt-get install g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
+
+      - name: Install rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.1.0
+        with:
+          version: 'latest'
+
+      - name: Add wasm target
+        run: |
+          rustup target add wasm32-unknown-unknown
+
+      - name: Build Release
+        run: |
+          trunk build --release --public-url "${GITHUB_REPOSITORY#*/}"
+
+      - name: optimize Wasm
+        uses: NiklasEi/wasm-opt-action@v2
+        with:
+          file: dist/*.wasm
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4.2.5
+        with:
+          branch: gh-pages
+          folder: dist
