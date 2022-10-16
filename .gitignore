@@ -1,8 +1,10 @@
 # General
 /.idea
+.DS_Store
 
 # Credentials
 .env
 
 # Rust
 /target
+/dist
