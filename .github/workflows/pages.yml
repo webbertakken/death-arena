@@ -23,6 +23,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v2
+
       - name: Checkout
         uses: actions/checkout@v3
 
@@ -80,9 +83,6 @@ jobs:
 #        with:
 #          branch: gh-pages
 #          folder: dist
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v2
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
