@@ -2,13 +2,20 @@ name: Pages 📄
 
 on:
   workflow_dispatch: {}
+  push: { branches: [ main ] }
 
 jobs:
   build-web:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
