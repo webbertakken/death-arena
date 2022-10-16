@@ -10,6 +10,7 @@ fn main() {
             height: 800.0,
             title: "Death Arena".to_string(),
             canvas: Some("#game".to_owned()),
+            fit_canvas_to_parent: true,
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
