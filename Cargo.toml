@@ -18,7 +18,10 @@ dotenvy = "0.15"
 # Otherwise you will need to include libbevy_dylib alongside your game if you want it to run.
 # If you remove the "dynamic" feature, your game executable can run standalone.
 # source: https://bevyengine.org/learn/book/getting-started/setup/
-bevy = { version = "0.8.1", features = ["dynamic"] }
+bevy = "0.8.1"
+
+[features]
+dev = ["bevy/dynamic"]
 
 [workspace]
 resolver = "2" # Important! wgpu/Bevy needs this!
@@ -30,3 +33,10 @@ opt-level = 1
 # Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[build-dependencies]
+embed-resource = "1.4"

@@ -11,7 +11,7 @@ git lfs install
 - Install Rust, using the `rustup` method ([docs](https://www.rust-lang.org/tools/install))
 
 ```powershell
-  choco install rustup.install
+choco install rustup.install
 ```
 
 - Restart terminal

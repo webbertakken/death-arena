@@ -54,7 +54,7 @@ jobs:
         run: |
           trunk build --release --public-url "${GITHUB_REPOSITORY#*/}"
 
-      - name: optimize Wasm
+      - name: Optimize Wasm
         uses: NiklasEi/wasm-opt-action@v2
         with:
           file: dist/*.wasm
