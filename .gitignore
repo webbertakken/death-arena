@@ -1,0 +1,8 @@
+# General
+/.idea
+
+# Credentials
+.env
+
+# Rust
+/target
