@@ -46,7 +46,7 @@ jobs:
       - name: Cache
         uses: swatinem/rust-cache@v2
         with:
-          shared-key: ${{ runner.os }}-base
+          shared-key: ${{ runner.os }}-test
       - name: Cargo test
         uses: actions-rs/cargo@v1
         with:
