@@ -18,34 +18,24 @@ choco install rustup.install
 - Install Bevy (game engine) prerequisites ([docs](https://bevyengine.org/learn/book/getting-started/setup/))
 
 ```powershell
+rustup default stable-x86_64-pc-windows-gnu
 cargo install -f cargo-binutils
 rustup component add llvm-tools-preview
 ```
 
-- Run the game. The first time will take a few minutes.
-
-## Run
-
-```powershell
-cargo run
-```
-
-## Run for Web
-
-#### Prerequisites
-requires trunk and wasm32-unknown-unknown target:
+- Install web capability
 
 ```powershell
 cargo install --locked trunk
 rustup target add wasm32-unknown-unknown
 ```
 
-#### Start
+- Run the game. The first time will take a few minutes, because dependencies have to be compiled.
 
-Start the web build:
+## Run
+
+Run the game with hot reload!
 
 ```powershell
-`trunk serve`
+trunk serve
 ```
-
-this will serve your app on 8080 and automatically rebuild + reload it after code changes.

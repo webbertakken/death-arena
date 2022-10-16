@@ -19,9 +19,10 @@ dotenvy = "0.15"
 bevy = { version = "0.8.1", default-features = false, features = ["bevy_asset", "bevy_winit", "render", "png", "x11"] }
 bevy_kira_audio = "0.12"
 bevy_asset_loader = "0.12"
+bevy-inspector-egui = "0.13.0"
 
 # keep the following in sync with Bevy's dependencies
-winit = { version = "0.27.4", default-features = false }
+winit = { version = "0.27.4", default-features = false, features = ["x11"] }
 image = { version = "0.24", default-features = false }
 
 [build-dependencies]
