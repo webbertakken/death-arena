@@ -4,12 +4,13 @@ on:
   workflow_dispatch: {}
   push: { branches: [ main ] }
 
+# Needed to deploy to GitHub Pages.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Allow one concurrent deployment
+# Allow one concurrent deployment.
 concurrency:
   group: "pages"
   cancel-in-progress: true
@@ -18,17 +19,21 @@ jobs:
   build-web:
     runs-on: ubuntu-latest
 
+    # Use the deployment url to show the environment url.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      # Enable GitHub Pages - first, to fail fast if permissions fail.
       - name: Setup Pages
         uses: actions/configure-pages@v2
 
+      # Checkout without LFS.
       - name: Checkout
         uses: actions/checkout@v3
 
+      # Restore LFS assets from cache, so that you don't have to check them out every time, which saves GitHub bundle costs.
       - name: Create LFS file list
         run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
 
@@ -39,12 +44,14 @@ jobs:
           path: .git/lfs
           key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}
 
+      # Pull any LFS assets that weren't yet cached.
       - name: Git LFS Pull
         run: |
           git lfs pull
           git add .
           git reset --hard
 
+      # Cache deps/builds, so that you don't have to compile intermediate libs everytime.
       - name: Cache
         uses: swatinem/rust-cache@v2
         with:
@@ -60,6 +67,7 @@ jobs:
           toolchain: stable
           override: true
 
+      # Generate build for web-target.
       - name: Install trunk
         uses: jetli/trunk-action@v0.1.0
         with:
@@ -73,17 +81,21 @@ jobs:
         run: |
           trunk build --release --public-url "${GITHUB_REPOSITORY#*/}"
 
+      # Optimise the build.
       - name: Optimize Wasm
         uses: NiklasEi/wasm-opt-action@v2
         with:
           file: dist/*.wasm
 
+#      # This step actually creates a branch named gh-pages.
+#      # which is really not what you want if you have 5MB+ in assets.
 #      - name: Deploy to GitHub Pages
 #        uses: JamesIves/github-pages-deploy-action@v4.2.5
 #        with:
 #          branch: gh-pages
 #          folder: dist
 
+      # Upload the build and deploy it to GitHub Pages.
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
