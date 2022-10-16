@@ -18,6 +18,7 @@ choco install rustup.install
 - Install Bevy (game engine) prerequisites ([docs](https://bevyengine.org/learn/book/getting-started/setup/))
 
 ```powershell
+rustup default stable-x86_64-pc-windows-gnu
 cargo install -f cargo-binutils
 rustup component add llvm-tools-preview
 ```
