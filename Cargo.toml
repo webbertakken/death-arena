@@ -13,3 +13,20 @@ anyhow = "1.0"
 log = "0.4"
 env_logger = "0.9"
 dotenvy = "0.15"
+
+# NOTE: Remember to revert this before releasing your game!
+# Otherwise you will need to include libbevy_dylib alongside your game if you want it to run.
+# If you remove the "dynamic" feature, your game executable can run standalone.
+# source: https://bevyengine.org/learn/book/getting-started/setup/
+bevy = { version = "0.8.1", features = ["dynamic"] }
+
+[workspace]
+resolver = "2" # Important! wgpu/Bevy needs this!
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
