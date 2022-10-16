@@ -4,7 +4,7 @@ use crate::{App, Plugin};
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
-    fn build(&self, app: &mut App) {
+    fn build(&self, _app: &mut App) {
         // add things to your app  here
     }
 }

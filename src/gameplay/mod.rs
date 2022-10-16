@@ -1,6 +1,5 @@
 use bevy::app::PluginGroup;
 use bevy::app::PluginGroupBuilder;
-use bevy::prelude::*;
 
 mod hello_world;
 mod player;
