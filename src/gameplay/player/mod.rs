@@ -1,63 +1,59 @@
-#![allow(dead_code, unused_variables)]
-
 use bevy::prelude::*;
 
+use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
-const TIME_STEP: f32 = 1.0 / 60.0;
-const BOUNDS: Vec2 = Vec2::new(1200.0, 640.0);
+use crate::gameplay::main::{BOUNDS, TIME_STEP};
+use crate::gameplay::player;
 
-#[derive(Default)]
-pub struct HelloWorldPlugin;
-
-struct SpawnTimer(Timer);
-
-impl Plugin for HelloWorldPlugin {
-    fn build(&self, app: &mut App) {
-        // add things to your app  here
-        app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
-            .add_startup_system(setup)
-            .add_system_set(
-                SystemSet::new()
-                    .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
-                    .with_system(player_movement_system)
-                    .with_system(snap_to_player_system)
-                    .with_system(rotate_to_player_system),
-            )
-            .add_system(bevy::window::close_on_esc)
-            .run();
-    }
-}
+mod movement;
 
 #[derive(Component)]
-struct Player {
+pub struct Player {
     /// linear speed in meters per second
     movement_speed: f32,
     /// rotation speed in radians per second
     rotation_speed: f32,
 }
 
+#[derive(Default)]
+pub struct PlayerPlugin;
+
+impl Plugin for PlayerPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
+            .add_startup_system(setup)
+            .add_system_set(
+                SystemSet::new()
+                    .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+                    .with_system(movement::player_movement_system)
+                    .with_system(snap_to_player_system)
+                    .with_system(rotate_to_player_system),
+            )
+            .add_system(bevy::window::close_on_esc);
+    }
+}
+
+pub struct SpawnTimer(Timer);
+
 /// snap to player ship behavior
 #[derive(Component)]
-struct SnapToPlayer;
+pub struct SnapToPlayer;
 
 /// rotate to face player ship behavior
 #[derive(Component)]
-struct RotateToPlayer {
+pub struct RotateToPlayer {
     /// rotation speed in radians per second
     rotation_speed: f32,
 }
 
 #[derive(Component)]
-struct Name(String);
+pub struct Name(String);
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let player_handle = asset_server.load("textures/car1.png");
     // let enemy_handle = asset_server.load("textures/bevy.png");
     let rock_handle = asset_server.load("textures/rock.png");
-
-    // 2D orthographic camera
-    commands.spawn_bundle(Camera2dBundle::default());
 
     let horizontal_margin = BOUNDS.x / 4.0;
     let vertical_margin = BOUNDS.y / 4.0;
@@ -66,6 +62,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: player_handle,
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 5.0),
+                rotation: Quat::from_rotation_z(f32::to_radians(0.0)),
+                scale: Vec3::new(0.2, 0.2, 0.0),
+            },
             ..default()
         })
         .insert(Player {
@@ -77,14 +78,14 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 0.0),
+            transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
             ..default()
         })
         .insert(SnapToPlayer);
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 0.0),
+            transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 2.0),
             ..default()
         })
         .insert(SnapToPlayer);
@@ -93,7 +94,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 0.0),
+            transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
             ..default()
         })
         .insert(RotateToPlayer {
@@ -102,7 +103,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle,
-            transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 0.0),
+            transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 2.0),
             ..default()
         })
         .insert(RotateToPlayer {
@@ -110,47 +111,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-/// Demonstrates applying rotation and movement based on keyboard input.
-fn player_movement_system(
-    keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<(&Player, &mut Transform)>,
-) {
-    let (ship, mut transform) = query.single_mut();
-
-    let mut rotation_factor = 0.0;
-    let mut movement_factor = 0.0;
-
-    if keyboard_input.pressed(KeyCode::Left) {
-        rotation_factor += 1.0;
-    }
-
-    if keyboard_input.pressed(KeyCode::Right) {
-        rotation_factor -= 1.0;
-    }
-
-    if keyboard_input.pressed(KeyCode::Up) {
-        movement_factor += 1.0;
-    }
-
-    // update the ship rotation around the Z axis (perpendicular to the 2D plane of the screen)
-    transform.rotate_z(rotation_factor * ship.rotation_speed * TIME_STEP);
-
-    // get the ship's forward vector by applying the current rotation to the ships initial facing vector
-    let movement_direction = transform.rotation * Vec3::Y;
-    // get the distance the ship will move based on direction, the ship's movement speed and delta time
-    let movement_distance = movement_factor * ship.movement_speed * TIME_STEP;
-    // create the change in translation using the new movement direction and distance
-    let translation_delta = movement_direction * movement_distance;
-    // update the ship translation with our new translation delta
-    transform.translation += translation_delta;
-
-    // bound the ship within the invisible level bounds
-    let extents = Vec3::from((BOUNDS / 2.0, 0.0));
-    transform.translation = transform.translation.min(extents).max(-extents);
-}
-
 /// Demonstrates snapping the enemy ship to face the player ship immediately.
-fn snap_to_player_system(
+pub fn snap_to_player_system(
     mut query: Query<&mut Transform, (With<SnapToPlayer>, Without<Player>)>,
     player_query: Query<&Transform, With<Player>>,
 ) {
@@ -192,7 +154,7 @@ fn snap_to_player_system(
 /// than -1.0 or greater than 1.0. This can happen even when working with unit vectors due to
 /// floating point precision loss, so it pays to clamp your dot product value before calling
 /// `acos`.
-fn rotate_to_player_system(
+pub fn rotate_to_player_system(
     mut query: Query<(&RotateToPlayer, &mut Transform), Without<Player>>,
     player_query: Query<&Transform, With<Player>>,
 ) {

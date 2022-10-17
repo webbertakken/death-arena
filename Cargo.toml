@@ -4,10 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 authors = ["Webber Takken <webber@takken.io>", "Worempie"]
-exclude = ["dist", "build", "assets", "credits"]
+exclude = [".git/", ".idea/", "dist/", "build/", "assets/", "credits/"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 rand = "0.8"
 crossbeam = "0.8"
@@ -15,8 +14,8 @@ thiserror = "1.0"
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.9"
-dotenvy = "0.15"
-bevy = { version = "0.8.1", default-features = false, features = ["bevy_asset", "bevy_winit", "render", "png", "x11"] }
+dotenvy = "0.15.6"
+bevy = { version = "0.8.1", default-features = false, features = ["bevy_asset", "bevy_winit", "render", "png", "jpeg", "x11"] }
 bevy_kira_audio = "0.12"
 bevy_asset_loader = "0.12"
 bevy-inspector-egui = "0.13.0"

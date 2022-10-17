@@ -1,0 +1,21 @@
+# Example https://github.com/thedodd/trunk/blob/master/Trunk.toml
+
+[watch]
+watch = ["src/", "build/", "index.html", "Cargo.toml", "Cargo.lock", "Trunk.toml"]
+ignore = [".git/", ".idea/", "dist/", "target/", "credits/"]
+
+[serve]
+port = 80
+
+[[hooks]]
+stage = "pre_build"
+command = "echo"
+command_arguments = ["--- Trunk start ---"]
+
+[[hooks]]
+stage = "post_build"
+command = "echo"
+command_arguments = ["--- Trunk end ---"]
+
+
+
