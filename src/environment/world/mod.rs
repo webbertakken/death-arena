@@ -9,6 +9,6 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_startup_system(arena::setup).run();
+        app.add_startup_system(arena::setup);
     }
 }
