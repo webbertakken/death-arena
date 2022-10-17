@@ -15,16 +15,18 @@ pub fn player_movement_system(
     let mut rotation_factor = 0.0;
     let mut movement_factor = 0.0;
 
-    if keyboard_input.pressed(KeyCode::Left) {
+    if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
         rotation_factor += 0.75;
     }
 
-    if keyboard_input.pressed(KeyCode::Right) {
+    if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
         rotation_factor -= 0.75;
     }
 
-    if keyboard_input.pressed(KeyCode::Up) {
-        movement_factor += 1.0;
+    if keyboard_input.any_pressed([KeyCode::Up, KeyCode::W]) {
+        movement_factor += 0.75;
+    } else if keyboard_input.any_pressed([KeyCode::Down, KeyCode::S]) {
+        movement_factor -= 0.2;
     }
 
     // update the ship rotation around the Z axis (perpendicular to the 2D plane of the screen)
