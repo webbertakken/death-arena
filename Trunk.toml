@@ -2,7 +2,6 @@
 
 [watch]
 watch = ["src/", "build/", "index.html", "Cargo.toml", "Cargo.lock", "Trunk.toml"]
-ignore = [".git/", ".idea/", "dist/", "target/", "credits/"]
 
 [serve]
 port = 80
