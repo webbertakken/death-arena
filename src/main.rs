@@ -1,10 +1,16 @@
+#![allow(dead_code, unused_variables, unused_imports)]
+
 use bevy::prelude::*;
 use bevy_inspector_egui::WorldInspectorPlugin;
+use environment::EnvironmentPlugins;
 use gameplay::GameplayPlugins;
 
+mod core;
+mod environment;
 mod gameplay;
 
 fn main() {
+    core::init();
     App::new()
         .insert_resource(WindowDescriptor {
             width: 1400.0,
@@ -15,6 +21,7 @@ fn main() {
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
+        .add_plugins(EnvironmentPlugins)
         .add_plugins(GameplayPlugins)
         .add_plugin(WorldInspectorPlugin::new())
         .run();
