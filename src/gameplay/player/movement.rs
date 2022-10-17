@@ -16,11 +16,11 @@ pub fn player_movement_system(
     let mut movement_factor = 0.0;
 
     if keyboard_input.pressed(KeyCode::Left) {
-        rotation_factor += 1.0;
+        rotation_factor += 0.75;
     }
 
     if keyboard_input.pressed(KeyCode::Right) {
-        rotation_factor -= 1.0;
+        rotation_factor -= 0.75;
     }
 
     if keyboard_input.pressed(KeyCode::Up) {
@@ -42,4 +42,5 @@ pub fn player_movement_system(
     // bound the ship within the invisible level bounds
     let extents = Vec3::from((BOUNDS / 2.0, 0.0));
     transform.translation = transform.translation.min(extents).max(-extents);
+    transform.translation.z = 5.0;
 }

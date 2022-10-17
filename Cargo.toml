@@ -14,7 +14,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.9"
-dotenvy = "0.15"
+dotenvy = "0.15.6"
 bevy = { version = "0.8.1", default-features = false, features = ["bevy_asset", "bevy_winit", "render", "png", "jpeg", "x11"] }
 bevy_kira_audio = "0.12"
 bevy_asset_loader = "0.12"

@@ -55,9 +55,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // let enemy_handle = asset_server.load("textures/bevy.png");
     let rock_handle = asset_server.load("textures/rock.png");
 
-    // 2D orthographic camera
-    commands.spawn_bundle(Camera2dBundle::default());
-
     let horizontal_margin = BOUNDS.x / 4.0;
     let vertical_margin = BOUNDS.y / 4.0;
 
@@ -65,7 +62,11 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: player_handle,
-            transform: Transform::from_xyz(0., 0., 1.),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 5.0),
+                rotation: Quat::from_rotation_z(f32::to_radians(0.0)),
+                scale: Vec3::new(0.2, 0.2, 0.0),
+            },
             ..default()
         })
         .insert(Player {
@@ -77,14 +78,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 0.0),
+            transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
             ..default()
         })
         .insert(SnapToPlayer);
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 0.0),
+            transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 2.0),
             ..default()
         })
         .insert(SnapToPlayer);
@@ -93,7 +94,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 0.0),
+            transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
             ..default()
         })
         .insert(RotateToPlayer {
@@ -102,7 +103,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn_bundle(SpriteBundle {
             texture: rock_handle,
-            transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 0.0),
+            transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 2.0),
             ..default()
         })
         .insert(RotateToPlayer {
