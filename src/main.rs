@@ -1,7 +1,8 @@
 #![allow(dead_code, unused_variables, unused_imports)]
-
+use crate::core::CorePlugins;
 use bevy::prelude::*;
 use bevy_inspector_egui::WorldInspectorPlugin;
+use bevy_kira_audio::prelude::*;
 use environment::EnvironmentPlugins;
 use gameplay::GameplayPlugins;
 
@@ -21,6 +22,7 @@ fn main() {
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
+        .add_plugins(CorePlugins)
         .add_plugins(EnvironmentPlugins)
         .add_plugins(GameplayPlugins)
         .add_plugin(WorldInspectorPlugin::new())
