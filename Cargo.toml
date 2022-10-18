@@ -31,12 +31,12 @@ bevy-inspector-egui = "0.13.0"
 winit = { version = "0.27.4", default-features = false, features = ["x11"] }
 image = { version = "0.24", default-features = false }
 
-# Technically this should be in the dev-dependencies, but then the hooks only install when running `cargo test`.
+[dev-dependencies]
+# run `cargo test` to enable this
 rusty-hook = "0.11"
 
 [build-dependencies]
 embed-resource = "1.4"
-
 
 [features]
 dev = ["bevy/dynamic"]
