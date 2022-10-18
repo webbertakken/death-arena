@@ -15,6 +15,3 @@ command_arguments = ["--- Trunk start ---"]
 stage = "post_build"
 command = "echo"
 command_arguments = ["--- Trunk end ---"]
-
-
-

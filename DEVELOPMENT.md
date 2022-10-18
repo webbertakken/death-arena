@@ -30,7 +30,14 @@ cargo install --locked trunk
 rustup target add wasm32-unknown-unknown
 ```
 
-- Run the game. The first time will take a few minutes, because dependencies have to be compiled.
+- Run the tests.
+  - This will install dependencies and dev-dependencies. 
+  - The first time will take a few minutes.
+  - This will automatically install rusty-hook.
+
+```powershell
+cargo test
+```
 
 ## Run
 
