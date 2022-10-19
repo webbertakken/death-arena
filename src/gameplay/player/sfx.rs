@@ -47,7 +47,7 @@ pub fn engine_revving_system(
             KeyCode::D,
             KeyCode::Right,
         ]) {
-            rev_speed = 0.35;
+            rev_speed = 0.6;
             instance.set_volume(
                 rev_speed * engine_volume,
                 AudioTween::linear(Duration::from_millis(1)),
