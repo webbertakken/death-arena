@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::player;
 
+mod camera;
 mod movement;
 mod sfx;
 
@@ -25,12 +26,14 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
+            .add_startup_system(camera::setup)
             .add_startup_system(setup)
             .add_startup_system(sfx::setup)
             .add_system_set(
                 SystemSet::new()
                     .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
                     .with_system(movement::player_movement_system)
+                    .with_system(camera::camera_follows_player_system)
                     .with_system(sfx::engine_revving_system)
                     .with_system(snap_to_player_system)
                     .with_system(rotate_to_player_system),

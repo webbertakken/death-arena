@@ -10,7 +10,7 @@ pub fn player_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
     mut query: Query<(&Player, &mut Transform)>,
 ) {
-    let (ship, mut transform) = query.single_mut();
+    let (player, mut transform) = query.single_mut();
 
     let mut rotation_factor = 0.0;
     let mut movement_factor = 0.0;
@@ -30,12 +30,12 @@ pub fn player_movement_system(
     }
 
     // update the ship rotation around the Z axis (perpendicular to the 2D plane of the screen)
-    transform.rotate_z(rotation_factor * ship.rotation_speed * TIME_STEP);
+    transform.rotate_z(rotation_factor * player.rotation_speed * TIME_STEP);
 
     // get the ship's forward vector by applying the current rotation to the ships initial facing vector
     let movement_direction = transform.rotation * Vec3::Y;
     // get the distance the ship will move based on direction, the ship's movement speed and delta time
-    let movement_distance = movement_factor * ship.movement_speed * TIME_STEP;
+    let movement_distance = movement_factor * player.movement_speed * TIME_STEP;
     // create the change in translation using the new movement direction and distance
     let translation_delta = movement_direction * movement_distance;
     // update the ship translation with our new translation delta
