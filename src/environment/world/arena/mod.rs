@@ -39,9 +39,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<
     let floor_path = format!("{}/floor.jpg", arena_path);
     let arena_floor_handle = asset_server.load("textures/arenas/book_ctf_1/floor.jpg");
 
-    // 2D orthographic camera
-    commands.spawn_bundle(Camera2dBundle::default());
-
     // Arena floor
     commands
         .spawn_bundle(SpriteBundle {
