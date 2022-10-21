@@ -24,16 +24,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<
         path: "book_ctf_1".to_string(),
     }];
 
-    let music = asset_server.load("music/arena/Funky-Gameplay_v001.mp3");
-    audio
-        .play(music)
-        .fade_in(AudioTween::new(
-            Duration::from_secs(5),
-            AudioEasing::OutPowi(2),
-        ))
-        .with_volume(0.25)
-        .looped();
-
     let arena = &arenas[0];
     let arena_path = format!("textures/arenas/{}", arena.path);
     let floor_path = format!("{}/floor.jpg", arena_path);
