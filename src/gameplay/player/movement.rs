@@ -6,8 +6,6 @@ use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
-// Todo - probably should use WorldQuery attribute
-
 type FrontLeftWheelQuery<'w, 's> = Query<
     'w,
     's,
