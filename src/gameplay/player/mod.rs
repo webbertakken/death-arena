@@ -2,6 +2,7 @@
 use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
+use bevy_inspector_egui::{Inspectable, RegisterInspectable};
 use bevy_kira_audio::prelude::*;
 use std::time::Duration;
 
@@ -37,7 +38,7 @@ pub struct RotateToPlayer {
     rotation_speed: f32,
 }
 
-#[derive(Component)]
+#[derive(Inspectable, Component)]
 pub struct Name(String);
 
 impl Plugin for PlayerPlugin {
@@ -50,7 +51,7 @@ impl Plugin for PlayerPlugin {
             .add_system_set(
                 SystemSet::new()
                     .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
-                    .with_system(movement::player_movement_system)
+                    .with_system(movement::car_movement_system)
                     .with_system(camera::camera_follows_player_system)
                     .with_system(sfx::engine_revving_system),
             )
