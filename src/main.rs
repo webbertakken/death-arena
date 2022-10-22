@@ -1,13 +1,10 @@
 #![allow(dead_code, unused_variables, unused_imports)]
-use crate::core::CorePlugins;
 use bevy::prelude::*;
 use bevy_inspector_egui::WorldInspectorPlugin;
 use bevy_kira_audio::prelude::*;
-use environment::EnvironmentPlugins;
 use gameplay::GameplayPlugins;
 
 mod core;
-mod environment;
 mod gameplay;
 
 fn main() {
@@ -19,11 +16,9 @@ fn main() {
             title: "Death Arena".to_string(),
             canvas: Some("#game".to_owned()),
             fit_canvas_to_parent: true,
-            ..Default::default()
+            ..default()
         })
         .add_plugins(DefaultPlugins)
-        .add_plugins(CorePlugins)
-        .add_plugins(EnvironmentPlugins)
         .add_plugins(GameplayPlugins)
         .add_plugin(WorldInspectorPlugin::new())
         .run();
