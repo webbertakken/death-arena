@@ -1,3 +1,4 @@
+use crate::gameplay::main::CAMERA_FAR;
 use crate::gameplay::player::Player;
 use bevy::prelude::*;
 use bevy::render::camera::Viewport;
@@ -17,21 +18,6 @@ pub fn setup(mut commands: Commands) {
     commands
         .spawn_bundle(Camera2dBundle::default())
         .insert(MainCamera);
-
-    // Light
-    // commands.spawn_bundle(DirectionalLightBundle {
-    //     transform: Transform::from_rotation(Quat::from_euler(
-    //         EulerRot::ZYX,
-    //         0.0,
-    //         1.0,
-    //         -std::f32::consts::FRAC_PI_4,
-    //     )),
-    //     directional_light: DirectionalLight {
-    //         shadows_enabled: true,
-    //         ..default()
-    //     },
-    //     ..default()
-    // });
 
     // Split screen example: https://github.com/bevyengine/bevy/blob/latest/examples/3d/split_screen.rs
 }
