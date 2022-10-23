@@ -8,12 +8,10 @@
 git lfs install
 ```
 
-- Install Blender and
 - Install Rust, using the `rustup` method ([docs](https://www.rust-lang.org/tools/install))
 
 ```powershell
 choco install -y `
-  blender `
   rustup.install
 ```
 
