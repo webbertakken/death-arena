@@ -68,6 +68,8 @@
 *.dfx lfs-file
 *.FBX lfs-file
 *.fbx lfs-file
+*.glf lfs-file
+*.gltf lfs-file
 *.lwo lfs-file
 *.lwo2 lfs-file
 *.lxo lfs-file

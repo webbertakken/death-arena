@@ -6,8 +6,6 @@ use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
-// Todo - probably should use WorldQuery attribute
-
 type FrontLeftWheelQuery<'w, 's> = Query<
     'w,
     's,
@@ -33,21 +31,37 @@ pub fn car_movement_system(
     let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
     let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();
 
+    // Turning
+    let wheels_turning_multiplier = 0.5;
+    let forward_turning_speed = 0.75 * wheels_turning_multiplier;
+    let backward_turning_speed = 0.6 * wheels_turning_multiplier;
+
+    // Acceleration
+    let engine_max_speed_multiplier = 0.5;
+    let forward_max_speed = 0.8 * engine_max_speed_multiplier;
+    let backward_max_speed = 0.25 * engine_max_speed_multiplier;
+
     let mut rotation_factor = 0.0;
     let mut movement_factor = 0.0;
 
-    if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
-        rotation_factor += 0.75;
-    }
-
-    if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
-        rotation_factor -= 0.75;
-    }
-
     if keyboard_input.any_pressed([KeyCode::Up, KeyCode::W]) {
-        movement_factor += 0.75;
+        movement_factor += forward_max_speed;
+        if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
+            rotation_factor += forward_turning_speed;
+        }
+
+        if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
+            rotation_factor -= forward_turning_speed;
+        }
     } else if keyboard_input.any_pressed([KeyCode::Down, KeyCode::S]) {
-        movement_factor -= 0.2;
+        movement_factor -= backward_max_speed;
+        if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
+            rotation_factor -= backward_turning_speed;
+        }
+
+        if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
+            rotation_factor += backward_turning_speed;
+        }
     }
 
     // update the car rotation around the Z axis (perpendicular to the 2D plane of the screen)

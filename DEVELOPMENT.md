@@ -11,7 +11,8 @@ git lfs install
 - Install Rust, using the `rustup` method ([docs](https://www.rust-lang.org/tools/install))
 
 ```powershell
-choco install rustup.install
+choco install -y `
+  rustup.install
 ```
 
 - Restart terminal
@@ -46,3 +47,22 @@ Run the game with hot reload!
 ```powershell
 trunk serve
 ```
+
+## Tools
+
+### Collider creator
+
+#### Install
+
+```powershell
+cargo install rusty_engine --example collider
+```
+
+#### Run
+
+```powershell
+collider .\assets\textures\my-texture.png
+```
+
+
+
