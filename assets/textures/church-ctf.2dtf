@@ -1,5 +1,827 @@
 {
   "name": "Church CTF",
   "version": "0.0.1",
-  "description": "Generated using Webber's Map Editor 2D. See https://github.com/webbertakken/map-editor-2d for more details."
+  "description": "Generated using Webber's Map Editor 2D. See https://github.com/webbertakken/map-editor-2d for more details.",
+  "assetsRelativePath": "",
+  "defaultProperties": {
+    "position": {
+      "x": 0,
+      "y": 0,
+      "z": "2"
+    },
+    "rotation": "1",
+    "scale": {
+      "x": "0.75",
+      "y": "0.75",
+      "z": "1.0"
+    },
+    "opacity": "1",
+    "locked": false
+  },
+  "canvas": {
+    "sprites": [
+      {
+        "id": "e2e644d4-c1b9-464c-b73a-ea84c204cd9c",
+        "position": {
+          "x": 959,
+          "y": 611,
+          "z": 0
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "1.0",
+          "y": "1.0",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/book_ctf_1/floor.jpg"
+      },
+      {
+        "id": "4eb1a41a-bb3c-46ee-a0ec-8b4c2c57d6b5",
+        "position": {
+          "x": 1347,
+          "y": 889,
+          "z": 1
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/layout.png",
+        "locked": true
+      },
+      {
+        "id": "9d0f1321-a8f5-4867-8639-278ed9310e73",
+        "position": {
+          "x": 698,
+          "y": 145,
+          "z": 2
+        },
+        "rotation": 9,
+        "scale": {
+          "x": "0.60",
+          "y": "0.60",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/container-1.png"
+      },
+      {
+        "id": "8361fb2f-e093-4290-8ddb-647347d95f45",
+        "position": {
+          "x": 895,
+          "y": 141,
+          "z": 2
+        },
+        "rotation": -8,
+        "scale": {
+          "x": "0.66",
+          "y": "0.66",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/container-2.png"
+      },
+      {
+        "id": "183beb5c-62c2-4af2-9675-bad29d58bdd4",
+        "position": {
+          "x": 218,
+          "y": 395,
+          "z": "2"
+        },
+        "rotation": 3,
+        "scale": {
+          "x": "0.42",
+          "y": "0.42",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-2.png"
+      },
+      {
+        "id": "be05a52b-73d4-4f0e-87d2-7dcea0bf8865",
+        "position": {
+          "x": 179,
+          "y": 373,
+          "z": "2"
+        },
+        "rotation": 7,
+        "scale": {
+          "x": "0.47",
+          "y": "0.47",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-1.png"
+      },
+      {
+        "id": "776221ae-3ba2-4de2-a3ac-fdfa8d0e4268",
+        "position": {
+          "x": 256,
+          "y": 410,
+          "z": "2"
+        },
+        "rotation": 20,
+        "scale": {
+          "x": "0.42",
+          "y": "0.42",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-2.png"
+      },
+      {
+        "id": "778fe8f3-9485-4657-85f6-7ad1419a716c",
+        "position": {
+          "x": 288,
+          "y": 437,
+          "z": "2"
+        },
+        "rotation": 30,
+        "scale": {
+          "x": "0.42",
+          "y": "0.42",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-2.png"
+      },
+      {
+        "id": "1e9b8bf5-3e06-4b81-afc0-0038200ec0ef",
+        "position": {
+          "x": 330,
+          "y": 459,
+          "z": "2"
+        },
+        "rotation": 50,
+        "scale": {
+          "x": "0.47",
+          "y": "0.47",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-1.png"
+      },
+      {
+        "id": "df51abfe-31e3-4c60-89cc-d90413e5f901",
+        "position": {
+          "x": 357,
+          "y": 509,
+          "z": "2"
+        },
+        "rotation": 68,
+        "scale": {
+          "x": "0.47",
+          "y": "0.47",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-lower-1.png"
+      },
+      {
+        "id": "d3dcc916-87f9-423c-832a-4bcf0ea6d1a3",
+        "position": {
+          "x": 114,
+          "y": 698,
+          "z": "2"
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.84",
+          "y": "0.84",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house2-main.png"
+      },
+      {
+        "id": "9127fab2-c781-49cb-b7d6-94728710aff9",
+        "position": {
+          "x": 332,
+          "y": 1035,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.66",
+          "y": "0.66",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house2-shed.png"
+      },
+      {
+        "id": "099739d0-9076-417a-8def-98fbf69602a6",
+        "position": {
+          "x": 538,
+          "y": 1146,
+          "z": 1
+        },
+        "rotation": 7,
+        "scale": {
+          "x": "0.65",
+          "y": "0.65",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "41c81a3f-9634-4738-a6b3-500326fedf81",
+        "position": {
+          "x": 1358,
+          "y": 507,
+          "z": 2
+        },
+        "rotation": -5,
+        "scale": {
+          "x": "0.59",
+          "y": "0.59",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/flower-hut.png"
+      },
+      {
+        "id": "a086cdf6-9166-470b-92cb-ababa06ca60a",
+        "position": {
+          "x": 814,
+          "y": 656,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house1-part1.png"
+      },
+      {
+        "id": "fa342da2-0ba4-4867-a6c2-e5c1e5fcf39f",
+        "position": {
+          "x": 1011,
+          "y": 529,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house1-part2.png",
+        "locked": true
+      },
+      {
+        "id": "ee062704-ecf9-40a1-b3f3-4c6fd36f8fda",
+        "position": {
+          "x": 1963,
+          "y": 1171,
+          "z": "2"
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/church-main.png"
+      },
+      {
+        "id": "3465f25e-828b-4b29-84a6-2f151c79c404",
+        "position": {
+          "x": 2029,
+          "y": 916,
+          "z": "2"
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/church-side.png"
+      },
+      {
+        "id": "62be80f0-2dab-4d76-bfbd-c2bc44917c4d",
+        "position": {
+          "x": "12.9",
+          "y": "224.1",
+          "z": 1
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "",
+          "y": "1.0",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/excavator.png"
+      },
+      {
+        "id": "be98d590-8c7b-4f36-b0be-384a386a8a3d",
+        "position": {
+          "x": 663,
+          "y": 406,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": ".75",
+          "y": ".75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/red-flag.png"
+      },
+      {
+        "id": "a8b9fc0c-ab03-40cd-9e4d-83b0d0ff00cb",
+        "position": {
+          "x": 467,
+          "y": 367,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.5",
+          "y": "0.5",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/excavator.png"
+      },
+      {
+        "id": "dd6c62d2-dd86-4cae-989a-6e3c4f0fc790",
+        "position": {
+          "x": 1901,
+          "y": 856,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/blue-flag.png"
+      },
+      {
+        "id": "df76a40d-3c9e-4448-8da4-3cdf35f648b6",
+        "position": {
+          "x": 1460,
+          "y": 1224,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-1.png"
+      },
+      {
+        "id": "666621f1-8bda-4d7a-84cc-1abe7ec4d45b",
+        "position": {
+          "x": 1194,
+          "y": 1222,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-2.png"
+      },
+      {
+        "id": "fc151528-c7aa-4da1-9e44-273e538d4226",
+        "position": {
+          "x": 1717,
+          "y": 1226,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-3.png"
+      },
+      {
+        "id": "b3c3a866-4012-475c-af48-73aa07e3f479",
+        "position": {
+          "x": 1057,
+          "y": 1174,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/fence-4.png"
+      },
+      {
+        "id": "c0a0c8db-2e91-4289-9ea0-179a2c5bc300",
+        "position": {
+          "x": 1587,
+          "y": 458,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/hedge.png"
+      },
+      {
+        "id": "7832de1a-b21f-4f7c-967b-5382a32ddf54",
+        "position": {
+          "x": 1656,
+          "y": 853,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/garden-shed.png"
+      },
+      {
+        "id": "6daedfd9-ae60-4549-88f0-53c11c79bafc",
+        "position": {
+          "x": 964,
+          "y": 599,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house1-chimney.png"
+      },
+      {
+        "id": "cc4711cd-44dd-4847-9f74-beaeb8b019e0",
+        "position": {
+          "x": 860,
+          "y": 846,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/house1-fence.png"
+      },
+      {
+        "id": "443d75cc-e084-4197-957e-ad6febe24e76",
+        "position": {
+          "x": 1790,
+          "y": 1156,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/church-front.png"
+      },
+      {
+        "id": "ed8f9113-cfd8-4662-9866-23491e659b6a",
+        "position": {
+          "x": 871,
+          "y": 1156,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.87",
+          "y": "0.87",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/shed-1.png"
+      },
+      {
+        "id": "1b56b308-a0b1-4523-873a-da15c59a2c44",
+        "position": {
+          "x": 1135,
+          "y": 51,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "72302178-0450-4842-9aa9-dce01cdcd425",
+        "position": {
+          "x": 1354,
+          "y": 44,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "6c2fdc53-1d48-4c82-971b-22267dfedbc5",
+        "position": {
+          "x": 1554,
+          "y": 47,
+          "z": 2
+        },
+        "rotation": -26,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "3b871723-8ecb-43e2-b887-dfe7cb9f5b24",
+        "position": {
+          "x": 1741,
+          "y": 39,
+          "z": 2
+        },
+        "rotation": -6,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "00ac6fc0-525a-449b-932e-a67fadf57469",
+        "position": {
+          "x": 1979,
+          "y": 76,
+          "z": 2
+        },
+        "rotation": 25,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "09ae02bb-ff01-43a0-81f9-fe50bf9c37b3",
+        "position": {
+          "x": 2131,
+          "y": 455,
+          "z": 2
+        },
+        "rotation": -109,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "af856389-c3d2-49a8-9874-62701ea7837f",
+        "position": {
+          "x": 2135,
+          "y": 676,
+          "z": 2
+        },
+        "rotation": -108,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "27aa3aba-2777-4de8-82ef-91e2e2609937",
+        "position": {
+          "x": 2138,
+          "y": 876,
+          "z": 2
+        },
+        "rotation": -108,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "b592ff64-c8bb-4d56-a81c-755dff1472c0",
+        "position": {
+          "x": 197,
+          "y": 236,
+          "z": 2
+        },
+        "rotation": -74,
+        "scale": {
+          "x": "0.58",
+          "y": "0.58",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "89686b4b-2a8b-4e3d-9526-6a262ad52edf",
+        "position": {
+          "x": 202,
+          "y": 252,
+          "z": 2
+        },
+        "rotation": 66,
+        "scale": {
+          "x": "0.58",
+          "y": "0.58",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/roadblock-1.png"
+      },
+      {
+        "id": "bb71c2bb-9a8a-41ac-8e6b-712f93c5b4cf",
+        "position": {
+          "x": 1234,
+          "y": 804,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/wall-horizontal.png"
+      },
+      {
+        "id": "33ce7ba9-2c46-4a85-8060-3eb7f2f286e2",
+        "position": {
+          "x": 1341,
+          "y": 938,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/wall-vertical.png"
+      },
+      {
+        "id": "f87d1167-c98f-4918-99a2-687a3151e9ab",
+        "position": {
+          "x": 405,
+          "y": 46,
+          "z": 2
+        },
+        "rotation": 0,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "cb4a2f00-9a6a-4c3f-9cd0-a133dd8e0d4b",
+        "position": {
+          "x": 1196,
+          "y": 1389,
+          "z": 2
+        },
+        "rotation": 180,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "ecbb1240-5c15-46e8-a95c-aa04e7e10917",
+        "position": {
+          "x": 1429,
+          "y": 1388,
+          "z": 2
+        },
+        "rotation": 180,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "a9b41042-c44a-4cef-a0bf-f079bcd7dcce",
+        "position": {
+          "x": 1911,
+          "y": 1396,
+          "z": 2
+        },
+        "rotation": 180,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "de75c51a-e95a-4e20-97b3-56896289953a",
+        "position": {
+          "x": 212,
+          "y": 1410,
+          "z": 2
+        },
+        "rotation": 180,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      },
+      {
+        "id": "59ffa0a4-4e1e-45dc-b613-1d422672b20f",
+        "position": {
+          "x": 124,
+          "y": 1146,
+          "z": 2
+        },
+        "rotation": -90,
+        "scale": {
+          "x": "0.75",
+          "y": "0.75",
+          "z": "1.0"
+        },
+        "opacity": 1,
+        "relativePath": "arenas/church_ctf_1/side-bush.png"
+      }
+    ]
+  }
 }
