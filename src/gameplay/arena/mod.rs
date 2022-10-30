@@ -1,15 +1,19 @@
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
-use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_kira_audio::prelude::*;
-use std::time::Duration;
-
+use crate::gameplay::arena::scene::Scene;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::player;
 use crate::gameplay::player::Player;
+use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use bevy::prelude::*;
+use bevy::{math::Vec3Swizzles, time::FixedTimestep};
+use bevy_asset_loader::prelude::*;
+use bevy_common_assets::json::JsonAssetPlugin;
+use bevy_kira_audio::prelude::*;
+use std::time::Duration;
+
 mod loader;
 mod music;
 mod objects;
+mod scene;
 
 #[derive(Default)]
 pub struct ArenaPlugin;
@@ -25,6 +29,7 @@ pub struct RotateToPlayer {
 
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugin(JsonAssetPlugin::<Scene>::new(&["2dtf"]));
         app.add_startup_system(loader::setup)
             .add_startup_system(objects::setup)
             .add_startup_system(music::setup)

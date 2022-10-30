@@ -1,8 +1,17 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 use bevy::prelude::*;
+use bevy::prelude::*;
 use bevy_inspector_egui::WorldInspectorPlugin;
 use bevy_kira_audio::prelude::*;
 use gameplay::GameplayPlugins;
+use iyes_loopless::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum GameState {
+    MainMenu,
+    Career,
+    InGame,
+}
 
 mod core;
 mod gameplay;
@@ -19,6 +28,7 @@ fn main() {
             ..default()
         })
         .add_plugins(DefaultPlugins)
+        .add_loopless_state(GameState::MainMenu)
         .add_plugins(GameplayPlugins)
         .add_plugin(WorldInspectorPlugin::new())
         .run();
