@@ -7,15 +7,15 @@
     "position": {
       "x": 0,
       "y": 0,
-      "z": "2"
+      "z": 2
     },
-    "rotation": "1",
+    "rotation": 1,
     "scale": {
       "x": "0.75",
       "y": "0.75",
       "z": "1.0"
     },
-    "opacity": "1",
+    "opacity": 1,
     "locked": false
   },
   "canvas": {
@@ -90,7 +90,7 @@
         "position": {
           "x": 218,
           "y": 395,
-          "z": "2"
+          "z": 2
         },
         "rotation": 3,
         "scale": {
@@ -106,7 +106,7 @@
         "position": {
           "x": 179,
           "y": 373,
-          "z": "2"
+          "z": 2
         },
         "rotation": 7,
         "scale": {
@@ -122,7 +122,7 @@
         "position": {
           "x": 256,
           "y": 410,
-          "z": "2"
+          "z": 2
         },
         "rotation": 20,
         "scale": {
@@ -138,7 +138,7 @@
         "position": {
           "x": 288,
           "y": 437,
-          "z": "2"
+          "z": 2
         },
         "rotation": 30,
         "scale": {
@@ -154,7 +154,7 @@
         "position": {
           "x": 330,
           "y": 459,
-          "z": "2"
+          "z": 2
         },
         "rotation": 50,
         "scale": {
@@ -170,7 +170,7 @@
         "position": {
           "x": 357,
           "y": 509,
-          "z": "2"
+          "z": 2
         },
         "rotation": 68,
         "scale": {
@@ -186,7 +186,7 @@
         "position": {
           "x": 114,
           "y": 698,
-          "z": "2"
+          "z": 2
         },
         "rotation": 0,
         "scale": {
@@ -283,7 +283,7 @@
         "position": {
           "x": 1963,
           "y": 1171,
-          "z": "2"
+          "z": 2
         },
         "rotation": 0,
         "scale": {
@@ -299,7 +299,7 @@
         "position": {
           "x": 2029,
           "y": 916,
-          "z": "2"
+          "z": 2
         },
         "rotation": 0,
         "scale": {
@@ -309,22 +309,6 @@
         },
         "opacity": 1,
         "relativePath": "arenas/church_ctf_1/church-side.png"
-      },
-      {
-        "id": "62be80f0-2dab-4d76-bfbd-c2bc44917c4d",
-        "position": {
-          "x": "12.9",
-          "y": "224.1",
-          "z": 1
-        },
-        "rotation": 0,
-        "scale": {
-          "x": "",
-          "y": "1.0",
-          "z": "1.0"
-        },
-        "opacity": 1,
-        "relativePath": "arenas/church_ctf_1/excavator.png"
       },
       {
         "id": "be98d590-8c7b-4f36-b0be-384a386a8a3d",
