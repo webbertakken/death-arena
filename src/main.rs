@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables, unused_imports)]
-use crate::menu::MenuPlugins;
+use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;
 use bevy::prelude::*;
@@ -31,6 +31,7 @@ fn main() {
 
     // State
     game.add_loopless_state(AppState::Menus);
+    game.add_state(MenuState::Main);
 
     // Logic
     game.add_plugins(AppPlugins);
