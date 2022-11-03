@@ -36,17 +36,23 @@ impl Plugin for ArenaPlugin {
             .add_startup_system(music::setup);
 
         // Enter Gameplay (does not work with the current hierarchy)
-        app.add_system_set(SystemSet::on_enter(AppState::InGame));
+        // app.add_system_set(SystemSet::on_enter(AppState::InGame));
 
         // Every frame
         app.add_system_set(
             SystemSet::on_update(AppState::InGame)
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
                 .with_system(objects::snap_to_player_system)
-                .with_system(objects::rotate_to_player_system),
+                .with_system(objects::rotate_to_player_system)
+                .with_system(debug),
         );
 
         // Exit Gameplay
-        app.add_system_set(SystemSet::on_exit(AppState::InGame));
+        // app.add_system_set(SystemSet::on_exit(AppState::InGame));
     }
+}
+
+fn debug() {
+    println!("ingame update");
+    // println!("Scene: {:?}", scene);
 }

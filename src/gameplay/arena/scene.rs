@@ -1,6 +1,6 @@
 use bevy::prelude::Vec3;
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     x: i32,
@@ -8,7 +8,7 @@ pub struct Position {
     z: i32,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale {
     x: String,
@@ -16,7 +16,7 @@ pub struct Scale {
     z: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpriteDefaults {
     /// Position in 2D space
@@ -29,7 +29,7 @@ pub struct SpriteDefaults {
     opacity: f32,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpriteDefaultsWithLocked {
     #[serde(flatten)]
@@ -38,7 +38,7 @@ pub struct SpriteDefaultsWithLocked {
     locked: bool,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpriteData {
     // Unique name of the sprite
@@ -50,13 +50,13 @@ pub struct SpriteData {
     sprite_defaults: SpriteDefaults,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Canvas {
     sprites: Vec<SpriteData>,
 }
 
-#[derive(serde::Deserialize, bevy::reflect::TypeUuid)]
+#[derive(Debug, serde::Deserialize, bevy::reflect::TypeUuid)]
 #[serde(rename_all = "camelCase")]
 #[uuid = "413be529-bfff-f1b3-9db0-4b8b380a2c46"]
 pub struct Scene {
