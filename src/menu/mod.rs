@@ -5,6 +5,17 @@ use main_menu::MainMenuPlugin;
 
 mod main_menu;
 
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
+pub enum MenuState {
+    Main,
+    Garage,
+    Dealer,
+    ArenaSelection,
+    InGame,
+    Paused,
+    Hidden,
+}
+
 pub struct MenuPlugins;
 
 impl PluginGroup for MenuPlugins {
