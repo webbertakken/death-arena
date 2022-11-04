@@ -20,6 +20,7 @@ mod app;
 mod core;
 mod gameplay;
 mod menu;
+pub(crate) mod ui;
 
 fn main() {
     core::init();
