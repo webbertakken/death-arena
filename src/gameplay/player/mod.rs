@@ -38,9 +38,6 @@ pub struct RotateToPlayer {
     rotation_speed: f32,
 }
 
-#[derive(Inspectable, Component)]
-pub struct Name(String);
-
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
@@ -50,7 +47,7 @@ impl Plugin for PlayerPlugin {
             .add_startup_system(sfx::setup)
             .add_system_set(
                 SystemSet::new()
-                    .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+                    .with_run_criteria(FixedTimestep::step(f64::from(TIME_STEP)))
                     .with_system(movement::car_movement_system)
                     .with_system(camera::camera_follows_player_system)
                     .with_system(sfx::engine_revving_system),
@@ -59,4 +56,4 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {}
+pub const fn setup(commands: Commands, asset_server: Res<AssetServer>) {}

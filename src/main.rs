@@ -1,25 +1,53 @@
 #![allow(dead_code, unused_variables, unused_imports)]
+#![warn(clippy::nursery, clippy::pedantic)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::unused_self,
+    clippy::needless_pass_by_value
+)]
+use crate::menu::{MenuPlugins, MenuState};
+use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;
+use bevy::prelude::*;
+use bevy_asset_loader::prelude::*;
 use bevy_inspector_egui::WorldInspectorPlugin;
 use bevy_kira_audio::prelude::*;
 use gameplay::GameplayPlugins;
+use iyes_loopless::prelude::*;
 
-mod core;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppState {
+    Menus,
+    Loading,
+    InGame,
+}
+
+pub mod app;
+pub mod core;
 mod gameplay;
+mod menu;
+pub mod ui;
 
 fn main() {
     core::init();
-    App::new()
-        .insert_resource(WindowDescriptor {
-            width: 1400.0,
-            height: 800.0,
-            title: "Death Arena".to_string(),
-            canvas: Some("#game".to_owned()),
-            fit_canvas_to_parent: true,
-            ..default()
-        })
-        .add_plugins(DefaultPlugins)
-        .add_plugins(GameplayPlugins)
-        .add_plugin(WorldInspectorPlugin::new())
-        .run();
+
+    // Setup
+    let mut game = App::new();
+    game.add_plugin(InitPlugin);
+    game.add_plugins(DefaultPlugins);
+
+    // State
+    game.add_state(AppState::Menus);
+    game.add_state(MenuState::Main);
+
+    // Logic
+    game.add_plugins(AppPlugins);
+    game.add_plugins(MenuPlugins);
+    game.add_plugins(GameplayPlugins);
+
+    // Misc
+    game.add_plugin(WorldInspectorPlugin::new());
+
+    // Run the app
+    game.run();
 }

@@ -30,6 +30,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
             ..default()
         })
+        .insert(Name::new("Rock (type 1)"))
         .insert(SnapToPlayer);
     commands
         .spawn_bundle(SpriteBundle {
@@ -37,6 +38,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 2.0),
             ..default()
         })
+        .insert(Name::new("Rock (type 1)"))
         .insert(SnapToPlayer);
 
     // enemy that rotates to face the player enemy spawns on the top and right
@@ -46,6 +48,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
             ..default()
         })
+        .insert(Name::new("Rock (type 2)"))
         .insert(RotateToPlayer {
             rotation_speed: f32::to_radians(45.0), // degrees per second
         });
@@ -55,6 +58,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 2.0),
             ..default()
         })
+        .insert(Name::new("Rock (type 2)"))
         .insert(RotateToPlayer {
             rotation_speed: f32::to_radians(90.0), // degrees per second
         });
