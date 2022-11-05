@@ -1453,6 +1453,7 @@ dependencies = [
  "bevy-inspector-egui 0.13.0",
  "bevy_asset_loader",
  "bevy_common_assets",
+ "bevy_ecs",
  "bevy_kira_audio",
  "crossbeam",
  "dotenvy",

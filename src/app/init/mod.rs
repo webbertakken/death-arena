@@ -11,7 +11,7 @@ impl Plugin for InitPlugin {
         app.insert_resource(window_resource())
             .insert_resource(log_settings())
             .insert_resource(background_color())
-            .add_system(setup);
+            .add_startup_system(setup);
     }
 }
 
@@ -27,7 +27,7 @@ fn log_settings() -> LogSettings {
 }
 
 fn setup(commands: Commands, asset_server: Res<AssetServer>) {
-    println!("Hello, world! from setup");
+    info!("Hello, world! from setup");
 }
 
 fn window_resource() -> WindowDescriptor {

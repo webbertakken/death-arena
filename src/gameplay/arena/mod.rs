@@ -36,7 +36,7 @@ impl Plugin for ArenaPlugin {
             .add_startup_system(music::setup);
 
         // Enter Gameplay (does not work with the current hierarchy)
-        // app.add_system_set(SystemSet::on_enter(AppState::InGame));
+        app.add_system_set(SystemSet::on_enter(AppState::InGame).with_system(entering_in_game));
 
         // Every frame
         app.add_system_set(
@@ -53,6 +53,10 @@ impl Plugin for ArenaPlugin {
 }
 
 fn debug() {
-    println!("ingame update");
-    // println!("Scene: {:?}", scene);
+    info!("ingame update");
+    // info!("Scene: {:?}", scene);
+}
+
+fn entering_in_game() {
+    info!("Entering: InGame");
 }

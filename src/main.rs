@@ -10,7 +10,7 @@ use gameplay::GameplayPlugins;
 use iyes_loopless::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum AppState {
+pub enum AppState {
     Menus,
     Loading,
     InGame,
@@ -31,7 +31,7 @@ fn main() {
     game.add_plugins(DefaultPlugins);
 
     // State
-    game.add_loopless_state(AppState::Menus);
+    game.add_state(AppState::Menus);
     game.add_state(MenuState::Main);
 
     // Logic
@@ -44,10 +44,4 @@ fn main() {
 
     // Run the app
     game.run();
-}
-
-fn enter_game(mut app_state: ResMut<State<AppState>>) {
-    app_state.set(AppState::InGame).unwrap();
-    // ^ this can fail if we are already in the target state
-    // or if another state change is already queued
 }
