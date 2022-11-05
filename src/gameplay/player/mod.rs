@@ -56,4 +56,4 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {}
+pub const fn setup(commands: Commands, asset_server: Res<AssetServer>) {}

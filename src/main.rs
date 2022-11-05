@@ -16,11 +16,11 @@ pub enum AppState {
     InGame,
 }
 
-mod app;
-mod core;
+pub mod app;
+pub mod core;
 mod gameplay;
 mod menu;
-pub(crate) mod ui;
+pub mod ui;
 
 fn main() {
     core::init();

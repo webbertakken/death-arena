@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy_kira_audio::AudioPlugin;
 use init::InitPlugin;
 
-pub(crate) mod init;
+pub mod init;
 
 pub struct AppPlugins;
 

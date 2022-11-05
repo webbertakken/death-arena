@@ -15,7 +15,7 @@ impl Plugin for InitPlugin {
     }
 }
 
-fn background_color() -> ClearColor {
+const fn background_color() -> ClearColor {
     ClearColor(Color::rgb(0.1, 0.1, 0.27))
 }
 
