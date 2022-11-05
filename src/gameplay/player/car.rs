@@ -1,4 +1,4 @@
-use crate::gameplay::player::{Name, Player};
+use crate::gameplay::player::Player;
 use bevy::prelude::*;
 use bevy_inspector_egui::Inspectable;
 
@@ -30,7 +30,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             ..default()
         })
-        .insert(Name("Player".to_string()))
+        .insert(Name::new("Player"))
         .insert(Player {
             movement_speed: 500.0,                  // metres per second
             rotation_speed: f32::to_radians(360.0), // degrees per second
@@ -47,6 +47,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
+                .insert(Name::new("Wheel (FL)"))
                 .insert(FrontLeftWheel);
 
             // Front right wheel
@@ -60,6 +61,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
+                .insert(Name::new("Wheel (FR)"))
                 .insert(FrontRightWheel);
 
             // Rear left wheel
@@ -73,6 +75,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
+                .insert(Name::new("Wheel (RL)"))
                 .insert(RearLeftWheel);
 
             // Rear right wheel
@@ -86,6 +89,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
+                .insert(Name::new("Wheel (RR)"))
                 .insert(RearRightWheel);
 
             // Spikes
@@ -99,6 +103,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
+                .insert(Name::new("Spikes"))
                 .insert(SpikesUpgrade);
         });
 }

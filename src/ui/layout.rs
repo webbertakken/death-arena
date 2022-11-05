@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
 
 pub struct Layout {
     default_direction: FlexDirection,
@@ -24,7 +25,7 @@ impl Layout {
                 max_size: Size::new(Val::Px(400.0), Val::Px(800.0)),
                 ..default()
             },
-
+            focus_policy: FocusPolicy::Pass,
             color: UiColor::from(color),
             ..default()
         }

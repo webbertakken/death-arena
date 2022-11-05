@@ -17,6 +17,7 @@ pub fn setup(mut commands: Commands) {
     // 2D orthographic camera
     commands
         .spawn_bundle(Camera2dBundle::default())
+        .insert(Name::new("MainCamera"))
         .insert(MainCamera);
 
     // Split screen example: https://github.com/bevyengine/bevy/blob/latest/examples/3d/split_screen.rs

@@ -38,9 +38,6 @@ pub struct RotateToPlayer {
     rotation_speed: f32,
 }
 
-#[derive(Inspectable, Component)]
-pub struct Name(String);
-
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
