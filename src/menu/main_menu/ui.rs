@@ -1,6 +1,6 @@
 use crate::menu::main_menu::ButtonAction;
-use crate::ui::constants::*;
-use crate::ui::{ui, UiComponents};
+use crate::ui::prelude::*;
+use crate::ui::{ui, Atoms};
 use bevy::prelude::*;
 use bevy::sprite::Rect;
 use bevy_inspector_egui::egui::style::Selection;
@@ -15,7 +15,7 @@ pub fn hide(mut commands: Commands, query: Query<Entity, With<MainMenu>>) {
 }
 
 pub fn show(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let UiComponents {
+    let Atoms {
         layout,
         button,
         text,

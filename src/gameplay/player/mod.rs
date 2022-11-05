@@ -47,7 +47,7 @@ impl Plugin for PlayerPlugin {
             .add_startup_system(sfx::setup)
             .add_system_set(
                 SystemSet::new()
-                    .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+                    .with_run_criteria(FixedTimestep::step(f64::from(TIME_STEP)))
                     .with_system(movement::car_movement_system)
                     .with_system(camera::camera_follows_player_system)
                     .with_system(sfx::engine_revving_system),

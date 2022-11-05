@@ -1,4 +1,10 @@
 #![allow(dead_code, unused_variables, unused_imports)]
+#![warn(clippy::nursery, clippy::pedantic)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::unused_self,
+    clippy::needless_pass_by_value
+)]
 use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;

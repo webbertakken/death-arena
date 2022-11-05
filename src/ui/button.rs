@@ -1,4 +1,6 @@
-use crate::ui::constants::*;
+use crate::ui::prelude::{
+    BUTTON_ACTIVE_COLOR, BUTTON_COLOR, BUTTON_HOVER_COLOR, MENU_COLOR, TEXT_COLOR,
+};
 use bevy::prelude::*;
 
 #[derive(Default)]
