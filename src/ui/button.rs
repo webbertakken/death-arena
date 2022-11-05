@@ -1,13 +1,12 @@
+use crate::ui::constants::*;
 use bevy::prelude::*;
 
-pub struct Button {}
+#[derive(Default)]
+pub struct UiButton {}
 
-pub fn setup() -> Button {
-    Button {}
-}
-
-impl Button {
-    pub fn create(&self, color: Color) -> ButtonBundle {
+impl UiButton {
+    pub fn normal(&self) -> ButtonBundle {
+        let color = BUTTON_COLOR;
         ButtonBundle {
             style: Style {
                 display: Display::Flex,
@@ -22,6 +21,22 @@ impl Button {
             color: UiColor::from(color),
             transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
             ..Default::default()
+        }
+    }
+}
+
+pub fn styles_system(mut query: Query<(&Interaction, &mut UiColor), With<Button>>) {
+    for (interaction, mut color) in query.iter_mut() {
+        match *interaction {
+            Interaction::Clicked => {
+                *color = UiColor::from(BUTTON_ACTIVE_COLOR);
+            }
+            Interaction::Hovered => {
+                *color = UiColor::from(BUTTON_HOVER_COLOR);
+            }
+            Interaction::None => {
+                *color = UiColor::from(BUTTON_COLOR);
+            }
         }
     }
 }

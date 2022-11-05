@@ -14,6 +14,18 @@ impl Default for Layout {
 }
 
 impl Layout {
+    pub fn spacer(&self, size: f32) -> NodeBundle {
+        NodeBundle {
+            style: Style {
+                size: Size::new(Val::Px(size), Val::Px(size)),
+                flex_grow: 0.0,
+                ..Default::default()
+            },
+            color: Color::NONE.into(),
+            ..Default::default()
+        }
+    }
+
     pub fn flex(&self, color: Color) -> NodeBundle {
         NodeBundle {
             style: Style {

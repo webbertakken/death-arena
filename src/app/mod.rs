@@ -1,3 +1,4 @@
+use crate::ui::UserInterfacePlugin;
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 use bevy::prelude::*;
@@ -11,5 +12,6 @@ pub struct AppPlugins;
 impl PluginGroup for AppPlugins {
     fn build(&mut self, group: &mut PluginGroupBuilder) {
         group.add(AudioPlugin::default());
+        group.add(UserInterfacePlugin::default());
     }
 }

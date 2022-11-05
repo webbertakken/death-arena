@@ -5,6 +5,15 @@ use bevy_kira_audio::prelude::*;
 
 mod ui;
 
+#[derive(Component)]
+pub enum ButtonAction {
+    MainMenu,
+    Career,
+    Multiplayer,
+    Restart,
+    Quit,
+}
+
 #[derive(Default)]
 pub struct MainMenuPlugin;
 
@@ -17,12 +26,8 @@ impl Plugin for MainMenuPlugin {
         app.add_system_set(SystemSet::on_update(MenuState::Main).with_system(on_update_main_menu));
 
         // Exit
-        app.add_system_set(SystemSet::on_exit(MenuState::Main).with_system(on_exit_main_menu));
+        app.add_system_set(SystemSet::on_exit(MenuState::Main).with_system(ui::hide));
     }
-}
-
-pub fn on_exit_main_menu(commands: Commands, asset_server: Res<AssetServer>) {
-    log::info!("MainMenu: exit");
 }
 
 pub fn on_update_main_menu(commands: Commands, asset_server: Res<AssetServer>) {
