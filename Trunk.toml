@@ -1,8 +1,8 @@
 # Example https://github.com/thedodd/trunk/blob/master/Trunk.toml
 
 [watch]
-watch = ["src/", "index.html", "Cargo.toml", "Cargo.lock", "Trunk.toml"]
-ignore = ["assets/", "build/", "credits/"]
+watch = ["src/", "assets/", "index.html", "Cargo.toml", "Cargo.lock", "Trunk.toml"]
+ignore = ["build/", "credits/"]
 
 [serve]
 port = 80

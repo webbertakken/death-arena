@@ -32,25 +32,25 @@ pub fn show(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .spawn_bundle(text.title("Death Arena", TEXT_COLOR))
                 .insert(Name::new("Title"));
 
-            // Play button
-            parent
-                .spawn_bundle(button.normal())
-                .insert(Name::new("Button (Career)"))
-                .insert(ButtonAction::Career)
-                .with_children(|parent| {
-                    parent.spawn_bundle(text.button("Career", TEXT_COLOR));
-                });
-
-            // Spacer
-            parent.spawn_bundle(layout.spacer(8.0));
-
             // Multiplayer button
             parent
                 .spawn_bundle(button.normal())
                 .insert(Name::new("Button (Multiplayer)"))
                 .insert(ButtonAction::Multiplayer)
                 .with_children(|parent| {
-                    parent.spawn_bundle(text.button("Multiplayer", TEXT_COLOR));
+                    parent.spawn_bundle(text.button("Quick play", TEXT_COLOR));
+                });
+
+            // Spacer
+            parent.spawn_bundle(layout.spacer(8.0));
+
+            // Play button
+            parent
+                .spawn_bundle(button.normal())
+                .insert(Name::new("Button (Career)"))
+                .insert(ButtonAction::Career)
+                .with_children(|parent| {
+                    parent.spawn_bundle(text.button("Career (WIP)", TEXT_COLOR));
                 });
         });
 }

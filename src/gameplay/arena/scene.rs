@@ -1,37 +1,28 @@
+use crate::core::serde::parse_float;
 use crate::gameplay::arena::scene_loader::Sprite;
 use bevy::prelude::Vec3;
 use serde::{de, Deserialize, Deserializer};
-use serde_json::Value;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
+    #[serde(deserialize_with = "parse_float")]
     pub x: f32,
+    #[serde(deserialize_with = "parse_float")]
     pub y: f32,
+    #[serde(deserialize_with = "parse_float")]
     pub z: f32,
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale {
-    #[serde(deserialize_with = "string_to_float")]
+    #[serde(deserialize_with = "parse_float")]
     pub x: f32,
-    #[serde(deserialize_with = "string_to_float")]
+    #[serde(deserialize_with = "parse_float")]
     pub y: f32,
-    #[serde(deserialize_with = "string_to_float")]
+    #[serde(deserialize_with = "parse_float")]
     pub z: f32,
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn string_to_float<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
-    Ok(match Value::deserialize(deserializer)? {
-        Value::String(s) => s.parse().map_err(de::Error::custom)?,
-        Value::Number(num) => {
-            num.as_f64()
-                .ok_or_else(|| de::Error::custom("Invalid number"))? as f32
-        }
-        _ => return Err(de::Error::custom("wrong type")),
-    })
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -40,10 +31,12 @@ pub struct SpriteDefaults {
     /// Position in 2D space
     pub position: Position,
     /// Rotation in 2D space (Z-axis)
+    #[serde(deserialize_with = "parse_float")]
     pub rotation: f32,
     /// Scale in 2D space
     pub scale: Scale,
     /// Opacity
+    #[serde(deserialize_with = "parse_float")]
     pub opacity: f32,
     /// Whether you can drag the sprite
     locked: bool,
@@ -59,10 +52,12 @@ pub struct SpriteData {
     /// Position in 2D space
     pub position: Position,
     /// Rotation in 2D space (Z-axis)
+    #[serde(deserialize_with = "parse_float")]
     pub rotation: f32,
     /// Scale in 2D space
     pub scale: Scale,
     /// Opacity
+    #[serde(deserialize_with = "parse_float")]
     pub opacity: f32,
 }
 

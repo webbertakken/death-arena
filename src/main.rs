@@ -2,7 +2,6 @@
 #![warn(clippy::nursery, clippy::pedantic)]
 #![allow(
     clippy::module_name_repetitions,
-    clippy::unused_self,
     clippy::needless_pass_by_value,
     clippy::only_used_in_recursion
 )]
@@ -38,8 +37,15 @@ fn main() {
     game.add_plugins(DefaultPlugins);
 
     // State
-    game.add_state(AppState::Menus);
-    game.add_state(MenuState::Main);
+    if cfg!(debug_assertions) {
+        // Development
+        game.add_state(AppState::Loading);
+        game.add_state(MenuState::Hidden);
+    } else {
+        // Production
+        game.add_state(AppState::Menus);
+        game.add_state(MenuState::Main);
+    }
 
     // Logic
     game.add_plugins(AppPlugins);

@@ -136,11 +136,11 @@ pub fn load_sprites_from_scene(
                 transform: Transform {
                     translation: Vec3::new(
                         -BOUNDS.x / 2.0 + sprite.position.x,
-                        BOUNDS.y - sprite.position.y,
+                        BOUNDS.y / 2.0 - sprite.position.y,
                         sprite.position.z,
                     ),
                     scale: Vec3::new(sprite.scale.x, sprite.scale.y, 1.0),
-                    rotation: Quat::from_rotation_z(sprite.rotation),
+                    rotation: Quat::from_rotation_z(-sprite.rotation.to_radians()),
                 },
                 ..default()
             })
