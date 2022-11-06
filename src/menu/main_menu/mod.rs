@@ -45,7 +45,7 @@ pub fn on_update_main_menu(
                 ButtonAction::Multiplayer => {
                     info!("Multiplayer button clicked");
                     menu_state.overwrite_set(MenuState::Hidden).unwrap();
-                    app_state.overwrite_set(AppState::InGame).unwrap();
+                    app_state.overwrite_set(AppState::Loading).unwrap();
                 }
             }
         }

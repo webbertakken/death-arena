@@ -6,43 +6,34 @@ use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
-type FrontLeftWheelQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static FrontLeftWheel, &'static mut Transform),
-    (Without<Player>, Without<FrontRightWheel>),
->;
-
-type FrontRightWheelQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static FrontRightWheel, &'static mut Transform),
-    (Without<Player>, Without<FrontLeftWheel>),
->;
+type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
+type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 
 /// Demonstrates applying rotation and movement based on keyboard input.
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
     mut query: Query<(&Player, &mut Transform)>,
-    mut front_left_wheel_query: FrontLeftWheelQuery,
-    mut front_right_wheel_query: FrontRightWheelQuery,
+    mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
+    mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
     let (player, mut transform) = query.single_mut();
     let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
     let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();
 
-    // Turning
-    let wheels_turning_multiplier = 0.5;
-    let forward_turning_speed = 0.75 * wheels_turning_multiplier;
-    let backward_turning_speed = 0.6 * wheels_turning_multiplier;
-
-    // Acceleration
+    // Acceleration - 0.5 (slowest car) to 1.0 (fastest car)
     let engine_max_speed_multiplier = 0.5;
-    let forward_max_speed = 0.8 * engine_max_speed_multiplier;
+    let forward_max_speed = 0.825 * engine_max_speed_multiplier;
     let backward_max_speed = 0.25 * engine_max_speed_multiplier;
+
+    // Turning
+    let wheels_turning_multiplier = 0.91;
+    let forward_turning_speed = forward_max_speed * wheels_turning_multiplier;
+    let backward_turning_speed = backward_max_speed * wheels_turning_multiplier;
 
     let mut rotation_factor = 0.0;
     let mut movement_factor = 0.0;
+
+    let mut steer_reverse = false;
 
     if keyboard_input.any_pressed([KeyCode::Up, KeyCode::W]) {
         movement_factor += forward_max_speed;
@@ -55,6 +46,8 @@ pub fn car_movement_system(
         }
     } else if keyboard_input.any_pressed([KeyCode::Down, KeyCode::S]) {
         movement_factor -= backward_max_speed;
+        steer_reverse = true;
+
         if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
             rotation_factor -= backward_turning_speed;
         }
@@ -68,7 +61,10 @@ pub fn car_movement_system(
     transform.rotate_z(rotation_factor * player.rotation_speed * TIME_STEP);
 
     // Wheels just keep on turning
-    let front_wheel_rotation = Quat::from_rotation_z(f32::to_radians(rotation_factor * 30.0));
+    let steering_multiplier = if steer_reverse { -1.0 } else { 1.0 };
+    let front_wheel_rotation = Quat::from_rotation_z(f32::to_radians(
+        rotation_factor * 30.0 * steering_multiplier,
+    ));
     front_left_wheel_transform.rotation = front_wheel_rotation;
     front_right_wheel_transform.rotation = front_wheel_rotation;
 

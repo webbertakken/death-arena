@@ -3,7 +3,8 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::unused_self,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::only_used_in_recursion
 )]
 use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};
@@ -15,18 +16,18 @@ use bevy_kira_audio::prelude::*;
 use gameplay::GameplayPlugins;
 use iyes_loopless::prelude::*;
 
+pub mod app;
+pub mod core;
+mod gameplay;
+mod menu;
+pub mod ui;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppState {
     Menus,
     Loading,
     InGame,
 }
-
-pub mod app;
-pub mod core;
-mod gameplay;
-mod menu;
-pub mod ui;
 
 fn main() {
     core::init();

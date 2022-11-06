@@ -25,7 +25,7 @@ struct ArenaData {
 #[derive(Component)]
 pub struct Arena;
 
-pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
+pub fn setup(commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
     let arenas = [ArenaData {
         name: Arenas::ChurchCtf,
         path: "/assets/textures/church-ctf.2dtf".to_string(),
@@ -37,14 +37,4 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<
 
     // Load Scene for that Arena
     let scene: Handle<Scene> = asset_server.load(&arena.path);
-
-    // Arena floor
-    let arena_floor_handle = asset_server.load("textures/arenas/book_ctf_1/floor.jpg");
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: arena_floor_handle,
-            ..default()
-        })
-        .insert(Name::new("Arena Floor"))
-        .insert(Arena);
 }
