@@ -118,7 +118,6 @@ pub fn load_sprites_from_scene(
         })
         .collect::<HashSet<String>>();
 
-    info!("TestTEST: {:?}", state.paths.len());
     info!("Loading {} sprites", &state.handles.len());
 
     /////
