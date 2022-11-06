@@ -139,11 +139,7 @@ pub fn load_sprites_from_scene(
                         BOUNDS.y - sprite.position.y,
                         sprite.position.z,
                     ),
-                    scale: Vec3::new(
-                        sprite.scale.x.parse::<f32>().unwrap(),
-                        sprite.scale.y.parse::<f32>().unwrap(),
-                        1.0,
-                    ),
+                    scale: Vec3::new(sprite.scale.x, sprite.scale.y, 1.0),
                     rotation: Quat::from_rotation_z(sprite.rotation),
                 },
                 ..default()

@@ -1,5 +1,7 @@
 use crate::gameplay::arena::scene_loader::Sprite;
 use bevy::prelude::Vec3;
+use serde::{de, Deserialize, Deserializer};
+use serde_json::Value;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -12,9 +14,19 @@ pub struct Position {
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale {
-    pub x: String,
-    pub y: String,
-    pub z: String,
+    #[serde(deserialize_with = "string_to_float")]
+    pub x: f32,
+    #[serde(deserialize_with = "string_to_float")]
+    pub y: f32,
+    #[serde(deserialize_with = "string_to_float")]
+    pub z: f32,
+}
+
+fn string_to_float<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(s) => s.parse().map_err(de::Error::custom)?,
+        _ => return Err(de::Error::custom("wrong type")),
+    })
 }
 
 #[derive(Debug, serde::Deserialize)]
