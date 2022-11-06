@@ -6,26 +6,15 @@ use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
-type FrontLeftWheelQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static FrontLeftWheel, &'static mut Transform),
-    (Without<Player>, Without<FrontRightWheel>),
->;
-
-type FrontRightWheelQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static FrontRightWheel, &'static mut Transform),
-    (Without<Player>, Without<FrontLeftWheel>),
->;
+type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
+type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 
 /// Demonstrates applying rotation and movement based on keyboard input.
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
     mut query: Query<(&Player, &mut Transform)>,
-    mut front_left_wheel_query: FrontLeftWheelQuery,
-    mut front_right_wheel_query: FrontRightWheelQuery,
+    mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
+    mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
     let (player, mut transform) = query.single_mut();
     let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
