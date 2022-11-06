@@ -30,22 +30,26 @@ pub struct RotateToPlayer {
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         // Always
-        app.add_plugin(JsonAssetPlugin::<Scene>::new(&["2dtf"]))
-            .add_startup_system(loader::setup)
-            .add_startup_system(objects::setup)
-            .add_startup_system(music::setup);
+        app.add_plugin(JsonAssetPlugin::<Scene>::new(&["2dtf"]));
 
-        // Enter Gameplay (does not work with the current hierarchy)
-        app.add_system_set(SystemSet::on_enter(AppState::InGame).with_system(entering_in_game));
-
-        // Every frame
         app.add_system_set(
-            SystemSet::on_update(AppState::InGame)
+            SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(f64::from(TIME_STEP)))
                 .with_system(objects::snap_to_player_system)
-                .with_system(objects::rotate_to_player_system)
-                .with_system(debug),
+                .with_system(objects::rotate_to_player_system),
         );
+
+        // Enter Gameplay (does not work with the current hierarchy)
+        app.add_system_set(
+            SystemSet::on_enter(AppState::InGame)
+                .with_system(entering_in_game)
+                .with_system(loader::setup)
+                .with_system(objects::setup)
+                .with_system(music::setup),
+        );
+
+        // Every frame
+        app.add_system_set(SystemSet::on_update(AppState::InGame).with_system(debug));
 
         // Exit Gameplay
         // app.add_system_set(SystemSet::on_exit(AppState::InGame));

@@ -15,18 +15,18 @@ use bevy_kira_audio::prelude::*;
 use gameplay::GameplayPlugins;
 use iyes_loopless::prelude::*;
 
+pub mod app;
+pub mod core;
+mod gameplay;
+mod menu;
+pub mod ui;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppState {
     Menus,
     Loading,
     InGame,
 }
-
-pub mod app;
-pub mod core;
-mod gameplay;
-mod menu;
-pub mod ui;
 
 fn main() {
     core::init();
