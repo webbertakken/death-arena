@@ -3,7 +3,8 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::unused_self,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::only_used_in_recursion
 )]
 use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};

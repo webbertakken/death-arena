@@ -1,39 +1,33 @@
+use crate::gameplay::arena::scene_loader::Sprite;
 use bevy::prelude::Vec3;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
-    x: i32,
-    y: i32,
-    z: i32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale {
-    x: String,
-    y: String,
-    z: String,
+    pub x: String,
+    pub y: String,
+    pub z: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpriteDefaults {
     /// Position in 2D space
-    position: Position,
+    pub position: Position,
     /// Rotation in 2D space (Z-axis)
-    rotation: i32,
+    pub rotation: f32,
     /// Scale in 2D space
-    scale: Scale,
+    pub scale: Scale,
     /// Opacity
-    opacity: f32,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpriteDefaultsWithLocked {
-    #[serde(flatten)]
-    sprite_defaults: SpriteDefaults,
+    pub opacity: f32,
     /// Whether you can drag the sprite
     locked: bool,
 }
@@ -42,18 +36,23 @@ pub struct SpriteDefaultsWithLocked {
 #[serde(rename_all = "camelCase")]
 pub struct SpriteData {
     // Unique name of the sprite
-    id: String,
+    pub id: String,
     /// Relative path to the asset
-    relative_path: String,
-    /// Include all fields from the defaults as well
-    #[serde(flatten)]
-    sprite_defaults: SpriteDefaults,
+    pub relative_path: String,
+    /// Position in 2D space
+    pub position: Position,
+    /// Rotation in 2D space (Z-axis)
+    pub rotation: f32,
+    /// Scale in 2D space
+    pub scale: Scale,
+    /// Opacity
+    pub opacity: f32,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Canvas {
-    sprites: Vec<SpriteData>,
+    pub(crate) sprites: Vec<SpriteData>,
 }
 
 #[derive(Debug, serde::Deserialize, bevy::reflect::TypeUuid)]
@@ -65,5 +64,5 @@ pub struct Scene {
     pub description: String,
     pub assets_relative_path: String,
     pub canvas: Canvas,
-    pub default_properties: SpriteDefaultsWithLocked,
+    pub default_properties: SpriteDefaults,
 }

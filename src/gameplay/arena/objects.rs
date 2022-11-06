@@ -17,51 +17,33 @@ pub struct RotateToPlayer {
     rotation_speed: f32,
 }
 
-pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let rock_handle = asset_server.load("textures/rock.png");
+pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {
+    // let rock_handle = asset_server.load("textures/rock.png");
 
     let horizontal_margin = BOUNDS.x / 4.0;
     let vertical_margin = BOUNDS.y / 4.0;
 
-    // enemy that snaps to face the player spawns on the bottom and left
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
-            ..default()
-        })
-        .insert(Name::new("Rock (type 1)"))
-        .insert(SnapToPlayer);
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0, 0.0 - vertical_margin, 2.0),
-            ..default()
-        })
-        .insert(Name::new("Rock (type 1)"))
-        .insert(SnapToPlayer);
+    // Enemy that snaps to face the player spawns on the bottom and left
+    // commands
+    //     .spawn_bundle(SpriteBundle {
+    //         texture: rock_handle.clone(),
+    //         transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
+    //         ..default()
+    //     })
+    //     .insert(Name::new("Rock (type 1)"))
+    //     .insert(SnapToPlayer);
 
-    // enemy that rotates to face the player enemy spawns on the top and right
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: rock_handle.clone(),
-            transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
-            ..default()
-        })
-        .insert(Name::new("Rock (type 2)"))
-        .insert(RotateToPlayer {
-            rotation_speed: f32::to_radians(45.0), // degrees per second
-        });
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: rock_handle,
-            transform: Transform::from_xyz(0.0, 0.0 + vertical_margin, 2.0),
-            ..default()
-        })
-        .insert(Name::new("Rock (type 2)"))
-        .insert(RotateToPlayer {
-            rotation_speed: f32::to_radians(90.0), // degrees per second
-        });
+    // Enemy that rotates to face the player enemy spawns on the top and right
+    // commands
+    //     .spawn_bundle(SpriteBundle {
+    //         texture: rock_handle.clone(),
+    //         transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
+    //         ..default()
+    //     })
+    //     .insert(Name::new("Rock (type 2)"))
+    //     .insert(RotateToPlayer {
+    //         rotation_speed: f32::to_radians(45.0), // degrees per second
+    //     });
 }
 
 /// Demonstrates snapping the enemy ship to face the player ship immediately.

@@ -1465,6 +1465,7 @@ dependencies = [
  "rand",
  "rusty-hook",
  "serde",
+ "serde_json",
  "thiserror",
  "winit 0.27.5",
 ]
