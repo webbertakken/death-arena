@@ -1,3 +1,5 @@
+#![allow(clippy::unused_self)]
+
 use bevy::asset::AssetServer;
 use bevy::prelude::*;
 use std::default;
