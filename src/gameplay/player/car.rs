@@ -24,8 +24,8 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .spawn_bundle(SpriteBundle {
             texture: player_handle,
             transform: Transform {
-                translation: Vec3::new(0.0, 0.0, 5.0),
-                rotation: Quat::from_rotation_z(f32::to_radians(0.0)),
+                translation: Vec3::new(-430.0, 0.0, 5.0),
+                rotation: Quat::from_rotation_z(f32::to_radians(8.0)),
                 scale: Vec3::new(0.2, 0.2, 0.0),
             },
             ..default()
