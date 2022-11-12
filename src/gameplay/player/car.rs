@@ -1,6 +1,7 @@
 use crate::gameplay::player::Player;
 use bevy::prelude::*;
 use bevy_inspector_egui::Inspectable;
+use bevy_rapier2d::prelude::*;
 
 #[derive(Component)]
 pub struct FrontLeftWheel;
@@ -18,15 +19,26 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let wheel_handle = asset_server.load("textures/car1/wheel1.png");
     let spikes_handle = asset_server.load("textures/car1/spikes1.png");
 
-    // Wheel2 needs approx position of -132, 135 (front) -188 (rear), and scale 0.7
-
+    // Todo - remove me
     commands
-        .spawn_bundle(SpriteBundle {
+        .spawn()
+        .insert(Collider::cuboid(500.0, 50.0))
+        .insert_bundle(TransformBundle::from(Transform::from_xyz(0.0, -100.0, 0.0)));
+
+    // Player car
+    commands
+        .spawn()
+        .insert(RigidBody::Dynamic)
+        .insert(GravityScale(1.0))
+        .insert(Collider::ball(50.0))
+        .insert(Restitution::coefficient(0.7))
+        .insert(Ccd::enabled())
+        .insert_bundle(SpriteBundle {
             texture: player_handle,
             transform: Transform {
-                translation: Vec3::new(-430.0, 0.0, 5.0),
+                translation: Vec3::new(-430.0, 200.0, 5.0),
                 rotation: Quat::from_rotation_z(f32::to_radians(8.0)),
-                scale: Vec3::new(0.2, 0.2, 0.0),
+                scale: Vec3::new(0.2, 0.2, 0.2),
             },
             ..default()
         })
