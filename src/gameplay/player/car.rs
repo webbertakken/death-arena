@@ -42,6 +42,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             ..default()
         })
+        .insert(Velocity::zero())
         .insert(RigidBody::Dynamic)
         .insert(Collider::ball(350.0))
         .insert(Restitution::coefficient(0.7))
@@ -49,7 +50,9 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .with_children(|parent| {
             // Front left wheel
             parent
-                .spawn_bundle(SpriteBundle {
+                .spawn()
+                .insert(Name::new("Wheel (FL)"))
+                .insert_bundle(SpriteBundle {
                     texture: wheel_handle.clone(),
                     transform: Transform {
                         translation: Vec3::new(-117.0, 128.0, 4.9),
@@ -58,12 +61,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
-                .insert(Name::new("Wheel (FL)"))
+                .insert(Collider::ball(50.0))
                 .insert(FrontLeftWheel);
 
             // Front right wheel
             parent
-                .spawn_bundle(SpriteBundle {
+                .spawn()
+                .insert(Name::new("Wheel (FR)"))
+                .insert_bundle(SpriteBundle {
                     texture: wheel_handle.clone(),
                     transform: Transform {
                         translation: Vec3::new(114.0, 128.0, 4.9),
@@ -72,12 +77,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
-                .insert(Name::new("Wheel (FR)"))
+                .insert(Collider::ball(50.0))
                 .insert(FrontRightWheel);
 
             // Rear left wheel
             parent
-                .spawn_bundle(SpriteBundle {
+                .spawn()
+                .insert(Name::new("Wheel (RL)"))
+                .insert_bundle(SpriteBundle {
                     texture: wheel_handle.clone(),
                     transform: Transform {
                         translation: Vec3::new(-115.0, -167.5, 4.9),
@@ -86,12 +93,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
-                .insert(Name::new("Wheel (RL)"))
+                .insert(Collider::ball(50.0))
                 .insert(RearLeftWheel);
 
             // Rear right wheel
             parent
-                .spawn_bundle(SpriteBundle {
+                .spawn()
+                .insert(Name::new("Wheel (RR)"))
+                .insert_bundle(SpriteBundle {
                     texture: wheel_handle.clone(),
                     transform: Transform {
                         translation: Vec3::new(115.0, -167.5, 4.9),
@@ -100,12 +109,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
-                .insert(Name::new("Wheel (RR)"))
+                .insert(Collider::ball(50.0))
                 .insert(RearRightWheel);
 
             // Spikes
             parent
-                .spawn_bundle(SpriteBundle {
+                .spawn()
+                .insert(Name::new("Spikes"))
+                .insert_bundle(SpriteBundle {
                     texture: spikes_handle,
                     transform: Transform {
                         translation: Vec3::new(0.0, 225.0, 5.2),
@@ -114,7 +125,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                     },
                     ..default()
                 })
-                .insert(Name::new("Spikes"))
+                .insert(Collider::ball(50.0))
                 .insert(SpikesUpgrade);
         });
 }
