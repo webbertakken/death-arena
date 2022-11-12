@@ -78,10 +78,7 @@ impl Plugin for ArenaPlugin {
     }
 }
 
-fn debug() {
-    info!("ingame update");
-    // info!("Scene: {:?}", scene);
-}
+const fn debug() {}
 
 fn entering_in_game() {
     info!("Entering: InGame");

@@ -28,11 +28,11 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Player car
     commands
         .spawn()
-        .insert(RigidBody::Dynamic)
-        .insert(GravityScale(1.0))
-        .insert(Collider::ball(50.0))
-        .insert(Restitution::coefficient(0.7))
-        .insert(Ccd::enabled())
+        .insert(Name::new("Player"))
+        .insert(Player {
+            movement_speed: 500.0,                  // metres per second
+            rotation_speed: f32::to_radians(360.0), // degrees per second
+        })
         .insert_bundle(SpriteBundle {
             texture: player_handle,
             transform: Transform {
@@ -42,11 +42,10 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             ..default()
         })
-        .insert(Name::new("Player"))
-        .insert(Player {
-            movement_speed: 500.0,                  // metres per second
-            rotation_speed: f32::to_radians(360.0), // degrees per second
-        })
+        .insert(RigidBody::Dynamic)
+        .insert(Collider::ball(350.0))
+        .insert(Restitution::coefficient(0.7))
+        .insert(Ccd::enabled())
         .with_children(|parent| {
             // Front left wheel
             parent
