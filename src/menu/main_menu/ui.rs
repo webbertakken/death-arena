@@ -2,8 +2,6 @@ use crate::menu::main_menu::ButtonAction;
 use crate::ui::prelude::*;
 use crate::ui::{ui, Atoms};
 use bevy::prelude::*;
-use bevy::sprite::Rect;
-use bevy_inspector_egui::egui::style::Selection;
 
 #[derive(Component)]
 pub struct MainMenu;

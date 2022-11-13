@@ -1,6 +1,6 @@
 use crate::app::physics::collider::ColliderData;
 use crate::app::physics::collider_loader::ColliderLoader;
-use bevy::asset::{AssetLoader, BoxedFuture, LoadContext, LoadedAsset};
+
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 

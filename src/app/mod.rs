@@ -6,7 +6,6 @@ use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 use bevy_kira_audio::AudioPlugin;
 use bevy_rapier2d::prelude::*;
-use init::InitPlugin;
 
 pub mod generic;
 pub mod init;

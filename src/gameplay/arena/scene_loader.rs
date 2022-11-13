@@ -1,24 +1,19 @@
 use crate::app::physics::collider::ColliderData;
-use crate::gameplay::arena::loader::Arena;
+
 use crate::gameplay::arena::scene::{Position, Scale, Scene, SpriteData};
 use crate::gameplay::main::BOUNDS;
-use crate::gameplay::GameState;
+
 use crate::AppState;
 use bevy::prelude::*;
 use bevy::utils::HashSet;
 use bevy::{
     asset::{AssetLoader, Handle, LoadContext, LoadedAsset},
-    prelude::*,
-    reflect::TypeUuid,
     utils::BoxedFuture,
 };
 use bevy_rapier2d::prelude::*;
-use serde::Deserialize;
+
 use serde_json::from_slice;
 use std::default::Default;
-use std::fs::File;
-use std::iter::Map;
-use std::path::Path;
 
 #[derive(Default)]
 pub struct SceneLoader;

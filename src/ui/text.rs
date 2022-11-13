@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use std::ptr;
 
 pub struct TextBox {
     pub font: Handle<Font>,

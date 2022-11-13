@@ -1,24 +1,10 @@
 use crate::gameplay::arena::scene::Scene;
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
-use bevy::reflect::erased_serde::__private::serde;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_kira_audio::prelude::*;
-use bevy_kira_audio::{Audio, AudioControl, MainTrack};
-use rand::random;
-use std::any::Any;
-use std::borrow::BorrowMut;
-use std::fs;
-use std::ops::DerefMut;
-use std::path::Path;
-use std::time::Duration;
 
-enum Arenas {
-    ChurchCtf,
-}
+use bevy_kira_audio::Audio;
+use rand::random;
 
 struct ArenaData {
-    name: Arenas,
     path: String,
 }
 
@@ -27,7 +13,6 @@ pub struct Arena;
 
 pub fn setup(commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
     let arenas = [ArenaData {
-        name: Arenas::ChurchCtf,
         path: "/assets/textures/church-ctf.2dtf".to_string(),
     }];
 

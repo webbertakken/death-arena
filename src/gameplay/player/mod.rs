@@ -1,13 +1,5 @@
-// use crate::core::MusicController;
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::{App, Plugin, Res};
 use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_inspector_egui::{Inspectable, RegisterInspectable};
-use bevy_kira_audio::prelude::*;
-use std::time::Duration;
-
-use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::player;
 
 mod camera;
 mod car;
@@ -26,17 +18,6 @@ pub struct Player {
 pub struct PlayerPlugin;
 
 pub struct SpawnTimer(Timer);
-
-/// snap to player ship behavior
-#[derive(Component)]
-pub struct SnapToPlayer;
-
-/// rotate to face player ship behavior
-#[derive(Component)]
-pub struct RotateToPlayer {
-    /// rotation speed in radians per second
-    rotation_speed: f32,
-}
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {

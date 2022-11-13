@@ -1,11 +1,9 @@
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::{Query, Res, Transform, Vec3};
+use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_kira_audio::prelude::*;
-use std::time::Duration;
 
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::player;
+
 use crate::gameplay::player::Player;
 
 #[derive(Component)]

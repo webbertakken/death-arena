@@ -1,6 +1,6 @@
 use crate::gameplay::player::Player;
 use bevy::prelude::*;
-use bevy_inspector_egui::Inspectable;
+
 use bevy_rapier2d::prelude::*;
 
 #[derive(Component)]
