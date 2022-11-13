@@ -9,8 +9,8 @@ use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;
 
+use crate::app::init::default_plugins::Configure;
 use bevy_inspector_egui::WorldInspectorPlugin;
-
 use gameplay::GameplayPlugins;
 
 pub mod app;
@@ -32,7 +32,7 @@ fn main() {
     // Setup
     let mut game = App::new();
     game.add_plugin(InitPlugin);
-    game.add_plugins(DefaultPlugins);
+    game.add_plugins(DefaultPlugins::configure());
 
     // State
     if cfg!(debug_assertions) {

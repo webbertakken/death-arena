@@ -11,8 +11,9 @@ mod player;
 pub struct GameplayPlugins;
 
 impl PluginGroup for GameplayPlugins {
-    fn build(&mut self, group: &mut PluginGroupBuilder) {
-        group.add(PlayerPlugin::default());
-        group.add(ArenaPlugin::default());
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(PlayerPlugin::default())
+            .add(ArenaPlugin::default())
     }
 }

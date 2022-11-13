@@ -13,7 +13,7 @@ pub struct MainCamera;
 pub fn setup(mut commands: Commands) {
     // 2D orthographic camera
     commands
-        .spawn_bundle(Camera2dBundle::default())
+        .spawn(Camera2dBundle::default())
         .insert(Name::new("MainCamera"))
         .insert(MainCamera);
 
