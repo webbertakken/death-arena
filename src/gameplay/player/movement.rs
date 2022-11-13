@@ -2,9 +2,8 @@ use crate::gameplay::main::BOUNDS;
 use crate::gameplay::main::TIME_STEP;
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::{Input, KeyCode, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
 
 type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
 type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);

@@ -1,8 +1,6 @@
 use crate::menu::MenuState;
-use crate::{App, AppState, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::{App, AppState, Plugin, Query};
 use bevy::prelude::*;
-use bevy_ecs::query::WorldQuery;
-use bevy_kira_audio::prelude::*;
 
 mod ui;
 

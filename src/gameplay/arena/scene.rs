@@ -1,7 +1,4 @@
 use crate::core::serde::parse_float;
-use crate::gameplay::arena::scene_loader::Sprite;
-use bevy::prelude::Vec3;
-use serde::{de, Deserialize, Deserializer};
 
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

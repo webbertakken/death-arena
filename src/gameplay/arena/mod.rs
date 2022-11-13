@@ -1,16 +1,14 @@
 use crate::gameplay::arena::scene::Scene;
 use crate::gameplay::arena::scene_loader::SceneLoader;
-use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::player::Player;
-use crate::gameplay::{player, GameplayPlugins};
-use crate::{App, AppState, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::gameplay::main::TIME_STEP;
+
+use crate::{App, AppState, Plugin};
 use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_asset_loader::prelude::*;
+use bevy::time::FixedTimestep;
+
 use bevy_common_assets::json::JsonAssetPlugin;
-use bevy_kira_audio::prelude::*;
+
 use scene_loader::SceneState;
-use std::time::Duration;
 
 mod loader;
 mod music;

@@ -2,7 +2,6 @@
 
 use bevy::asset::AssetServer;
 use bevy::prelude::*;
-use std::default;
 
 pub(crate) mod button;
 mod layout;

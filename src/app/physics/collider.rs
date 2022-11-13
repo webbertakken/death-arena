@@ -1,5 +1,4 @@
 #![allow(clippy::use_self)]
-use bevy::prelude::*;
 use bevy_rapier2d::prelude::Vect;
 use serde::{Deserialize, Serialize};
 

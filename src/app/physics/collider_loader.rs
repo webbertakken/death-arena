@@ -1,15 +1,10 @@
 use crate::app::physics::collider::ColliderData;
-use crate::gameplay::GameState;
-use crate::AppState;
-use bevy::prelude::*;
+
 use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
-    prelude::*,
-    reflect::TypeUuid,
     utils::BoxedFuture,
 };
-use bevy_rapier2d::prelude::*;
-use serde::Deserialize;
+
 use std::default::Default;
 
 #[derive(Default)]

@@ -1,13 +1,6 @@
 // use crate::core::MusicController;
-use crate::{App, Input, KeyCode, Plugin, Query, Res, Transform, Vec3};
+use crate::{App, Plugin, Res};
 use bevy::prelude::*;
-use bevy::{math::Vec3Swizzles, time::FixedTimestep};
-use bevy_inspector_egui::{Inspectable, RegisterInspectable};
-use bevy_kira_audio::prelude::*;
-use std::time::Duration;
-
-use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::player;
 
 mod camera;
 mod car;

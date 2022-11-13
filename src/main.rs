@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables, unused_imports)]
+#![allow(dead_code, unused_variables)]
 #![warn(clippy::nursery, clippy::pedantic)]
 #![allow(
     clippy::module_name_repetitions,
@@ -8,12 +8,10 @@
 use crate::menu::{MenuPlugins, MenuState};
 use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;
-use bevy::prelude::*;
-use bevy_asset_loader::prelude::*;
+
 use bevy_inspector_egui::WorldInspectorPlugin;
-use bevy_kira_audio::prelude::*;
+
 use gameplay::GameplayPlugins;
-use iyes_loopless::prelude::*;
 
 pub mod app;
 pub mod core;

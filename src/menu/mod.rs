@@ -1,6 +1,6 @@
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
-use bevy_kira_audio::AudioPlugin;
+
 use main_menu::MainMenuPlugin;
 
 mod main_menu;
