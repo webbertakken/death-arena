@@ -8,14 +8,6 @@ mod arena;
 mod main;
 mod player;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GameState {
-    Intro,
-    Playing,
-    Paused,
-    Outro,
-}
-
 pub struct GameplayPlugins;
 
 impl PluginGroup for GameplayPlugins {

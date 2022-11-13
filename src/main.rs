@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables)]
+#![allow(unused_variables)]
 #![warn(clippy::nursery, clippy::pedantic)]
 #![allow(
     clippy::module_name_repetitions,

@@ -5,6 +5,7 @@ use main_menu::MainMenuPlugin;
 
 mod main_menu;
 
+#[allow(dead_code)]
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub enum MenuState {
     Main,

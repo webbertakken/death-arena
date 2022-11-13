@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::serde::parse_float;
 
 #[derive(Debug, serde::Deserialize, Clone)]

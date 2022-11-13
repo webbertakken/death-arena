@@ -4,12 +4,7 @@ use bevy::prelude::*;
 use bevy_kira_audio::Audio;
 use rand::random;
 
-enum Arenas {
-    ChurchCtf,
-}
-
 struct ArenaData {
-    name: Arenas,
     path: String,
 }
 
@@ -18,7 +13,6 @@ pub struct Arena;
 
 pub fn setup(commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
     let arenas = [ArenaData {
-        name: Arenas::ChurchCtf,
         path: "/assets/textures/church-ctf.2dtf".to_string(),
     }];
 

@@ -1,4 +1,3 @@
-// use crate::core::MusicController;
 use crate::{App, Plugin, Res};
 use bevy::prelude::*;
 
@@ -19,17 +18,6 @@ pub struct Player {
 pub struct PlayerPlugin;
 
 pub struct SpawnTimer(Timer);
-
-/// snap to player ship behavior
-#[derive(Component)]
-pub struct SnapToPlayer;
-
-/// rotate to face player ship behavior
-#[derive(Component)]
-pub struct RotateToPlayer {
-    /// rotation speed in radians per second
-    rotation_speed: f32,
-}
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {

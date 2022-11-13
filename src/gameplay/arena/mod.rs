@@ -19,15 +19,6 @@ mod scene_loader;
 #[derive(Default)]
 pub struct ArenaPlugin;
 
-#[derive(Component)]
-pub struct SnapToPlayer;
-
-#[derive(Component)]
-pub struct RotateToPlayer {
-    /// rotation speed in radians per second
-    rotation_speed: f32,
-}
-
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         // Always
