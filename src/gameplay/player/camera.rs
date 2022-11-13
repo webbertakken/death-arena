@@ -1,8 +1,5 @@
-use crate::gameplay::main::CAMERA_FAR;
 use crate::gameplay::player::Player;
 use bevy::prelude::*;
-use bevy::render::camera::Viewport;
-use bevy::render::view::ViewPlugin;
 
 #[derive(Component)]
 pub struct MainCamera;

@@ -24,6 +24,7 @@ bevy = { version = "0.8.1", default-features = false, features = [
   "jpeg",
   "x11"
 ] }
+ron = { version = "0.7.1" }
 serde_json = { version = "1.0.87" }
 bevy_ecs = { version = "0.8.1" }
 bevy_kira_audio = { version = "0.12", features = ["ogg", "mp3"] }

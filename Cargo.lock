@@ -1479,6 +1479,7 @@ dependencies = [
  "log",
  "rand",
  "rapier2d",
+ "ron",
  "rusty-hook",
  "serde",
  "serde_json",
