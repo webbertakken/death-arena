@@ -13,7 +13,7 @@ pub struct PhysicsPlugin;
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(RapierConfiguration {
-            gravity: Vec2::ZERO,
+            gravity: Vect::ZERO,
             ..Default::default()
         })
         .add_asset::<ColliderData>()

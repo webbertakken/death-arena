@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy_kira_audio::prelude::*;
 use std::time::Duration;
 
+#[derive(Resource)]
 pub struct SfxEngineRevving(Handle<AudioInstance>);
 
 pub fn setup(
@@ -11,12 +12,9 @@ pub fn setup(
     audio: Res<Audio>,
     player_query: Query<&Transform, With<Player>>,
 ) {
+    let engine_sound: Handle<AudioSource> = asset_server.load("sfx/car/engine.ogg");
     // Engine
-    let engine_revving_handle = audio
-        .play(asset_server.load("sfx/car/engine.ogg"))
-        .with_volume(0.0)
-        .looped()
-        .handle();
+    let engine_revving_handle = audio.play(engine_sound).with_volume(0.0).looped().handle();
     commands.insert_resource(SfxEngineRevving(engine_revving_handle));
 }
 

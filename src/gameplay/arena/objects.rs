@@ -23,7 +23,7 @@ pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {
 
     // Enemy that snaps to face the player spawns on the bottom and left
     // commands
-    //     .spawn_bundle(SpriteBundle {
+    //     .spawn(SpriteBundle {
     //         texture: rock_handle.clone(),
     //         transform: Transform::from_xyz(0.0 - horizontal_margin, 0.0, 2.0),
     //         ..default()
@@ -33,7 +33,7 @@ pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {
 
     // Enemy that rotates to face the player enemy spawns on the top and right
     // commands
-    //     .spawn_bundle(SpriteBundle {
+    //     .spawn(SpriteBundle {
     //         texture: rock_handle.clone(),
     //         transform: Transform::from_xyz(0.0 + horizontal_margin, 0.0, 2.0),
     //         ..default()

@@ -8,7 +8,7 @@ pub struct Layout {
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            default_direction: FlexDirection::ColumnReverse,
+            default_direction: FlexDirection::Column,
         }
     }
 }
@@ -21,7 +21,7 @@ impl Layout {
                 flex_grow: 0.0,
                 ..Default::default()
             },
-            color: Color::NONE.into(),
+            background_color: Color::NONE.into(),
             ..Default::default()
         }
     }
@@ -38,7 +38,7 @@ impl Layout {
                 ..default()
             },
             focus_policy: FocusPolicy::Pass,
-            color: UiColor::from(color),
+            background_color: BackgroundColor::from(color),
             ..default()
         }
     }

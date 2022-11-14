@@ -18,24 +18,24 @@ impl UiButton {
                 border: UiRect::all(Val::Px(1.0)),
                 ..Default::default()
             },
-            color: UiColor::from(color),
+            background_color: BackgroundColor::from(color),
             transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
             ..Default::default()
         }
     }
 }
 
-pub fn styles_system(mut query: Query<(&Interaction, &mut UiColor), With<Button>>) {
+pub fn styles_system(mut query: Query<(&Interaction, &mut BackgroundColor), With<Button>>) {
     for (interaction, mut color) in query.iter_mut() {
         match *interaction {
             Interaction::Clicked => {
-                *color = UiColor::from(BUTTON_ACTIVE_COLOR);
+                *color = BackgroundColor::from(BUTTON_ACTIVE_COLOR);
             }
             Interaction::Hovered => {
-                *color = UiColor::from(BUTTON_HOVER_COLOR);
+                *color = BackgroundColor::from(BUTTON_HOVER_COLOR);
             }
             Interaction::None => {
-                *color = UiColor::from(BUTTON_COLOR);
+                *color = BackgroundColor::from(BUTTON_COLOR);
             }
         }
     }

@@ -20,7 +20,7 @@ pub enum MenuState {
 pub struct MenuPlugins;
 
 impl PluginGroup for MenuPlugins {
-    fn build(&mut self, group: &mut PluginGroupBuilder) {
-        group.add(MainMenuPlugin::default());
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>().add(MainMenuPlugin::default())
     }
 }

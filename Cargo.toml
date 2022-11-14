@@ -16,7 +16,7 @@ log = "0.4"
 env_logger = "0.9"
 dotenvy = "0.15.6"
 serde = "1.0.147"
-bevy = { version = "0.8.1", default-features = false, features = [
+bevy = { version = "0.9", default-features = false, features = [
   "bevy_asset",
   "bevy_winit",
   "render",
@@ -26,16 +26,16 @@ bevy = { version = "0.8.1", default-features = false, features = [
 ] }
 ron = { version = "0.7.1" }
 serde_json = { version = "1.0.87" }
-bevy_ecs = { version = "0.8.1" }
-bevy_kira_audio = { version = "0.12", features = ["ogg", "mp3"] }
-bevy_asset_loader = "0.12"
-bevy-inspector-egui = "0.13.0"
-bevy_common_assets = { version = "0.3.0", features = ["json"] }
-winit = { version = "0.27.5", default-features = false, features = ["x11"] }
+bevy_ecs = { version = "0.9" }
+bevy_kira_audio = { version = "0.13", features = ["ogg", "mp3"] }
+bevy_asset_loader = "0.13"
+bevy-inspector-egui = "0.13"
+bevy_common_assets = { version = "0.4.0", features = ["json"] }
+winit = { version = "0.27.4", default-features = false, features = ["x11"] }
 image = { version = "0.24", default-features = false }
 iyes_loopless = { version = "0.8.0", features = ["bevy-inspector-egui"] }
-rapier2d = { version = "0.16.0" }
-bevy_rapier2d = { version = "0.18.0", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] }
+# tempfix
+bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", branch = "bevy-0.9", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0",
 
 [dev-dependencies]
 # run `cargo test` to enable this

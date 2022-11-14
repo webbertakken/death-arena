@@ -15,13 +15,14 @@ pub mod physics;
 pub struct AppPlugins;
 
 impl PluginGroup for AppPlugins {
-    fn build(&mut self, group: &mut PluginGroupBuilder) {
-        group.add(AudioPlugin::default());
-        group.add(LightingPlugin::default());
-        group.add(GenericSystemsPlugin::default());
-        group.add(UserInterfacePlugin::default());
-        group.add(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0));
-        group.add(RapierDebugRenderPlugin::default());
-        group.add(PhysicsPlugin::default());
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(AudioPlugin::default())
+            .add(LightingPlugin::default())
+            .add(GenericSystemsPlugin::default())
+            .add(UserInterfacePlugin::default())
+            .add(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+            .add(RapierDebugRenderPlugin::default())
+            .add(PhysicsPlugin::default())
     }
 }

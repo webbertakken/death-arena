@@ -71,7 +71,7 @@ impl From<&SpriteData> for Sprite {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Resource)]
 pub struct SceneState {
     pub handle: Handle<Scene>,
     pub printed: bool,
@@ -169,9 +169,9 @@ pub fn move_to_next_state(
 
             // Spawn the object
             commands
-                .spawn()
+                .spawn_empty()
                 .insert(Name::new(sprite.name.clone()))
-                .insert_bundle(SpriteBundle {
+                .insert(SpriteBundle {
                     texture: sprite.sprite_handle.clone(),
                     sprite: bevy::sprite::Sprite {
                         anchor: bevy::sprite::Anchor::Center,

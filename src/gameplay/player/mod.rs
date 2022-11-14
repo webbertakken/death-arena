@@ -17,11 +17,12 @@ pub struct Player {
 #[derive(Default)]
 pub struct PlayerPlugin;
 
+#[derive(Resource)]
 pub struct SpawnTimer(Timer);
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, true)))
+        app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
             .add_startup_system(camera::setup)
             .add_startup_system(setup)
             .add_startup_system(car::setup)
