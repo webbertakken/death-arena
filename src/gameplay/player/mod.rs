@@ -17,6 +17,7 @@ pub struct Player {
 #[derive(Default)]
 pub struct PlayerPlugin;
 
+#[derive(Resource)]
 pub struct SpawnTimer(Timer);
 
 impl Plugin for PlayerPlugin {
