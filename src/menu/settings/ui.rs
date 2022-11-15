@@ -1,4 +1,4 @@
-use crate::menu::main_menu::ButtonAction;
+use crate::menu::settings::ButtonAction;
 use crate::ui::prelude::*;
 use crate::ui::{ui, Atoms};
 use bevy::prelude::*;
@@ -22,12 +22,12 @@ pub fn show(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Main menu
     commands
         .spawn(layout.flex(MENU_COLOR))
-        .insert(Name::new("Menu (main)"))
+        .insert(Name::new("Menu (Settings)"))
         .insert(MainMenu)
         .with_children(|parent| {
             // Title
             parent
-                .spawn(text.title("Death Arena", TEXT_COLOR))
+                .spawn(text.title("Settings", TEXT_COLOR))
                 .insert(Name::new("Title"));
 
             // Multiplayer button
