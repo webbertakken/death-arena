@@ -17,11 +17,10 @@
     },
     "opacity": 1,
     "locked": false,
-    "isStatic": false,
     "useSizeForWeight": true,
     "sizeToWeightMultiplier": "100",
-    "weight": "100",
-    "notUseSizeForWeight": true
+    "notUseSizeForWeight": true,
+    "weight": "100"
   },
   "canvas": {
     "sprites": [

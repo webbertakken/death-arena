@@ -38,7 +38,7 @@ fn main() {
     if cfg!(debug_assertions) {
         // Development
         game.add_state(AppState::Loading);
-        game.add_state(MenuState::Hidden);
+        game.add_state(MenuState::Dealer);
     } else {
         // Production
         game.add_state(AppState::Menus);

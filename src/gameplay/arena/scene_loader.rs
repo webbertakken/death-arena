@@ -54,6 +54,12 @@ pub struct Sprite {
     pub opacity: f32,
     /// Name
     pub name: String,
+    // Whether it can move as an object or not.
+    pub is_static: bool,
+    // Weight
+    pub use_size_for_weight: bool,
+    pub size_to_weight_multiplier: f32,
+    pub weight: f32,
 }
 
 impl From<&SpriteData> for Sprite {
@@ -67,6 +73,10 @@ impl From<&SpriteData> for Sprite {
             scale: sprite_data.scale.clone(),
             opacity: sprite_data.opacity,
             name: sprite_data.relative_path.clone(),
+            is_static: sprite_data.is_static,
+            use_size_for_weight: sprite_data.use_size_for_weight,
+            size_to_weight_multiplier: sprite_data.size_to_weight_multiplier,
+            weight: sprite_data.weight,
         }
     }
 }
@@ -152,26 +162,13 @@ pub fn move_to_next_state(
         info!("All images loaded");
 
         for sprite in &state.handles {
-            // Determine the collider
-            let collider_component = match collider_assets.get(&sprite.collider_handle) {
-                Some(ColliderData::Poly(collider_data)) => {
-                    Collider::convex_polyline(collider_data.clone()).unwrap_or_default()
-                }
-                Some(ColliderData::NoCollider) => {
-                    warn!("Sprite without collider: {}", sprite.name);
-                    Collider::default()
-                }
-                None => {
-                    warn!("collider_data isn't loaded yet");
-                    Collider::default()
-                }
-            };
-
             // Spawn the object
-            commands
-                .spawn_empty()
-                .insert(Name::new(sprite.name.clone()))
-                .insert(SpriteBundle {
+            let mut my_handle = commands.spawn_empty();
+
+            // Main components
+            my_handle.insert((
+                Name::new(sprite.name.clone()),
+                SpriteBundle {
                     texture: sprite.sprite_handle.clone(),
                     sprite: bevy::sprite::Sprite {
                         anchor: bevy::sprite::Anchor::Center,
@@ -187,12 +184,33 @@ pub fn move_to_next_state(
                         rotation: Quat::from_rotation_z(-sprite.rotation.to_radians()),
                     },
                     ..default()
-                })
-                .insert(collider_component);
+                },
+            ));
+
+            // Collider
+            match collider_assets.get(&sprite.collider_handle) {
+                Some(ColliderData::Poly(collider_data)) => {
+                    my_handle.insert(
+                        Collider::convex_polyline(collider_data.clone()).unwrap_or_default(),
+                    );
+                }
+                Some(ColliderData::NoCollider) => {
+                    warn!("Sprite without collider: {}", sprite.name);
+                }
+                None => {
+                    warn!("collider_data isn't loaded yet");
+                }
+            };
+
+            // Body
+            my_handle.insert(if sprite.is_static {
+                RigidBody::Fixed
+            } else {
+                RigidBody::Dynamic
+            });
         }
 
         app_state.overwrite_set(AppState::InGame).unwrap();
-        // game_state.overwrite_set(GameState::Intro).unwrap();
         state.sprites_loading_finished = true;
     }
 }
