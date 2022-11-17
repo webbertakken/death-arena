@@ -39,6 +39,14 @@ pub struct SpriteDefaults {
     pub opacity: f32,
     /// Whether you can drag the sprite
     locked: bool,
+    // Whether it can move as an object or not.
+    pub is_static: bool,
+    // Weight
+    pub use_size_for_weight: bool,
+    #[serde(deserialize_with = "parse_float")]
+    pub size_to_weight_multiplier: f32,
+    #[serde(deserialize_with = "parse_float")]
+    pub weight: f32,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -58,6 +66,14 @@ pub struct SpriteData {
     /// Opacity
     #[serde(deserialize_with = "parse_float")]
     pub opacity: f32,
+    // Whether it can move as an object or not.
+    pub is_static: bool,
+    // Weight
+    pub use_size_for_weight: bool,
+    #[serde(deserialize_with = "parse_float")]
+    pub size_to_weight_multiplier: f32,
+    #[serde(deserialize_with = "parse_float")]
+    pub weight: f32,
 }
 
 #[derive(Debug, serde::Deserialize)]
