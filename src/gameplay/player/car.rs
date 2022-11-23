@@ -22,26 +22,31 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Wheel2 needs approx position of -132, 135 (front) -188 (rear), and scale 0.7
 
     commands
-        .spawn_empty()
-        .insert(Name::new("Player"))
-        .insert(Player {
-            movement_speed: 500.0,                  // metres per second
-            rotation_speed: f32::to_radians(360.0), // degrees per second
-        })
-        .insert(SpriteBundle {
-            texture: player_handle,
-            transform: Transform {
-                translation: Vec3::new(-430.0, 0.0, 3.0),
-                rotation: Quat::from_rotation_z(f32::to_radians(8.0)),
-                scale: Vec3::new(0.2, 0.2, 0.2),
+        .spawn((
+            Name::new("Player"),
+            Player {
+                movement_speed: 500.0,                  // metres per second
+                rotation_speed: f32::to_radians(360.0), // degrees per second
             },
-            ..default()
-        })
-        .insert(RigidBody::Dynamic)
-        .insert(Velocity::zero())
-        .insert(Collider::ball(350.0))
-        .insert(Restitution::coefficient(0.7))
-        .insert(Ccd::enabled())
+            SpriteBundle {
+                texture: player_handle,
+                transform: Transform {
+                    translation: Vec3::new(-430.0, 0.0, 3.0),
+                    rotation: Quat::from_rotation_z(f32::to_radians(8.0)),
+                    scale: Vec3::new(0.2, 0.2, 0.2),
+                },
+                ..default()
+            },
+            RigidBody::Dynamic,
+            Velocity::zero(),
+            Collider::ball(350.0),
+            Restitution::coefficient(0.7),
+            Ccd::enabled(),
+            Damping {
+                linear_damping: 12.5,
+                angular_damping: 12.5,
+            },
+        ))
         .with_children(|parent| {
             // Front left wheel
             parent
