@@ -187,12 +187,20 @@ pub fn move_to_next_state(
                 },
             ));
 
+            // Body
+            my_handle.insert(if sprite.is_static {
+                RigidBody::Fixed
+            } else {
+                RigidBody::Dynamic
+            });
+
             // Collider
             match collider_assets.get(&sprite.collider_handle) {
                 Some(ColliderData::Poly(collider_data)) => {
-                    my_handle.insert(
+                    my_handle.insert((
                         Collider::convex_polyline(collider_data.clone()).unwrap_or_default(),
-                    );
+                        Ccd::enabled(),
+                    ));
                 }
                 Some(ColliderData::NoCollider) => {
                     warn!("Sprite without collider: {}", sprite.name);
@@ -202,11 +210,17 @@ pub fn move_to_next_state(
                 }
             };
 
-            // Body
-            my_handle.insert(if sprite.is_static {
-                RigidBody::Fixed
+            // Weight
+            my_handle.insert(if sprite.use_size_for_weight {
+                ColliderMassProperties::Density(sprite.size_to_weight_multiplier / 100.0)
             } else {
-                RigidBody::Dynamic
+                ColliderMassProperties::Density(1.0)
+            });
+
+            // Damping
+            my_handle.insert(Damping {
+                linear_damping: sprite.size_to_weight_multiplier / 50.0,
+                angular_damping: sprite.size_to_weight_multiplier / 50.0,
             });
         }
 
