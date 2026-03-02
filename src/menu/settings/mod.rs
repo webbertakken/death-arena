@@ -1,5 +1,5 @@
 use crate::menu::MenuState;
-use crate::{App, AppState, Plugin, Query};
+use crate::{App, AppState, Plugin};
 use bevy::prelude::*;
 
 mod ui;
@@ -15,14 +15,9 @@ pub struct SettingsMenuPlugin;
 
 impl Plugin for SettingsMenuPlugin {
     fn build(&self, app: &mut App) {
-        // Enter
-        app.add_system_set(SystemSet::on_enter(MenuState::Settings).with_system(ui::show));
-
-        // Update
-        app.add_system_set(SystemSet::on_update(MenuState::Settings).with_system(on_update));
-
-        // Exit
-        app.add_system_set(SystemSet::on_exit(MenuState::Settings).with_system(ui::hide));
+        app.add_systems(OnEnter(MenuState::Settings), ui::show);
+        app.add_systems(Update, on_update.run_if(in_state(MenuState::Settings)));
+        app.add_systems(OnExit(MenuState::Settings), ui::hide);
     }
 }
 
@@ -30,20 +25,20 @@ pub type FilterButtonsThatChanged = (Changed<Interaction>, With<Button>);
 
 pub fn on_update(
     interaction_query: Query<(&Interaction, &ButtonAction), FilterButtonsThatChanged>,
-    mut menu_state: ResMut<State<MenuState>>,
-    mut app_state: ResMut<State<AppState>>,
+    mut next_menu_state: ResMut<NextState<MenuState>>,
+    mut next_app_state: ResMut<NextState<AppState>>,
 ) {
     for (interaction, action) in &interaction_query {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             match action {
                 ButtonAction::Career => {
                     info!("Career button clicked");
-                    menu_state.overwrite_set(MenuState::Garage).unwrap();
+                    next_menu_state.set(MenuState::Garage);
                 }
                 ButtonAction::Multiplayer => {
                     info!("Multiplayer button clicked");
-                    menu_state.overwrite_set(MenuState::Hidden).unwrap();
-                    app_state.overwrite_set(AppState::Loading).unwrap();
+                    next_menu_state.set(MenuState::Hidden);
+                    next_app_state.set(AppState::Loading);
                 }
             }
         }

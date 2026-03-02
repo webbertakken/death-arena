@@ -4,20 +4,13 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct MainCamera;
 
-// #[derive(Component)]
-// struct LeftCamera;
-//
-// #[derive(Component)]
-// struct RightCamera;
-
 pub fn setup(mut commands: Commands) {
     // 2D orthographic camera
-    commands
-        .spawn(Camera2dBundle::default())
-        .insert(Name::new("MainCamera"))
-        .insert(MainCamera);
-
-    // Split screen example: https://github.com/bevyengine/bevy/blob/latest/examples/3d/split_screen.rs
+    commands.spawn((
+        Name::new("MainCamera"),
+        MainCamera,
+        Camera2d,
+    ));
 }
 
 pub fn camera_follows_player_system(

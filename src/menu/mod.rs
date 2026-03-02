@@ -14,8 +14,9 @@ mod main;
 mod settings;
 
 #[allow(dead_code)]
-#[derive(Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash, Default, States)]
 pub enum MenuState {
+    #[default]
     Main,
     Settings,
     SettingsAudio,

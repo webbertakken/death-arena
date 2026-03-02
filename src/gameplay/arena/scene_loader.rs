@@ -4,12 +4,10 @@ use crate::gameplay::arena::scene::{Position, Scale, Scene, SpriteData};
 use crate::gameplay::main::BOUNDS;
 
 use crate::AppState;
+use bevy::asset::io::Reader;
+use bevy::asset::{AssetLoader, LoadContext};
 use bevy::prelude::*;
 use bevy::utils::HashSet;
-use bevy::{
-    asset::{AssetLoader, Handle, LoadContext, LoadedAsset},
-    utils::BoxedFuture,
-};
 use bevy_rapier2d::prelude::*;
 
 use serde_json::from_slice;
@@ -19,16 +17,20 @@ use std::default::Default;
 pub struct SceneLoader;
 
 impl AssetLoader for SceneLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), bevy::asset::Error>> {
-        Box::pin(async move {
-            let scene_asset = from_slice::<Scene>(bytes)?;
-            load_context.set_default_asset(LoadedAsset::new(scene_asset));
-            Ok(())
-        })
+    type Asset = Scene;
+    type Settings = ();
+    type Error = anyhow::Error;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let scene_asset = from_slice::<Scene>(&bytes)?;
+        Ok(scene_asset)
     }
 
     fn extensions(&self) -> &[&str] {
@@ -37,7 +39,7 @@ impl AssetLoader for SceneLoader {
 }
 
 #[derive(Debug)]
-pub struct Sprite {
+pub struct SpriteEntry {
     /// Handle for the sprite
     pub sprite_handle: Handle<Image>,
     /// Handle for the sprite's collider definition
@@ -62,7 +64,7 @@ pub struct Sprite {
     pub weight: f32,
 }
 
-impl From<&SpriteData> for Sprite {
+impl From<&SpriteData> for SpriteEntry {
     fn from(sprite_data: &SpriteData) -> Self {
         Self {
             sprite_handle: Handle::default(),
@@ -87,7 +89,7 @@ pub struct SceneState {
     pub printed: bool,
     pub sprites_loading_started: bool,
     pub sprites_loading_finished: bool,
-    pub handles: Vec<Sprite>,
+    pub handles: Vec<SpriteEntry>,
     pub paths: HashSet<String>,
 }
 
@@ -115,21 +117,20 @@ pub fn load_sprites_from_scene(
         .canvas
         .sprites
         .iter()
-        .map(|sprite| -> String {
-            let file_path = format!("textures/{}", &sprite.relative_path);
+        .map(|sprite_data| -> String {
+            let file_path = format!("textures/{}", &sprite_data.relative_path);
 
             // Remove the file extension (png, jpg, etc.)
             let file_path_without_ext = file_path.split('.').next().unwrap().to_string();
-            let collider_file_path = format!("{}.collider", file_path_without_ext);
+            let collider_file_path = format!("{file_path_without_ext}.collider");
 
-            let sprite = Sprite {
+            let entry = SpriteEntry {
                 sprite_handle: asset_server.load(&file_path),
                 collider_handle: asset_server.load(&collider_file_path),
-                ..sprite.into()
+                ..sprite_data.into()
             };
 
-            // info!("Loading {:?}", sprite);
-            state.handles.push(sprite);
+            state.handles.push(entry);
 
             file_path
         })
@@ -144,7 +145,7 @@ pub fn load_sprites_from_scene(
 pub fn move_to_next_state(
     mut commands: Commands,
     mut state: ResMut<SceneState>,
-    mut app_state: ResMut<State<AppState>>,
+    mut next_app_state: ResMut<NextState<AppState>>,
     images: ResMut<Assets<Image>>,
     collider_assets: ResMut<Assets<ColliderData>>,
 ) {
@@ -155,55 +156,51 @@ pub fn move_to_next_state(
     // todo - filter only for arena sprites
     let current = images.len();
     let total = state.paths.len();
-    info!("Loaded {} of {}", current, total);
+    info!("Loaded {current} of {total}");
 
     // Todo - actually check it
     if total > 0 && current >= total {
         info!("All images loaded");
 
-        for sprite in &state.handles {
+        for entry in &state.handles {
             // Spawn the object
-            let mut my_handle = commands.spawn_empty();
+            let mut entity = commands.spawn_empty();
 
             // Main components
-            my_handle.insert((
-                Name::new(sprite.name.clone()),
-                SpriteBundle {
-                    texture: sprite.sprite_handle.clone(),
-                    sprite: bevy::sprite::Sprite {
-                        anchor: bevy::sprite::Anchor::Center,
-                        ..default()
-                    },
-                    transform: Transform {
-                        translation: Vec3::new(
-                            -BOUNDS.x / 2.0 + sprite.position.x,
-                            BOUNDS.y / 2.0 - sprite.position.y,
-                            sprite.position.z,
-                        ),
-                        scale: Vec3::new(sprite.scale.x, sprite.scale.y, 1.0),
-                        rotation: Quat::from_rotation_z(-sprite.rotation.to_radians()),
-                    },
+            entity.insert((
+                Name::new(entry.name.clone()),
+                Sprite {
+                    image: entry.sprite_handle.clone(),
                     ..default()
+                },
+                Transform {
+                    translation: Vec3::new(
+                        -BOUNDS.x / 2.0 + entry.position.x,
+                        BOUNDS.y / 2.0 - entry.position.y,
+                        entry.position.z,
+                    ),
+                    scale: Vec3::new(entry.scale.x, entry.scale.y, 1.0),
+                    rotation: Quat::from_rotation_z(-entry.rotation.to_radians()),
                 },
             ));
 
             // Body
-            my_handle.insert(if sprite.is_static {
+            entity.insert(if entry.is_static {
                 RigidBody::Fixed
             } else {
                 RigidBody::Dynamic
             });
 
             // Collider
-            match collider_assets.get(&sprite.collider_handle) {
+            match collider_assets.get(&entry.collider_handle) {
                 Some(ColliderData::Poly(collider_data)) => {
-                    my_handle.insert((
+                    entity.insert((
                         Collider::convex_polyline(collider_data.clone()).unwrap_or_default(),
                         Ccd::enabled(),
                     ));
                 }
                 Some(ColliderData::NoCollider) => {
-                    warn!("Sprite without collider: {}", sprite.name);
+                    warn!("Sprite without collider: {}", entry.name);
                 }
                 None => {
                     warn!("collider_data isn't loaded yet");
@@ -211,20 +208,20 @@ pub fn move_to_next_state(
             };
 
             // Weight
-            my_handle.insert(if sprite.use_size_for_weight {
-                ColliderMassProperties::Density(sprite.size_to_weight_multiplier / 100.0)
+            entity.insert(if entry.use_size_for_weight {
+                ColliderMassProperties::Density(entry.size_to_weight_multiplier / 100.0)
             } else {
                 ColliderMassProperties::Density(1.0)
             });
 
             // Damping
-            my_handle.insert(Damping {
-                linear_damping: sprite.size_to_weight_multiplier / 50.0,
-                angular_damping: sprite.size_to_weight_multiplier / 50.0,
+            entity.insert(Damping {
+                linear_damping: entry.size_to_weight_multiplier / 50.0,
+                angular_damping: entry.size_to_weight_multiplier / 50.0,
             });
         }
 
-        app_state.overwrite_set(AppState::InGame).unwrap();
+        next_app_state.set(AppState::InGame);
         state.sprites_loading_finished = true;
     }
 }

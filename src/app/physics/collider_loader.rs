@@ -1,9 +1,7 @@
 use crate::app::physics::collider::ColliderData;
 
-use bevy::{
-    asset::{AssetLoader, LoadContext, LoadedAsset},
-    utils::BoxedFuture,
-};
+use bevy::asset::io::Reader;
+use bevy::asset::{AssetLoader, LoadContext};
 
 use std::default::Default;
 
@@ -11,25 +9,28 @@ use std::default::Default;
 pub struct ColliderLoader;
 
 impl AssetLoader for ColliderLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), bevy::asset::Error>> {
-        Box::pin(async move {
-            // let collider_asset = from_slice::<ColliderData>(bytes)?;
+    type Asset = ColliderData;
+    type Settings = ();
+    type Error = anyhow::Error;
 
-            let collider_asset = match ron::de::from_bytes::<ColliderData>(bytes) {
-                Ok(collider) => collider,
-                Err(e) => {
-                    eprintln!("failed deserializing collider from file: {}", e);
-                    ColliderData::NoCollider
-                }
-            };
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
 
-            load_context.set_default_asset(LoadedAsset::new(collider_asset));
-            Ok(())
-        })
+        let collider_asset = match ron::de::from_bytes::<ColliderData>(&bytes) {
+            Ok(collider) => collider,
+            Err(e) => {
+                eprintln!("failed deserializing collider from file: {e}");
+                ColliderData::NoCollider
+            }
+        };
+
+        Ok(collider_asset)
     }
 
     fn extensions(&self) -> &[&str] {

@@ -12,14 +12,14 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(RapierConfiguration {
-            gravity: Vect::ZERO,
-            ..Default::default()
-        })
-        .add_asset::<ColliderData>()
-        .init_asset_loader::<ColliderLoader>()
-        .add_startup_system(setup_physics);
+        app.init_asset::<ColliderData>()
+            .init_asset_loader::<ColliderLoader>()
+            .add_systems(Startup, setup_physics);
     }
 }
 
-const fn setup_physics() {}
+fn setup_physics(mut rapier_config: Query<&mut RapierConfiguration>) {
+    for mut config in &mut rapier_config {
+        config.gravity = Vect::ZERO;
+    }
+}

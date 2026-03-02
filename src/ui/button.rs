@@ -5,12 +5,14 @@ use bevy::prelude::*;
 pub struct UiButton {}
 
 impl UiButton {
-    pub fn normal(&self) -> ButtonBundle {
+    pub fn normal(&self) -> impl Bundle {
         let color = BUTTON_COLOR;
-        ButtonBundle {
-            style: Style {
+        (
+            Button,
+            Node {
                 display: Display::Flex,
-                size: Size::new(Val::Percent(100.0), Val::Px(50.0)),
+                width: Val::Percent(100.0),
+                height: Val::Px(50.0),
                 margin: UiRect::all(Val::Px(0.0)),
                 padding: UiRect::all(Val::Px(8.0)),
                 justify_content: JustifyContent::Center,
@@ -18,17 +20,15 @@ impl UiButton {
                 border: UiRect::all(Val::Px(1.0)),
                 ..Default::default()
             },
-            background_color: BackgroundColor::from(color),
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
-            ..Default::default()
-        }
+            BackgroundColor::from(color),
+        )
     }
 }
 
 pub fn styles_system(mut query: Query<(&Interaction, &mut BackgroundColor), With<Button>>) {
     for (interaction, mut color) in query.iter_mut() {
         match *interaction {
-            Interaction::Clicked => {
+            Interaction::Pressed => {
                 *color = BackgroundColor::from(BUTTON_ACTIVE_COLOR);
             }
             Interaction::Hovered => {

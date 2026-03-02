@@ -13,7 +13,7 @@ pub struct UserInterfacePlugin;
 
 impl Plugin for UserInterfacePlugin {
     fn build(&self, app: &mut App) {
-        app.add_system(button::styles_system);
+        app.add_systems(Update, button::styles_system);
     }
 }
 

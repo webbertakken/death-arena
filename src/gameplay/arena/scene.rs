@@ -2,7 +2,7 @@
 
 use crate::core::serde::parse_float;
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, Default, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     #[serde(deserialize_with = "parse_float")]
@@ -13,7 +13,7 @@ pub struct Position {
     pub z: f32,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, Default, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale {
     #[serde(deserialize_with = "parse_float")]
@@ -24,7 +24,7 @@ pub struct Scale {
     pub z: f32,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpriteDefaults {
     /// Position in 2D space
@@ -76,20 +76,21 @@ pub struct SpriteData {
     pub weight: f32,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Canvas {
     pub(crate) sprites: Vec<SpriteData>,
 }
 
-#[derive(Debug, serde::Deserialize, bevy::reflect::TypeUuid)]
+#[derive(Debug, serde::Deserialize, bevy::asset::Asset, bevy::reflect::Reflect)]
 #[serde(rename_all = "camelCase")]
-#[uuid = "413be529-bfff-f1b3-9db0-4b8b380a2c46"]
 pub struct Scene {
     pub name: String,
     pub version: String,
     pub description: String,
     pub assets_relative_path: String,
+    #[reflect(ignore)]
     pub canvas: Canvas,
+    #[reflect(ignore)]
     pub default_properties: SpriteDefaults,
 }

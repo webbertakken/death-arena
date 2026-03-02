@@ -14,32 +14,33 @@ impl Default for Layout {
 }
 
 impl Layout {
-    pub fn spacer(&self, size: f32) -> NodeBundle {
-        NodeBundle {
-            style: Style {
-                size: Size::new(Val::Px(size), Val::Px(size)),
+    pub fn spacer(&self, size: f32) -> impl Bundle {
+        (
+            Node {
+                width: Val::Px(size),
+                height: Val::Px(size),
                 flex_grow: 0.0,
                 ..Default::default()
             },
-            background_color: Color::NONE.into(),
-            ..Default::default()
-        }
+            BackgroundColor::from(Color::NONE),
+        )
     }
 
-    pub fn flex(&self, color: Color) -> NodeBundle {
-        NodeBundle {
-            style: Style {
+    pub fn flex(&self, color: Color) -> impl Bundle {
+        (
+            Node {
                 flex_direction: self.default_direction,
                 margin: UiRect::all(Val::Auto),
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(40.0)),
-                min_size: Size::new(Val::Px(400.0), Val::Px(400.0)),
-                max_size: Size::new(Val::Px(400.0), Val::Px(800.0)),
+                min_width: Val::Px(400.0),
+                min_height: Val::Px(400.0),
+                max_width: Val::Px(400.0),
+                max_height: Val::Px(800.0),
                 ..default()
             },
-            focus_policy: FocusPolicy::Pass,
-            background_color: BackgroundColor::from(color),
-            ..default()
-        }
+            FocusPolicy::Pass,
+            BackgroundColor::from(color),
+        )
     }
 }

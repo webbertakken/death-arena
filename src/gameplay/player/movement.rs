@@ -2,7 +2,6 @@ use crate::gameplay::main::BOUNDS;
 use crate::gameplay::main::TIME_STEP;
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
-use crate::{Input, KeyCode, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 
 type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
@@ -10,7 +9,7 @@ type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 
 /// Demonstrates applying rotation and movement based on keyboard input.
 pub fn car_movement_system(
-    keyboard_input: Res<Input<KeyCode>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
     mut query: Query<(&Player, &mut Transform)>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
@@ -34,24 +33,24 @@ pub fn car_movement_system(
 
     let mut steer_reverse = false;
 
-    if keyboard_input.any_pressed([KeyCode::Up, KeyCode::W]) {
+    if keyboard_input.any_pressed([KeyCode::ArrowUp, KeyCode::KeyW]) {
         movement_factor += forward_max_speed;
-        if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
+        if keyboard_input.any_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) {
             rotation_factor += forward_turning_speed;
         }
 
-        if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
+        if keyboard_input.any_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) {
             rotation_factor -= forward_turning_speed;
         }
-    } else if keyboard_input.any_pressed([KeyCode::Down, KeyCode::S]) {
+    } else if keyboard_input.any_pressed([KeyCode::ArrowDown, KeyCode::KeyS]) {
         movement_factor -= backward_max_speed;
         steer_reverse = true;
 
-        if keyboard_input.any_pressed([KeyCode::Left, KeyCode::A]) {
+        if keyboard_input.any_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) {
             rotation_factor -= backward_turning_speed;
         }
 
-        if keyboard_input.any_pressed([KeyCode::Right, KeyCode::D]) {
+        if keyboard_input.any_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) {
             rotation_factor += backward_turning_speed;
         }
     }

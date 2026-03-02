@@ -23,18 +23,19 @@ pub struct SpawnTimer(Timer);
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
-            .add_startup_system(camera::setup)
-            .add_startup_system(setup)
-            .add_startup_system(car::setup)
-            .add_startup_system(sfx::setup)
-            .add_system_set(
-                SystemSet::new()
-                    .with_system(movement::car_movement_system)
-                    .with_system(camera::camera_follows_player_system)
-                    .with_system(sfx::engine_revving_system),
+            .add_systems(
+                Startup,
+                (camera::setup, setup, car::setup, sfx::setup),
             )
-            .add_system(bevy::window::close_on_esc);
+            .add_systems(
+                Update,
+                (
+                    movement::car_movement_system,
+                    camera::camera_follows_player_system,
+                    sfx::engine_revving_system,
+                ),
+            );
     }
 }
 
-pub const fn setup(commands: Commands, asset_server: Res<AssetServer>) {}
+pub fn setup(commands: Commands, asset_server: Res<AssetServer>) {}

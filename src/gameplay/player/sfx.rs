@@ -19,7 +19,7 @@ pub fn setup(
 }
 
 pub fn engine_revving_system(
-    keyboard_input: Res<Input<KeyCode>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
     player_query: Query<&Transform, With<Player>>,
     handle: Res<SfxEngineRevving>,
     mut audio_instances: ResMut<Assets<AudioInstance>>,
@@ -27,23 +27,23 @@ pub fn engine_revving_system(
     let engine_volume = 0.2;
     if let Some(instance) = audio_instances.get_mut(&handle.0) {
         let mut rev_speed = 0.0;
-        if keyboard_input.any_pressed([KeyCode::W, KeyCode::Up]) {
+        if keyboard_input.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) {
             rev_speed = 1.0;
             instance.set_volume(
                 rev_speed * engine_volume,
                 AudioTween::linear(Duration::from_millis(1)),
             );
-        } else if keyboard_input.any_pressed([KeyCode::S, KeyCode::Down]) {
+        } else if keyboard_input.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) {
             rev_speed = 0.75;
             instance.set_volume(
                 rev_speed * engine_volume,
                 AudioTween::linear(Duration::from_millis(1)),
             );
         } else if keyboard_input.any_pressed([
-            KeyCode::A,
-            KeyCode::Left,
-            KeyCode::D,
-            KeyCode::Right,
+            KeyCode::KeyA,
+            KeyCode::ArrowLeft,
+            KeyCode::KeyD,
+            KeyCode::ArrowRight,
         ]) {
             rev_speed = 0.6;
             instance.set_volume(
