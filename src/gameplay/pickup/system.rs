@@ -1,5 +1,5 @@
 use crate::gameplay::pickup::collect::nearest_collectible;
-use crate::gameplay::pickup::{Pickup, PickupKind, Score, PICKUP_RADIUS};
+use crate::gameplay::pickup::{Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -12,6 +12,7 @@ use bevy::prelude::*;
 /// instantly while the behaviour stays predictable and testable.
 pub fn pickup_collection_system(
     mut commands: Commands,
+    mut respawns: ResMut<PickupRespawns>,
     mut score: ResMut<Score>,
     player_query: Query<&Transform, With<Player>>,
     virtual_player_query: Query<&Transform, (With<VirtualPlayer>, Without<Player>)>,
@@ -28,8 +29,9 @@ pub fn pickup_collection_system(
         let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
-            let (entity, kind, _) = available.swap_remove(index);
+            let (entity, kind, position) = available.swap_remove(index);
             score.collect(kind);
+            respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
         }
     }
@@ -39,15 +41,58 @@ pub fn pickup_collection_system(
         let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
-            let (entity, _, _) = available.swap_remove(index);
+            let (entity, kind, position) = available.swap_remove(index);
+            respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
         }
+    }
+}
+
+fn advance_respawns(respawns: &mut PickupRespawns) -> Vec<(PickupKind, Vec2)> {
+    let mut ready = Vec::new();
+    let mut waiting = Vec::with_capacity(respawns.pending.len());
+
+    for mut pending in respawns.pending.drain(..) {
+        pending.frames_remaining = pending.frames_remaining.saturating_sub(1);
+        if pending.frames_remaining == 0 {
+            ready.push((pending.kind, pending.position));
+        } else {
+            waiting.push(pending);
+        }
+    }
+
+    respawns.pending = waiting;
+    ready
+}
+
+/// Returns collected pickups to the arena after their cooldown expires.
+pub fn pickup_respawn_system(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut respawns: ResMut<PickupRespawns>,
+) {
+    let texture = asset_server.load("textures/wrench.png");
+    for (kind, position) in advance_respawns(&mut respawns) {
+        commands.spawn((
+            Name::new("Pickup"),
+            Pickup { kind },
+            SpriteBundle {
+                texture: texture.clone(),
+                transform: Transform {
+                    translation: position.extend(super::spawn::PICKUP_Z),
+                    scale: Vec3::splat(0.15),
+                    ..default()
+                },
+                ..default()
+            },
+        ));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::pickup::PICKUP_RESPAWN_FRAMES;
 
     fn test_player() -> Player {
         Player {
@@ -63,6 +108,7 @@ mod tests {
     fn app_with_player_at(position: Vec3) -> App {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         app.world
             .spawn((test_player(), Transform::from_translation(position)));
@@ -129,6 +175,7 @@ mod tests {
     fn does_nothing_without_a_player() {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::ZERO);
 
@@ -142,6 +189,7 @@ mod tests {
     fn virtual_player_steals_pickup_without_banking_player_score() {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         app.world.spawn((
             VirtualPlayer {
@@ -185,6 +233,47 @@ mod tests {
         assert_eq!(
             app.world.resource::<Score>().cash,
             PickupKind::Cash.bounty()
+        );
+    }
+
+    #[test]
+    fn collected_pickup_is_queued_for_respawn() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 20.0, 0.0));
+
+        app.update();
+
+        let respawns = app.world.resource::<PickupRespawns>();
+        assert_eq!(respawns.pending.len(), 1);
+        assert_eq!(respawns.pending[0].kind, PickupKind::Nitro);
+        assert_eq!(respawns.pending[0].position, Vec2::new(10.0, 20.0));
+        assert_eq!(respawns.pending[0].frames_remaining, PICKUP_RESPAWN_FRAMES);
+    }
+
+    #[test]
+    fn respawn_queue_releases_pickup_after_cooldown() {
+        let mut respawns = PickupRespawns::default();
+        respawns.queue(PickupKind::Repair, Vec2::new(-12.0, 34.0));
+        respawns.pending[0].frames_remaining = 1;
+
+        let ready = advance_respawns(&mut respawns);
+
+        assert_eq!(ready, vec![(PickupKind::Repair, Vec2::new(-12.0, 34.0))]);
+        assert!(respawns.pending.is_empty());
+    }
+
+    #[test]
+    fn respawn_queue_keeps_pickup_until_cooldown_expires() {
+        let mut respawns = PickupRespawns::default();
+        respawns.queue(PickupKind::Cash, Vec2::new(1.0, 2.0));
+
+        let ready = advance_respawns(&mut respawns);
+
+        assert!(ready.is_empty());
+        assert_eq!(respawns.pending.len(), 1);
+        assert_eq!(
+            respawns.pending[0].frames_remaining,
+            PICKUP_RESPAWN_FRAMES - 1
         );
     }
 }

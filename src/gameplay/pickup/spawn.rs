@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 /// Z layer pickups render on: below the cars (player is at `z = 5`, opponents
 /// at `z = 4`) so a car visibly drives over the collectible.
-const PICKUP_Z: f32 = 2.0;
+pub(super) const PICKUP_Z: f32 = 2.0;
 
 /// The fixed scatter of collectibles across the arena floor.
 ///

@@ -9,11 +9,37 @@ pub use collect::PickupKind;
 
 /// World-space distance at which a car collects a pickup it drives over.
 pub const PICKUP_RADIUS: f32 = 120.0;
+/// Number of fixed update frames before a collected pickup returns.
+pub const PICKUP_RESPAWN_FRAMES: u32 = 600;
 
 /// A trackside collectible the player drives over to bank a bounty.
 #[derive(Component, Debug)]
 pub struct Pickup {
     pub kind: PickupKind,
+}
+
+/// A pickup waiting to return to the arena after collection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PendingPickupRespawn {
+    pub kind: PickupKind,
+    pub position: Vec2,
+    pub frames_remaining: u32,
+}
+
+/// Queue of pickups that will respawn after a short cooldown.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct PickupRespawns {
+    pub pending: Vec<PendingPickupRespawn>,
+}
+
+impl PickupRespawns {
+    pub fn queue(&mut self, kind: PickupKind, position: Vec2) {
+        self.pending.push(PendingPickupRespawn {
+            kind,
+            position,
+            frames_remaining: PICKUP_RESPAWN_FRAMES,
+        });
+    }
 }
 
 /// Running tally of what the player has collected this session.
@@ -41,8 +67,10 @@ pub struct PickupPlugin;
 impl Plugin for PickupPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Score>()
+            .init_resource::<PickupRespawns>()
             .add_system_set(SystemSet::on_enter(AppState::InGame).with_system(spawn::setup));
-        app.add_system(system::pickup_collection_system);
+        app.add_system(system::pickup_collection_system)
+            .add_system(system::pickup_respawn_system.after(system::pickup_collection_system));
     }
 }
 
