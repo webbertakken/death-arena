@@ -37,9 +37,9 @@ impl AssetLoader for SceneLoader {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Sprite {
-    /// Handle for the sprite
-    pub sprite_handle: Handle<Image>,
+    pub image_handle: Handle<Image>,
     /// Handle for the sprite's collider definition
     pub collider_handle: Handle<ColliderData>,
     /// Unique identifier for this sprite instance
@@ -54,9 +54,9 @@ pub struct Sprite {
     pub opacity: f32,
     /// Name
     pub name: String,
-    // Whether it can move as an object or not.
+    /// Whether it can move as an object or not.
     pub is_static: bool,
-    // Weight
+    /// Weight
     pub use_size_for_weight: bool,
     pub size_to_weight_multiplier: f32,
     pub weight: f32,
@@ -65,7 +65,7 @@ pub struct Sprite {
 impl From<&SpriteData> for Sprite {
     fn from(sprite_data: &SpriteData) -> Self {
         Self {
-            sprite_handle: Handle::default(),
+            image_handle: Handle::default(),
             collider_handle: Handle::default(),
             id: sprite_data.id.clone(),
             position: sprite_data.position.clone(),
@@ -84,7 +84,6 @@ impl From<&SpriteData> for Sprite {
 #[derive(Default, Resource)]
 pub struct SceneState {
     pub handle: Handle<Scene>,
-    pub printed: bool,
     pub sprites_loading_started: bool,
     pub sprites_loading_finished: bool,
     pub handles: Vec<Sprite>,
@@ -107,7 +106,7 @@ pub fn load_sprites_from_scene(
     }
 
     // Scene
-    let scene = scene.unwrap();
+    let Some(scene) = scene else { return };
     info!("Loading scene: {:?}", &scene.name);
 
     // Sprites
@@ -118,12 +117,11 @@ pub fn load_sprites_from_scene(
         .map(|sprite| -> String {
             let file_path = format!("textures/{}", &sprite.relative_path);
 
-            // Remove the file extension (png, jpg, etc.)
-            let file_path_without_ext = file_path.split('.').next().unwrap().to_string();
-            let collider_file_path = format!("{}.collider", file_path_without_ext);
+            let file_path_without_ext = file_path.split('.').next().unwrap_or("");
+            let collider_file_path = format!("{file_path_without_ext}.collider");
 
             let sprite = Sprite {
-                sprite_handle: asset_server.load(&file_path),
+                image_handle: asset_server.load(&file_path),
                 collider_handle: asset_server.load(&collider_file_path),
                 ..sprite.into()
             };
@@ -152,12 +150,12 @@ pub fn move_to_next_state(
         return;
     }
 
-    // todo - filter only for arena sprites
+    // Filter only for arena sprites
     let current = images.len();
     let total = state.paths.len();
     info!("Loaded {} of {}", current, total);
 
-    // Todo - actually check it
+    // Check if all images are loaded
     if total > 0 && current >= total {
         info!("All images loaded");
 
@@ -169,7 +167,7 @@ pub fn move_to_next_state(
             my_handle.insert((
                 Name::new(sprite.name.clone()),
                 SpriteBundle {
-                    texture: sprite.sprite_handle.clone(),
+                    texture: sprite.image_handle.clone(),
                     sprite: bevy::sprite::Sprite {
                         anchor: bevy::sprite::Anchor::Center,
                         ..default()
@@ -194,13 +192,18 @@ pub fn move_to_next_state(
                 RigidBody::Dynamic
             });
 
-            // Collider
             match collider_assets.get(&sprite.collider_handle) {
                 Some(ColliderData::Poly(collider_data)) => {
-                    my_handle.insert((
-                        Collider::convex_polyline(collider_data.clone()).unwrap_or_default(),
-                        Ccd::enabled(),
-                    ));
+                    if let Some(collider) = Collider::convex_polyline(collider_data.clone()) {
+                        my_handle.insert((collider, Ccd::enabled()));
+                    } else {
+                        error!(
+                            "Failed to create collider for sprite: '{}' (path: '{}'). Polyline data: {:?}",
+                            sprite.name,
+                            sprite.name,
+                            collider_data
+                        );
+                    }
                 }
                 Some(ColliderData::NoCollider) => {
                     warn!("Sprite without collider: {}", sprite.name);
@@ -208,7 +211,7 @@ pub fn move_to_next_state(
                 None => {
                     warn!("collider_data isn't loaded yet");
                 }
-            };
+            }
 
             // Weight
             my_handle.insert(if sprite.use_size_for_weight {
@@ -224,7 +227,7 @@ pub fn move_to_next_state(
             });
         }
 
-        app_state.overwrite_set(AppState::InGame).unwrap();
+        app_state.overwrite_set(AppState::InGame).ok();
         state.sprites_loading_finished = true;
     }
 }

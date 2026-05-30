@@ -27,6 +27,10 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             Player {
                 movement_speed: 500.0,                  // metres per second
                 rotation_speed: f32::to_radians(360.0), // degrees per second
+                engine_max_speed_multiplier: 0.5,
+                forward_max_speed_base: 0.825,
+                backward_max_speed_base: 0.25,
+                wheels_turning_multiplier: 0.91,
             },
             SpriteBundle {
                 texture: player_handle,

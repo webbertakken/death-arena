@@ -38,12 +38,18 @@ pub fn on_update_main_menu(
             match action {
                 ButtonAction::Career => {
                     info!("Career button clicked");
-                    menu_state.overwrite_set(MenuState::Garage).unwrap();
+                    if let Err(e) = menu_state.overwrite_set(MenuState::Garage) {
+                        error!("Failed to set menu state to Garage: {:?}", e);
+                    }
                 }
                 ButtonAction::Multiplayer => {
                     info!("Multiplayer button clicked");
-                    menu_state.overwrite_set(MenuState::Hidden).unwrap();
-                    app_state.overwrite_set(AppState::Loading).unwrap();
+                    if let Err(e) = menu_state.overwrite_set(MenuState::Hidden) {
+                        error!("Failed to set menu state to Hidden: {:?}", e);
+                    }
+                    if let Err(e) = app_state.overwrite_set(AppState::Loading) {
+                        error!("Failed to set app state to Loading: {:?}", e);
+                    }
                 }
             }
         }

@@ -17,12 +17,12 @@ pub struct AppPlugins;
 impl PluginGroup for AppPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            .add(AudioPlugin::default())
-            .add(LightingPlugin::default())
-            .add(GenericSystemsPlugin::default())
-            .add(UserInterfacePlugin::default())
+            .add(AudioPlugin)
+            .add(LightingPlugin)
+            .add(GenericSystemsPlugin)
+            .add(UserInterfacePlugin)
             .add(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
             .add(RapierDebugRenderPlugin::default())
-            .add(PhysicsPlugin::default())
+            .add(PhysicsPlugin)
     }
 }

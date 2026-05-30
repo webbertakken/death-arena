@@ -1,4 +1,4 @@
-use crate::{App, Plugin, Res};
+use crate::{App, Plugin};
 use bevy::prelude::*;
 
 mod camera;
@@ -6,25 +6,31 @@ mod car;
 mod movement;
 mod sfx;
 
+#[cfg(test)]
+mod movement_tests;
+
 #[derive(Component)]
 pub struct Player {
     /// linear speed in meters per second
-    movement_speed: f32,
+    pub movement_speed: f32,
     /// rotation speed in radians per second
-    rotation_speed: f32,
+    pub rotation_speed: f32,
+    /// engine max speed multiplier (0.5 to 1.0)
+    pub engine_max_speed_multiplier: f32,
+    /// forward max speed base
+    pub forward_max_speed_base: f32,
+    /// backward max speed base
+    pub backward_max_speed_base: f32,
+    /// wheels turning multiplier
+    pub wheels_turning_multiplier: f32,
 }
 
 #[derive(Default)]
 pub struct PlayerPlugin;
 
-#[derive(Resource)]
-pub struct SpawnTimer(Timer);
-
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
-            .add_startup_system(camera::setup)
-            .add_startup_system(setup)
+        app.add_startup_system(camera::setup)
             .add_startup_system(car::setup)
             .add_startup_system(sfx::setup)
             .add_system_set(
@@ -36,5 +42,3 @@ impl Plugin for PlayerPlugin {
             .add_system(bevy::window::close_on_esc);
     }
 }
-
-pub const fn setup(commands: Commands, asset_server: Res<AssetServer>) {}

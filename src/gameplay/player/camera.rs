@@ -4,12 +4,6 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct MainCamera;
 
-// #[derive(Component)]
-// struct LeftCamera;
-//
-// #[derive(Component)]
-// struct RightCamera;
-
 pub fn setup(mut commands: Commands) {
     // 2D orthographic camera
     commands

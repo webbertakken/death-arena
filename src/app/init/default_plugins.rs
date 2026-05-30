@@ -8,7 +8,7 @@ pub trait Configure {
 
 impl Configure for DefaultPlugins {
     fn configure() -> PluginGroupBuilder {
-        DefaultPlugins
+        Self
             .set(WindowPlugin {
                 window: WindowDescriptor {
                     width: 1400.0,

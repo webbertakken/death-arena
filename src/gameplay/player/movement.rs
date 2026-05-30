@@ -1,8 +1,6 @@
-use crate::gameplay::main::BOUNDS;
-use crate::gameplay::main::TIME_STEP;
+use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
-use crate::{Input, KeyCode, Query, Res, Transform, Vec3};
 use bevy::prelude::*;
 
 type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
@@ -19,15 +17,13 @@ pub fn car_movement_system(
     let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
     let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();
 
-    // Acceleration - 0.5 (slowest car) to 1.0 (fastest car)
-    let engine_max_speed_multiplier = 0.5;
-    let forward_max_speed = 0.825 * engine_max_speed_multiplier;
-    let backward_max_speed = 0.25 * engine_max_speed_multiplier;
+    // Acceleration
+    let forward_max_speed = player.forward_max_speed_base * player.engine_max_speed_multiplier;
+    let backward_max_speed = player.backward_max_speed_base * player.engine_max_speed_multiplier;
 
     // Turning
-    let wheels_turning_multiplier = 0.91;
-    let forward_turning_speed = forward_max_speed * wheels_turning_multiplier;
-    let backward_turning_speed = backward_max_speed * wheels_turning_multiplier;
+    let forward_turning_speed = forward_max_speed * player.wheels_turning_multiplier;
+    let backward_turning_speed = backward_max_speed * player.wheels_turning_multiplier;
 
     let mut rotation_factor = 0.0;
     let mut movement_factor = 0.0;
@@ -62,12 +58,12 @@ pub fn car_movement_system(
     // Wheels just keep on turning
     let steering_multiplier = if steer_reverse { -1.0 } else { 1.0 };
     let front_wheel_rotation = Quat::from_rotation_z(f32::to_radians(
-        rotation_factor * 30.0 * steering_multiplier,
+        movement_factor * 30.0 * steering_multiplier,
     ));
     front_left_wheel_transform.rotation = front_wheel_rotation;
     front_right_wheel_transform.rotation = front_wheel_rotation;
 
-    // get the car's forward vector by applying the current rotation to the cars initial facing vector
+    // get the car's forward vector by applying the current rotation to the car's initial facing vector
     let movement_direction = transform.rotation * Vec3::Y;
     // get the distance the car will move based on direction, the car's movement speed and delta time
     let movement_distance = movement_factor * player.movement_speed * TIME_STEP;
@@ -77,7 +73,8 @@ pub fn car_movement_system(
     transform.translation += translation_delta;
 
     // bound the car within the invisible level bounds
-    let extents = Vec3::from((BOUNDS / 2.0, 0.0));
-    transform.translation = transform.translation.min(extents).max(-extents);
+    let extents = Vec3::new(BOUNDS.x / 2.0, BOUNDS.y / 2.0, 0.0);
+    transform.translation.x = transform.translation.x.clamp(-extents.x, extents.x);
+    transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
     transform.translation.z = 5.0;
 }

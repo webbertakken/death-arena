@@ -13,7 +13,7 @@ pub struct GameplayPlugins;
 impl PluginGroup for GameplayPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            .add(PlayerPlugin::default())
-            .add(ArenaPlugin::default())
+            .add(PlayerPlugin)
+            .add(ArenaPlugin)
     }
 }

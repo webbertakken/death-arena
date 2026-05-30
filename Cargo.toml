@@ -9,14 +9,14 @@ exclude = [".git/", ".idea/", "dist/", "build/", "assets/", "credits/"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 rand = "0.8"
-crossbeam = "0.8"
-thiserror = "1.0"
-anyhow = "1.0"
-log = "0.4"
-env_logger = "0.9"
-dotenvy = "0.15.6"
-serde = "1.0.147"
-bevy = { version = "0.9", default-features = false, features = [
+crossbeam = "0.8.4"
+thiserror = "1.0.69"
+anyhow = "1.0.102"
+log = "0.4.29"
+env_logger = "0.11.10"
+dotenvy = "0.15.7"
+serde = "1.0.228"
+bevy = { version = "0.9.1", default-features = false, features = [
   "bevy_asset",
   "bevy_winit",
   "render",
@@ -25,15 +25,15 @@ bevy = { version = "0.9", default-features = false, features = [
   "x11"
 ] }
 ron = { version = "0.7.1" }
-serde_json = { version = "1.0.87" }
-bevy_ecs = { version = "0.9" }
+serde_json = { version = "1.0.149" }
+bevy_ecs = { version = "0.9.1" }
 bevy_kira_audio = { version = "0.13", features = ["ogg", "mp3"] }
 bevy_asset_loader = "0.13"
 bevy-inspector-egui = "0.13"
 bevy_common_assets = { version = "0.4.0", features = ["json"] }
 winit = { version = "0.27.4", default-features = false, features = ["x11"] }
-image = { version = "0.24", default-features = false }
-iyes_loopless = { version = "0.8.0", features = ["bevy-inspector-egui"] }
+image = { version = "0.24.9", default-features = false }
+iyes_loopless = { version = "0.9.1", features = ["bevy-inspector-egui"] }
 # tempfix
 bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", branch = "bevy-0.9", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0",
 
@@ -42,10 +42,10 @@ bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", branch = "be
 rusty-hook = "0.11"
 
 [build-dependencies]
-embed-resource = "1.7.3"
+embed-resource = "1.8.0"
 
 [features]
-dev = ["bevy/dynamic"]
+dev = []
 
 [workspace]
 resolver = "2" # Important! wgpu/Bevy needs this!

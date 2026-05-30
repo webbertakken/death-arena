@@ -22,7 +22,7 @@ impl AssetLoader for ColliderLoader {
             let collider_asset = match ron::de::from_bytes::<ColliderData>(bytes) {
                 Ok(collider) => collider,
                 Err(e) => {
-                    eprintln!("failed deserializing collider from file: {}", e);
+                    log::error!("failed deserializing collider from file: {e}");
                     ColliderData::NoCollider
                 }
             };

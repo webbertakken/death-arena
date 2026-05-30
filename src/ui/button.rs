@@ -6,7 +6,6 @@ pub struct UiButton {}
 
 impl UiButton {
     pub fn normal(&self) -> ButtonBundle {
-        let color = BUTTON_COLOR;
         ButtonBundle {
             style: Style {
                 display: Display::Flex,
@@ -16,17 +15,17 @@ impl UiButton {
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border: UiRect::all(Val::Px(1.0)),
-                ..Default::default()
+                ..default()
             },
-            background_color: BackgroundColor::from(color),
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
-            ..Default::default()
+            background_color: BackgroundColor::from(BUTTON_COLOR),
+            transform: Transform::from_translation(Vec3::ZERO),
+            ..default()
         }
     }
 }
 
 pub fn styles_system(mut query: Query<(&Interaction, &mut BackgroundColor), With<Button>>) {
-    for (interaction, mut color) in query.iter_mut() {
+    for (interaction, mut color) in &mut query {
         match *interaction {
             Interaction::Clicked => {
                 *color = BackgroundColor::from(BUTTON_ACTIVE_COLOR);

@@ -11,15 +11,18 @@ struct ArenaData {
 #[derive(Component)]
 pub struct Arena;
 
-pub fn setup(commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
     let arenas = [ArenaData {
-        path: "/assets/textures/church-ctf.2dtf".to_string(),
+        path: "textures/church-ctf.2dtf".to_string(),
     }];
 
     // Pick a random arena from the list
     let arena_id = random::<usize>() % arenas.len();
     let arena = &arenas[arena_id];
 
+    // Spawn the Arena
+    commands.spawn((Arena, Name::new("Arena")));
+
     // Load Scene for that Arena
-    let scene: Handle<Scene> = asset_server.load(&arena.path);
+    let _scene: Handle<Scene> = asset_server.load(&arena.path);
 }

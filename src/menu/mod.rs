@@ -36,10 +36,10 @@ pub struct MenuPlugins;
 impl PluginGroup for MenuPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            .add(MainMenuPlugin::default())
-            .add(GarageMenuPlugin::default())
-            .add(SettingsMenuPlugin::default())
-            .add(DealerMenuPlugin::default())
-            .add(GameSelectionPlugin::default())
+            .add(MainMenuPlugin)
+            .add(GarageMenuPlugin)
+            .add(SettingsMenuPlugin)
+            .add(DealerMenuPlugin)
+            .add(GameSelectionPlugin)
     }
 }
