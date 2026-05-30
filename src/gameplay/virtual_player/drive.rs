@@ -1,5 +1,6 @@
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::virtual_player::ai::{compute_steering, next_waypoint};
+use crate::gameplay::pickup::Pickup;
+use crate::gameplay::virtual_player::ai::{choose_driving_target, compute_steering, next_waypoint};
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
@@ -7,23 +8,41 @@ use bevy::prelude::*;
 /// Distance (world units) at which a virtual player considers a waypoint
 /// reached and advances to the next one.
 const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
+const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
-pub fn virtual_player_drive_system(mut query: Query<(&mut VirtualPlayer, &mut Transform)>) {
-    for (mut ai, mut transform) in &mut query {
-        if ai.waypoints.is_empty() {
-            continue;
-        }
+pub fn virtual_player_drive_system(
+    mut query: Query<(&mut VirtualPlayer, &mut Transform)>,
+    pickup_query: Query<&Transform, (With<Pickup>, Without<VirtualPlayer>)>,
+) {
+    let pickups: Vec<Vec2> = pickup_query
+        .iter()
+        .map(|transform| transform.translation.xy())
+        .collect();
 
+    for (mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let target = ai.waypoints[ai.current_waypoint];
+        let Some(target) = choose_driving_target(
+            position,
+            &ai.waypoints,
+            ai.current_waypoint,
+            &pickups,
+            PICKUP_PURSUIT_RADIUS,
+        ) else {
+            continue;
+        };
 
-        let intent = compute_steering(position, forward, target, WAYPOINT_ARRIVE_RADIUS);
+        let intent = compute_steering(position, forward, target.position(), WAYPOINT_ARRIVE_RADIUS);
 
         if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
-            ai.current_waypoint = next_waypoint(ai.current_waypoint, ai.waypoints.len());
+            if matches!(
+                target,
+                crate::gameplay::virtual_player::ai::DrivingTarget::PatrolWaypoint(_)
+            ) {
+                ai.current_waypoint = next_waypoint(ai.current_waypoint, ai.waypoints.len());
+            }
             continue;
         }
 
@@ -129,5 +148,26 @@ mod tests {
 
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert_eq!(transform.translation, Vec3::new(0.0, 0.0, 4.0));
+    }
+
+    #[test]
+    fn pursues_nearby_pickup_before_patrol_waypoint() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to turn towards pickup, x={}",
+            transform.translation.x
+        );
     }
 }

@@ -28,6 +28,57 @@ impl SteeringIntent {
     };
 }
 
+/// The kind of world target a virtual player is currently chasing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DrivingTarget {
+    PatrolWaypoint(Vec2),
+    Pickup(Vec2),
+}
+
+impl DrivingTarget {
+    #[must_use]
+    pub const fn position(self) -> Vec2 {
+        match self {
+            Self::PatrolWaypoint(position) | Self::Pickup(position) => position,
+        }
+    }
+}
+
+/// Pick the next driving target for a virtual player.
+///
+/// Nearby pickups take priority over the patrol route so opponents can steal
+/// trackside rewards instead of blindly lapping past them.
+#[must_use]
+pub fn choose_driving_target(
+    position: Vec2,
+    waypoints: &[Vec2],
+    current_waypoint: usize,
+    pickups: &[Vec2],
+    pickup_pursuit_radius: f32,
+) -> Option<DrivingTarget> {
+    let radius_sq = pickup_pursuit_radius * pickup_pursuit_radius;
+    let pickup = pickups
+        .iter()
+        .copied()
+        .filter_map(|pickup| {
+            let distance_sq = position.distance_squared(pickup);
+            (distance_sq <= radius_sq).then_some((pickup, distance_sq))
+        })
+        .min_by(|(_, a_dist), (_, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(pickup, _)| DrivingTarget::Pickup(pickup));
+
+    pickup.or_else(|| {
+        waypoints
+            .get(current_waypoint)
+            .copied()
+            .map(DrivingTarget::PatrolWaypoint)
+    })
+}
+
 /// Decide how a virtual player should drive to reach `target`.
 ///
 /// `forward` is the car's current facing direction (need not be normalised).
@@ -167,5 +218,32 @@ mod tests {
         assert_eq!(next_waypoint(0, 0), 0);
         assert_eq!(next_waypoint(5, 0), 0);
         assert_eq!(next_waypoint(0, 1), 0);
+    }
+
+    #[test]
+    fn targets_nearby_pickup_before_patrol_waypoint() {
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[Vec2::new(500.0, 0.0)],
+            0,
+            &[Vec2::new(25.0, 0.0)],
+            100.0,
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
+    }
+
+    #[test]
+    fn ignores_pickups_outside_pursuit_radius() {
+        let waypoint = Vec2::new(500.0, 0.0);
+        let target =
+            choose_driving_target(Vec2::ZERO, &[waypoint], 0, &[Vec2::new(250.0, 0.0)], 100.0);
+
+        assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
+    }
+
+    #[test]
+    fn returns_no_target_without_waypoints_or_pickups() {
+        assert_eq!(choose_driving_target(Vec2::ZERO, &[], 0, &[], 100.0), None);
     }
 }
