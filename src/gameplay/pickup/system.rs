@@ -1,5 +1,7 @@
 use crate::gameplay::pickup::collect::nearest_collectible;
-use crate::gameplay::pickup::{Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS};
+use crate::gameplay::pickup::{
+    OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
+};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -14,6 +16,7 @@ pub fn pickup_collection_system(
     mut commands: Commands,
     mut respawns: ResMut<PickupRespawns>,
     mut score: ResMut<Score>,
+    mut opponent_score: ResMut<OpponentScore>,
     player_query: Query<&Transform, With<Player>>,
     virtual_player_query: Query<&Transform, (With<VirtualPlayer>, Without<Player>)>,
     pickup_query: Query<(Entity, &Transform, &Pickup)>,
@@ -42,6 +45,7 @@ pub fn pickup_collection_system(
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
             let (entity, kind, position) = available.swap_remove(index);
+            opponent_score.collect(kind);
             respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
         }
@@ -108,6 +112,7 @@ mod tests {
     fn app_with_player_at(position: Vec3) -> App {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         app.world
@@ -175,6 +180,7 @@ mod tests {
     fn does_nothing_without_a_player() {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::ZERO);
@@ -189,6 +195,7 @@ mod tests {
     fn virtual_player_steals_pickup_without_banking_player_score() {
         let mut app = App::new();
         app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.add_system(pickup_collection_system);
         app.world.spawn((
@@ -210,6 +217,11 @@ mod tests {
         );
         assert_eq!(app.world.resource::<Score>().collected, 0);
         assert_eq!(app.world.resource::<Score>().cash, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().collected, 1);
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            PickupKind::Cash.bounty()
+        );
     }
 
     #[test]
@@ -234,6 +246,8 @@ mod tests {
             app.world.resource::<Score>().cash,
             PickupKind::Cash.bounty()
         );
+        assert_eq!(app.world.resource::<OpponentScore>().collected, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
     }
 
     #[test]
