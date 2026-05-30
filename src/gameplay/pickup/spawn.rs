@@ -1,0 +1,65 @@
+use crate::gameplay::main::BOUNDS;
+use crate::gameplay::pickup::{Pickup, PickupKind};
+use bevy::prelude::*;
+
+/// Z layer pickups render on: below the cars (player is at `z = 5`, opponents
+/// at `z = 4`) so a car visibly drives over the collectible.
+const PICKUP_Z: f32 = 2.0;
+
+/// The fixed scatter of collectibles across the arena floor.
+///
+/// Positions are kept well inside the arena bounds so a pickup never spawns
+/// half-buried in the invisible wall.
+#[must_use]
+pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
+    let x = BOUNDS.x / 2.0 - 300.0;
+    let y = BOUNDS.y / 2.0 - 300.0;
+    vec![
+        (PickupKind::Cash, Vec2::new(0.0, 0.0)),
+        (PickupKind::Cash, Vec2::new(x, y)),
+        (PickupKind::Cash, Vec2::new(-x, -y)),
+        (PickupKind::Repair, Vec2::new(-x, y)),
+        (PickupKind::Nitro, Vec2::new(x, -y)),
+    ]
+}
+
+/// Scatters the [`pickup_layout`] across the arena when gameplay starts.
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let texture = asset_server.load("textures/wrench.png");
+
+    for (kind, position) in pickup_layout() {
+        commands.spawn((
+            Name::new("Pickup"),
+            Pickup { kind },
+            SpriteBundle {
+                texture: texture.clone(),
+                transform: Transform {
+                    translation: position.extend(PICKUP_Z),
+                    scale: Vec3::splat(0.15),
+                    ..default()
+                },
+                ..default()
+            },
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_keeps_every_pickup_inside_bounds() {
+        let max_x = BOUNDS.x / 2.0;
+        let max_y = BOUNDS.y / 2.0;
+        for (_, position) in pickup_layout() {
+            assert!(position.x.abs() < max_x, "x out of bounds: {}", position.x);
+            assert!(position.y.abs() < max_y, "y out of bounds: {}", position.y);
+        }
+    }
+
+    #[test]
+    fn layout_is_not_empty() {
+        assert!(!pickup_layout().is_empty());
+    }
+}
