@@ -19,7 +19,9 @@ pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
         (PickupKind::Cash, Vec2::new(x, y)),
         (PickupKind::Cash, Vec2::new(-x, -y)),
         (PickupKind::Repair, Vec2::new(-x, y)),
-        (PickupKind::Nitro, Vec2::new(x, -y)),
+        (PickupKind::Repair, Vec2::new(x, -y)),
+        (PickupKind::Nitro, Vec2::new(0.0, y)),
+        (PickupKind::Nitro, Vec2::new(0.0, -y)),
     ]
 }
 
@@ -61,5 +63,35 @@ mod tests {
     #[test]
     fn layout_is_not_empty() {
         assert!(!pickup_layout().is_empty());
+    }
+
+    #[test]
+    fn layout_mirrors_each_pickup_kind_across_arena_centre() {
+        let layout = pickup_layout();
+
+        for (kind, position) in &layout {
+            let mirrored_position = -*position;
+            assert!(
+                layout.iter().any(|(other_kind, other_position)| {
+                    other_kind == kind && other_position.distance(mirrored_position) <= f32::EPSILON
+                }),
+                "missing mirrored {kind:?} pickup at {mirrored_position}"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_does_not_stack_pickups_on_one_position() {
+        let layout = pickup_layout();
+
+        for (index, (_, position)) in layout.iter().enumerate() {
+            assert!(
+                !layout
+                    .iter()
+                    .skip(index + 1)
+                    .any(|(_, other_position)| other_position.distance(*position) <= f32::EPSILON),
+                "duplicate pickup position at {position}"
+            );
+        }
     }
 }
