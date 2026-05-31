@@ -128,6 +128,10 @@ fn advance_capture_the_flag(
     sync_carried_flags_to_holders(flags, collectors);
 
     for collector in collectors {
+        if result.winner.is_some() {
+            break;
+        }
+
         try_return_stolen_own_flag(flags, collector);
 
         if try_score_carried_flag(flags, collector, score, result) {
@@ -538,6 +542,38 @@ mod tests {
 
         assert_eq!(score.player, CAPTURES_TO_WIN);
         assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+    }
+
+    #[test]
+    fn winning_capture_ends_same_frame_flag_interactions() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0)),
+            FlagState {
+                holder: Some(entity(1)),
+                position: Vec2::new(-500.0, 0.0),
+                ..flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0))
+            },
+        ];
+        let blue = blue_collector(Vec2::new(-500.0, 0.0));
+        let red = red_collector(Vec2::new(-500.0, 0.0));
+        let mut score = CaptureScore {
+            player: CAPTURES_TO_WIN - 1,
+            opponents: CAPTURES_TO_WIN - 1,
+        };
+        let mut result = CtfMatchResult::default();
+
+        advance_capture_the_flag(&mut flags, &[blue, red], &mut score, &mut result);
+
+        assert_eq!(
+            score,
+            CaptureScore {
+                player: CAPTURES_TO_WIN,
+                opponents: CAPTURES_TO_WIN - 1,
+            }
+        );
+        assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, flags[0].home);
     }
 
     #[test]
