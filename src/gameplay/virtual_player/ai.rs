@@ -14,6 +14,9 @@ pub const ESCORT_LEAD_DISTANCE: f32 = 80.0;
 /// Distance at which an enemy near a home flag becomes a defensive emergency.
 pub const HOME_FLAG_THREAT_RADIUS: f32 = 500.0;
 
+/// Distance from the home flag where defenders try to meet an incoming thief.
+pub const HOME_FLAG_DEFENSE_DISTANCE: f32 = 140.0;
+
 /// Maximum sideways distance from a CTF push where a pickup still counts as
 /// being on the flag lane.
 pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
@@ -139,8 +142,11 @@ pub fn choose_capture_the_flag_target(
         )));
     }
 
-    if home_flag_threatened(team, own_flag, threats) {
-        return Some(DrivingTarget::DefendHomeBase(own_flag.position));
+    if let Some(threat) = closest_home_flag_threat(team, own_flag, threats) {
+        return Some(DrivingTarget::DefendHomeBase(defensive_intercept_point(
+            own_flag.position,
+            threat.position,
+        )));
     }
 
     enemy_flag
@@ -149,13 +155,57 @@ pub fn choose_capture_the_flag_target(
         .then_some(DrivingTarget::EnemyFlag(enemy_flag.position))
 }
 
-fn home_flag_threatened(team: AiTeam, own_flag: &FlagTarget, threats: &[ThreatTarget]) -> bool {
-    own_flag.holder.is_none()
-        && threats.iter().any(|threat| {
-            threat.team == team.enemy()
-                && threat.position.distance_squared(own_flag.position)
-                    <= HOME_FLAG_THREAT_RADIUS * HOME_FLAG_THREAT_RADIUS
+fn closest_home_flag_threat(
+    team: AiTeam,
+    own_flag: &FlagTarget,
+    threats: &[ThreatTarget],
+) -> Option<ThreatTarget> {
+    if own_flag.holder.is_some() {
+        return None;
+    }
+
+    let radius_sq = HOME_FLAG_THREAT_RADIUS * HOME_FLAG_THREAT_RADIUS;
+    threats
+        .iter()
+        .copied()
+        .filter_map(|threat| {
+            let distance_sq = threat.position.distance_squared(own_flag.position);
+            (threat.team == team.enemy() && distance_sq <= radius_sq)
+                .then_some((threat, distance_sq))
         })
+        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .x
+                        .partial_cmp(&b_threat.position.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .y
+                        .partial_cmp(&b_threat.position.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+        .map(|(threat, _)| threat)
+}
+
+fn defensive_intercept_point(flag_position: Vec2, threat_position: Vec2) -> Vec2 {
+    let to_threat = threat_position - flag_position;
+    let distance = to_threat.length();
+    if distance <= HOME_FLAG_DEFENSE_DISTANCE {
+        return threat_position;
+    }
+
+    let Some(direction) = to_threat.try_normalize() else {
+        return flag_position;
+    };
+    flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE
 }
 
 fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
@@ -916,7 +966,44 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+            Some(DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn defender_intercepts_closest_home_flag_threat() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[
+                ThreatTarget {
+                    team: AiTeam::Blue,
+                    position: Vec2::new(260.0, 0.0),
+                },
+                ThreatTarget {
+                    team: AiTeam::Blue,
+                    position: Vec2::new(500.0, 90.0),
+                },
+            ],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 90.0)))
         );
     }
 
