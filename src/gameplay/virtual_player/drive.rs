@@ -114,10 +114,7 @@ pub fn virtual_player_drive_system(
 }
 
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
-    matches!(
-        target,
-        DrivingTarget::EnemyFlag(_) | DrivingTarget::StolenHomeFlag(_)
-    )
+    matches!(target, DrivingTarget::EnemyFlag(_))
 }
 
 #[cfg(test)]
@@ -158,6 +155,20 @@ mod tests {
                     current_waypoint: 0,
                 },
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
+            ))
+            .id()
+    }
+
+    fn spawn_ai_at(app: &mut App, waypoints: Vec<Vec2>, translation: Vec3) -> Entity {
+        app.world
+            .spawn((
+                VirtualPlayer {
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints,
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(translation),
             ))
             .id()
     }
@@ -520,6 +531,51 @@ mod tests {
             transform.translation.x > 0.0,
             "expected defender to turn towards stolen red flag, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn all_virtual_players_hunt_stolen_red_flag() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, -50.0, 4.0),
+        );
+        let second_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 50.0, 4.0),
+        );
+        let player = spawn_player(&mut app, Vec3::new(800.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-500.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(800.0, 0.0, 2.0),
+            Some(player),
+        );
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+        assert!(
+            first_transform.translation.x > 0.0,
+            "first opponent should hunt the flag carrier, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "second opponent should also hunt the flag carrier, x={}",
+            second_transform.translation.x
         );
     }
 
