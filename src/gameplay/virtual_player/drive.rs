@@ -101,7 +101,7 @@ pub fn virtual_player_drive_system(
         let movement_direction = transform.rotation * Vec3::Y;
         let nitro_multiplier = nitro_boosts
             .as_ref()
-            .map_or(1.0, |boosts| boosts.opponent_multiplier());
+            .map_or(1.0, |boosts| nitro_multiplier_for_team(boosts, ai.team));
         let movement_distance = intent.throttle * ai.movement_speed * nitro_multiplier * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
@@ -110,6 +110,13 @@ pub fn virtual_player_drive_system(
         transform.translation.x = transform.translation.x.clamp(-extents.x, extents.x);
         transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
         transform.translation.z = 4.0;
+    }
+}
+
+const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
+    match team {
+        AiTeam::Blue => boosts.player_multiplier(),
+        AiTeam::Red => boosts.opponent_multiplier(),
     }
 }
 
@@ -206,6 +213,19 @@ mod tests {
             CtfFlag { team, home, holder },
             Transform::from_translation(position),
         ));
+    }
+
+    fn one_frame_ai_y(team: AiTeam, nitro: Option<fn(&mut NitroBoosts)>) -> f32 {
+        let mut app = app_with_system();
+        if let Some(trigger) = nitro {
+            app.init_resource::<NitroBoosts>();
+            trigger(&mut app.world.resource_mut::<NitroBoosts>());
+        }
+        let ai = spawn_ai_on_team(&mut app, team, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        app.world.get::<Transform>(ai).unwrap().translation.y
     }
 
     #[test]
@@ -713,34 +733,34 @@ mod tests {
 
     #[test]
     fn nitro_boost_increases_virtual_player_distance() {
-        let mut normal_app = app_with_system();
-        let normal_ai = spawn_ai(&mut normal_app, vec![Vec2::new(0.0, 1000.0)]);
-        normal_app.update();
-        let normal_y = normal_app
-            .world
-            .get::<Transform>(normal_ai)
-            .unwrap()
-            .translation
-            .y;
-
-        let mut boosted_app = app_with_system();
-        boosted_app.init_resource::<NitroBoosts>();
-        boosted_app
-            .world
-            .resource_mut::<NitroBoosts>()
-            .trigger_opponent();
-        let boosted_ai = spawn_ai(&mut boosted_app, vec![Vec2::new(0.0, 1000.0)]);
-        boosted_app.update();
-        let boosted_y = boosted_app
-            .world
-            .get::<Transform>(boosted_ai)
-            .unwrap()
-            .translation
-            .y;
+        let normal_y = one_frame_ai_y(AiTeam::Red, None);
+        let boosted_y = one_frame_ai_y(AiTeam::Red, Some(NitroBoosts::trigger_opponent));
 
         assert!(
             boosted_y > normal_y,
             "normal={normal_y}, boosted={boosted_y}"
+        );
+    }
+
+    #[test]
+    fn player_team_nitro_boosts_blue_virtual_players() {
+        let normal_y = one_frame_ai_y(AiTeam::Blue, None);
+        let boosted_y = one_frame_ai_y(AiTeam::Blue, Some(NitroBoosts::trigger_player));
+
+        assert!(
+            boosted_y > normal_y,
+            "normal={normal_y}, boosted={boosted_y}"
+        );
+    }
+
+    #[test]
+    fn opponent_nitro_does_not_boost_blue_virtual_players() {
+        let normal_y = one_frame_ai_y(AiTeam::Blue, None);
+        let opponent_boosted_y = one_frame_ai_y(AiTeam::Blue, Some(NitroBoosts::trigger_opponent));
+
+        assert!(
+            (opponent_boosted_y - normal_y).abs() < 1e-4,
+            "normal={normal_y}, opponent_boosted={opponent_boosted_y}"
         );
     }
 }
