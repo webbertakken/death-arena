@@ -593,6 +593,41 @@ mod tests {
     }
 
     #[test]
+    fn flag_carrier_drives_home_before_pickup_detours() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(0.0, 0.0, 2.0),
+            Some(ai),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(-200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected flag carrier to turn towards home base, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
     fn defends_red_flag_when_player_is_about_to_steal_it() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
