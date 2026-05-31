@@ -458,6 +458,42 @@ mod tests {
     }
 
     #[test]
+    fn teammate_escorts_flag_carrier_before_pickup_or_patrol_waypoint() {
+        let mut app = app_with_system();
+        let carrier = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let escort = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(escort).unwrap();
+        assert!(
+            transform.translation.x < 0.0,
+            "expected escort to turn towards flag carrier, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
     fn defender_chases_stolen_red_flag_before_enemy_flag() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);

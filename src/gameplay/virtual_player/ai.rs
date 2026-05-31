@@ -33,6 +33,7 @@ impl SteeringIntent {
 pub enum DrivingTarget {
     HomeBase(Vec2),
     EnemyFlag(Vec2),
+    EscortFlagCarrier(Vec2),
     PatrolWaypoint(Vec2),
     Pickup(Vec2),
     Player(Vec2),
@@ -45,6 +46,7 @@ impl DrivingTarget {
         match self {
             Self::HomeBase(position)
             | Self::EnemyFlag(position)
+            | Self::EscortFlagCarrier(position)
             | Self::PatrolWaypoint(position)
             | Self::Pickup(position)
             | Self::Player(position)
@@ -109,6 +111,10 @@ pub fn choose_capture_the_flag_target(
 
     if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
         return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
+    }
+
+    if enemy_flag.holder.is_some() {
+        return Some(DrivingTarget::EscortFlagCarrier(enemy_flag.position));
     }
 
     enemy_flag
@@ -599,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_enemy_flag_carried_by_someone_else() {
+    fn escorts_teammate_carrying_enemy_flag() {
         let target = choose_capture_the_flag_target(
             Entity::from_raw(7),
             AiTeam::Red,
@@ -619,6 +625,9 @@ mod tests {
             ],
         );
 
-        assert_eq!(target, None);
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EscortFlagCarrier(Vec2::new(-450.0, 20.0)))
+        );
     }
 }
