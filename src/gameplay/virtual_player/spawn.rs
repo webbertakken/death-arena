@@ -16,32 +16,62 @@ pub fn arena_patrol_route() -> Vec<Vec2> {
     ]
 }
 
-/// Spawns a small grid of virtual opponents that patrol the arena.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VirtualPlayerSpawn {
+    name: &'static str,
+    team: AiTeam,
+    start_waypoint: usize,
+    translation: Vec3,
+}
+
+const fn spawn_roster() -> [VirtualPlayerSpawn; 4] {
+    [
+        VirtualPlayerSpawn {
+            name: "Teammate 1",
+            team: AiTeam::Blue,
+            start_waypoint: 3,
+            translation: Vec3::new(-430.0, 200.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Opponent 1",
+            team: AiTeam::Red,
+            start_waypoint: 0,
+            translation: Vec3::new(430.0, 200.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Opponent 2",
+            team: AiTeam::Red,
+            start_waypoint: 1,
+            translation: Vec3::new(0.0, 380.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Opponent 3",
+            team: AiTeam::Red,
+            start_waypoint: 2,
+            translation: Vec3::new(-430.0, -200.0, 4.0),
+        },
+    ]
+}
+
+/// Spawns a small grid of virtual CTF drivers that patrol the arena.
 pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let chassis = asset_server.load("textures/car1/chassis1.png");
     let route = arena_patrol_route();
 
-    // Stagger opponents along the route so they do not stack on spawn.
-    let opponents = [
-        ("Opponent 1", 0, Vec3::new(430.0, 200.0, 4.0)),
-        ("Opponent 2", 1, Vec3::new(0.0, 380.0, 4.0)),
-        ("Opponent 3", 2, Vec3::new(-430.0, -200.0, 4.0)),
-    ];
-
-    for (name, start_waypoint, translation) in opponents {
+    for spawn in spawn_roster() {
         commands.spawn((
-            Name::new(name),
+            Name::new(spawn.name),
             VirtualPlayer {
-                team: AiTeam::Red,
+                team: spawn.team,
                 movement_speed: 420.0,
                 rotation_speed: f32::to_radians(300.0),
                 waypoints: route.clone(),
-                current_waypoint: start_waypoint,
+                current_waypoint: spawn.start_waypoint,
             },
             SpriteBundle {
                 texture: chassis.clone(),
                 transform: Transform {
-                    translation,
+                    translation: spawn.translation,
                     rotation: Quat::from_rotation_z(0.0),
                     scale: Vec3::new(0.2, 0.2, 0.2),
                 },
@@ -65,5 +95,13 @@ mod tests {
             assert!(point.x.abs() < max_x, "x out of bounds: {}", point.x);
             assert!(point.y.abs() < max_y, "y out of bounds: {}", point.y);
         }
+    }
+
+    #[test]
+    fn roster_includes_player_team_and_opponents() {
+        let roster = spawn_roster();
+
+        assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Blue));
+        assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Red));
     }
 }

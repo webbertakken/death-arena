@@ -77,6 +77,15 @@ enum CollectorKind {
     Opponent,
 }
 
+impl CollectorKind {
+    const fn from_team(team: FlagTeam) -> Self {
+        match team {
+            FlagTeam::Blue => Self::Player,
+            FlagTeam::Red => Self::Opponent,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CollectorState {
     entity: Entity,
@@ -240,7 +249,7 @@ pub fn capture_the_flag_system(
             .map(|(entity, virtual_player, transform)| CollectorState {
                 entity,
                 team: virtual_player.team.into(),
-                kind: CollectorKind::Opponent,
+                kind: CollectorKind::from_team(virtual_player.team.into()),
                 position: transform.translation.xy(),
             }),
     );
@@ -678,6 +687,57 @@ mod tests {
             app.world.get::<CtfFlag>(red_flag).unwrap().holder,
             Some(virtual_player)
         );
+    }
+
+    #[test]
+    fn blue_virtual_player_capture_scores_for_player_team() {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(capture_the_flag_system);
+        let virtual_player = app
+            .world
+            .spawn((
+                VirtualPlayer {
+                    team: AiTeam::Blue,
+                    movement_speed: 0.0,
+                    rotation_speed: 0.0,
+                    waypoints: vec![],
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(Vec3::new(-500.0, 0.0, 4.0)),
+            ))
+            .id();
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-500.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: Some(virtual_player),
+            },
+            Transform::from_translation(Vec3::new(-500.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            *app.world.resource::<CaptureScore>(),
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            }
+        );
+        assert_eq!(app.world.resource::<Score>().cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
     }
 
     #[test]
