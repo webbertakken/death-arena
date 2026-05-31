@@ -297,9 +297,14 @@ const fn award_capture_bounties(
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
-    player_economy.cash += current.player.saturating_sub(previous.player) * CAPTURE_CASH_BOUNTY;
-    opponent_economy.cash +=
-        current.opponents.saturating_sub(previous.opponents) * CAPTURE_CASH_BOUNTY;
+    player_economy.bank_capture_bonus(
+        current.player.saturating_sub(previous.player),
+        CAPTURE_CASH_BOUNTY,
+    );
+    opponent_economy.bank_capture_bonus(
+        current.opponents.saturating_sub(previous.opponents),
+        CAPTURE_CASH_BOUNTY,
+    );
 }
 
 #[derive(Default)]
@@ -391,8 +396,10 @@ mod tests {
         );
 
         assert_eq!(player_economy.cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(player_economy.captures, 1);
         assert_eq!(player_economy.collected, 0);
         assert_eq!(opponent_economy.cash, 0);
+        assert_eq!(opponent_economy.captures, 0);
         assert_eq!(opponent_economy.collected, 0);
     }
 
@@ -415,7 +422,9 @@ mod tests {
         );
 
         assert_eq!(player_economy.cash, 0);
+        assert_eq!(player_economy.captures, 0);
         assert_eq!(opponent_economy.cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(opponent_economy.captures, 1);
         assert_eq!(opponent_economy.collected, 0);
     }
 

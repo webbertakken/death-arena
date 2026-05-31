@@ -89,10 +89,12 @@ impl NitroBoosts {
 /// Mirrors the Death Rally loop where banked cash drives upgrades.
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
 pub struct Score {
-    /// Total cash banked from every collected pickup.
+    /// Total cash banked from pickups and capture bonuses.
     pub cash: u32,
     /// Number of pickups collected.
     pub collected: u32,
+    /// Number of CTF captures rewarded to the player team.
+    pub captures: u32,
 }
 
 impl Score {
@@ -100,6 +102,12 @@ impl Score {
     pub const fn collect(&mut self, kind: PickupKind) {
         self.cash += kind.bounty();
         self.collected += 1;
+    }
+
+    /// Apply flag capture rewards to the tally.
+    pub const fn bank_capture_bonus(&mut self, captures: u32, bounty: u32) {
+        self.cash += captures * bounty;
+        self.captures += captures;
     }
 }
 
@@ -110,6 +118,8 @@ pub struct OpponentScore {
     pub cash: u32,
     /// Number of pickups collected by virtual players.
     pub collected: u32,
+    /// Number of CTF captures rewarded to virtual opponents.
+    pub captures: u32,
 }
 
 impl OpponentScore {
@@ -117,6 +127,12 @@ impl OpponentScore {
     pub const fn collect(&mut self, kind: PickupKind) {
         self.cash += kind.bounty();
         self.collected += 1;
+    }
+
+    /// Apply flag capture rewards to the opponent tally.
+    pub const fn bank_capture_bonus(&mut self, captures: u32, bounty: u32) {
+        self.cash += captures * bounty;
+        self.captures += captures;
     }
 }
 
@@ -150,6 +166,21 @@ mod tests {
             Score {
                 cash: PickupKind::Cash.bounty() + PickupKind::Repair.bounty(),
                 collected: 2,
+                captures: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn capture_bonus_accumulates_cash_and_capture_count() {
+        let mut score = Score::default();
+        score.bank_capture_bonus(2, 250);
+        assert_eq!(
+            score,
+            Score {
+                cash: 500,
+                collected: 0,
+                captures: 2,
             }
         );
     }
@@ -164,6 +195,21 @@ mod tests {
             OpponentScore {
                 cash: PickupKind::Nitro.bounty() + PickupKind::Cash.bounty(),
                 collected: 2,
+                captures: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn opponent_capture_bonus_accumulates_cash_and_capture_count() {
+        let mut score = OpponentScore::default();
+        score.bank_capture_bonus(1, 250);
+        assert_eq!(
+            score,
+            OpponentScore {
+                cash: 250,
+                collected: 0,
+                captures: 1,
             }
         );
     }
