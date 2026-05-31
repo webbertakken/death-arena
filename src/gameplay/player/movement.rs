@@ -1,3 +1,4 @@
+use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::NitroBoosts;
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -11,10 +12,18 @@ type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
+    match_result: Option<Res<CtfMatchResult>>,
     mut query: Query<(&Player, &mut Transform)>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
     let (player, mut transform) = query.single_mut();
     let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
     let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();

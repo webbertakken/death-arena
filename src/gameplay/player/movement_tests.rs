@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::NitroBoosts;
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -72,6 +73,24 @@ mod tests {
         // Check if wheels rotated
         let fl_wheel_transform = app.world.get::<Transform>(left_wheel_id).unwrap();
         assert!(fl_wheel_transform.rotation.to_euler(EulerRot::XYZ).2 != 0.0);
+    }
+
+    #[test]
+    fn finished_match_stops_player_movement() {
+        let mut app = setup_test_app();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        let player_id = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut app, player_id);
+        app.world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+
+        app.update();
+
+        let player_transform = app.world.get::<Transform>(player_id).unwrap();
+        assert_eq!(player_transform.translation, Vec3::new(0.0, 0.0, 5.0));
     }
 
     #[test]
