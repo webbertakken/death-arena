@@ -1,3 +1,4 @@
+use crate::gameplay::pickup::{OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::{App, AppState, Plugin};
@@ -7,6 +8,7 @@ use bevy::prelude::*;
 pub const FLAG_TOUCH_RADIUS: f32 = 120.0;
 pub const BASE_CAPTURE_RADIUS: f32 = 160.0;
 pub const CAPTURES_TO_WIN: u32 = 3;
+pub const CAPTURE_CASH_BOUNTY: u32 = 250;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -206,6 +208,8 @@ fn nearest_touchable_enemy_flag(flags: &[FlagState], collector: &CollectorState)
 
 pub fn capture_the_flag_system(
     mut score: ResMut<CaptureScore>,
+    mut player_economy: ResMut<Score>,
+    mut opponent_economy: ResMut<OpponentScore>,
     mut result: ResMut<CtfMatchResult>,
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
@@ -242,7 +246,14 @@ pub fn capture_the_flag_system(
         })
         .collect();
 
+    let previous_score = *score;
     advance_capture_the_flag(&mut flags, &collectors, &mut score, &mut result);
+    award_capture_bounties(
+        previous_score,
+        *score,
+        &mut player_economy,
+        &mut opponent_economy,
+    );
 
     for (entity, mut flag, mut transform) in &mut flag_query {
         if let Some(updated) = flags.iter().find(|updated| updated.entity == entity) {
@@ -251,6 +262,17 @@ pub fn capture_the_flag_system(
             transform.translation.y = updated.position.y;
         }
     }
+}
+
+const fn award_capture_bounties(
+    previous: CaptureScore,
+    current: CaptureScore,
+    player_economy: &mut Score,
+    opponent_economy: &mut OpponentScore,
+) {
+    player_economy.cash += current.player.saturating_sub(previous.player) * CAPTURE_CASH_BOUNTY;
+    opponent_economy.cash +=
+        current.opponents.saturating_sub(previous.opponents) * CAPTURE_CASH_BOUNTY;
 }
 
 #[derive(Default)]
@@ -269,6 +291,7 @@ impl Plugin for CtfPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::pickup::{OpponentScore, Score};
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw(id)
@@ -320,6 +343,53 @@ mod tests {
             backward_max_speed_base: 0.0,
             wheels_turning_multiplier: 0.0,
         }
+    }
+
+    #[test]
+    fn capture_bounty_rewards_only_new_captures() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_capture_bounties(
+            CaptureScore {
+                player: 1,
+                opponents: 2,
+            },
+            CaptureScore {
+                player: 2,
+                opponents: 2,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(player_economy.collected, 0);
+        assert_eq!(opponent_economy.cash, 0);
+        assert_eq!(opponent_economy.collected, 0);
+    }
+
+    #[test]
+    fn opponent_capture_bounty_goes_to_opponent_economy() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_capture_bounties(
+            CaptureScore {
+                player: 0,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, 0);
+        assert_eq!(opponent_economy.cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(opponent_economy.collected, 0);
     }
 
     #[test]
@@ -507,6 +577,8 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
         app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
@@ -541,6 +613,8 @@ mod tests {
                 opponents: 0,
             }
         );
+        assert_eq!(app.world.resource::<Score>().cash, CAPTURE_CASH_BOUNTY);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
     }
 
     #[test]
@@ -551,6 +625,8 @@ mod tests {
             opponents: 0,
         });
         app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
