@@ -141,11 +141,18 @@ pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Opt
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
         })
-        .map(|(pickup, _)| DrivingTarget::Pickup(pickup.position));
+        .map(|(pickup, _)| pickup);
 
-    choices
-        .ctf_target
-        .or(pickup)
+    let ctf_target = choices.ctf_target;
+    if let Some(target) = ctf_target {
+        if target_allows_pickup_detour(position, target, pickup) {
+            return pickup.map(|pickup| DrivingTarget::Pickup(pickup.position));
+        }
+        return Some(target);
+    }
+
+    pickup
+        .map(|pickup| DrivingTarget::Pickup(pickup.position))
         .or_else(|| {
             choices
                 .player_position
@@ -160,6 +167,18 @@ pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Opt
                 .get(choices.current_waypoint)
                 .copied()
                 .map(DrivingTarget::PatrolWaypoint)
+        })
+}
+
+fn target_allows_pickup_detour(
+    position: Vec2,
+    target: DrivingTarget,
+    pickup: Option<PickupTarget>,
+) -> bool {
+    matches!(target, DrivingTarget::EnemyFlag(_))
+        && pickup.is_some_and(|pickup| {
+            position.distance_squared(pickup.position)
+                < position.distance_squared(target.position())
         })
 }
 
@@ -429,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn targets_enemy_flag_before_pickups_or_patrol() {
+    fn targets_closer_pickup_before_distant_enemy_flag() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 0.0),
@@ -447,9 +466,56 @@ mod tests {
             ),
         );
 
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
+    }
+
+    #[test]
+    fn flag_carrier_ignores_pickup_detours() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(25.0, 0.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::HomeBase(Vec2::new(-300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
         assert_eq!(
             target,
-            Some(DrivingTarget::EnemyFlag(Vec2::new(-300.0, 0.0)))
+            Some(DrivingTarget::HomeBase(Vec2::new(-300.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn defender_ignores_pickup_detours() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(25.0, 0.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::StolenHomeFlag(Vec2::new(-300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-300.0, 0.0)))
         );
     }
 

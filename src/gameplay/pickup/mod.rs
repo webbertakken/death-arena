@@ -168,6 +168,13 @@ mod tests {
         );
     }
 
+    fn assert_multiplier_eq(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= f32::EPSILON,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
     #[test]
     fn nitro_boost_starts_active_and_expires() {
         let mut boosts = NitroBoosts::default();
@@ -175,8 +182,8 @@ mod tests {
         boosts.trigger_player();
         boosts.trigger_opponent();
 
-        assert_eq!(boosts.player_multiplier(), NITRO_SPEED_MULTIPLIER);
-        assert_eq!(boosts.opponent_multiplier(), NITRO_SPEED_MULTIPLIER);
+        assert_multiplier_eq(boosts.player_multiplier(), NITRO_SPEED_MULTIPLIER);
+        assert_multiplier_eq(boosts.opponent_multiplier(), NITRO_SPEED_MULTIPLIER);
         assert_eq!(boosts.player_frames, NITRO_BOOST_FRAMES);
         assert_eq!(boosts.opponent_frames, NITRO_BOOST_FRAMES);
 
@@ -184,8 +191,8 @@ mod tests {
             boosts.tick();
         }
 
-        assert_eq!(boosts.player_multiplier(), 1.0);
-        assert_eq!(boosts.opponent_multiplier(), 1.0);
+        assert_multiplier_eq(boosts.player_multiplier(), 1.0);
+        assert_multiplier_eq(boosts.opponent_multiplier(), 1.0);
         assert_eq!(boosts.player_frames, 0);
         assert_eq!(boosts.opponent_frames, 0);
     }
