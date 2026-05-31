@@ -53,12 +53,22 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 4] {
     ]
 }
 
+fn initial_car_rotation(spawn: Vec3, target: Vec2) -> Quat {
+    let to_target = target - spawn.truncate();
+    let Some(direction) = to_target.try_normalize() else {
+        return Quat::IDENTITY;
+    };
+    let angle = Vec2::Y.perp_dot(direction).atan2(Vec2::Y.dot(direction));
+    Quat::from_rotation_z(angle)
+}
+
 /// Spawns a small grid of virtual CTF drivers that patrol the arena.
 pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let chassis = asset_server.load("textures/car1/chassis1.png");
     let route = arena_patrol_route();
 
     for spawn in spawn_roster() {
+        let target = route[spawn.start_waypoint];
         commands.spawn((
             Name::new(spawn.name),
             VirtualPlayer {
@@ -72,7 +82,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 texture: chassis.clone(),
                 transform: Transform {
                     translation: spawn.translation,
-                    rotation: Quat::from_rotation_z(0.0),
+                    rotation: initial_car_rotation(spawn.translation, target),
                     scale: Vec3::new(0.2, 0.2, 0.2),
                 },
                 ..default()
@@ -103,5 +113,22 @@ mod tests {
 
         assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Blue));
         assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Red));
+    }
+
+    #[test]
+    fn initial_rotation_faces_first_patrol_waypoint() {
+        let route = arena_patrol_route();
+        let spawn = spawn_roster()[0];
+        let target = route[spawn.start_waypoint];
+
+        let rotation = initial_car_rotation(spawn.translation, target);
+        let forward = rotation * Vec3::Y;
+
+        assert!(
+            forward
+                .truncate()
+                .dot(target - spawn.translation.truncate())
+                > 0.0
+        );
     }
 }
