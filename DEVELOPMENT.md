@@ -67,6 +67,12 @@ rustup target add wasm32-unknown-unknown
 cargo test
 ```
 
+- Run local quality checks before committing.
+
+```bash
+bash scripts/check_local_quality.sh
+```
+
 ## Troubleshooting
 
 If you encounter build errors related to missing system libraries, ensure all dependencies are installed.
