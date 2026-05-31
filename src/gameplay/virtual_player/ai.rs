@@ -33,13 +33,16 @@ impl SteeringIntent {
 pub enum DrivingTarget {
     PatrolWaypoint(Vec2),
     Pickup(Vec2),
+    Player(Vec2),
 }
 
 impl DrivingTarget {
     #[must_use]
     pub const fn position(self) -> Vec2 {
         match self {
-            Self::PatrolWaypoint(position) | Self::Pickup(position) => position,
+            Self::PatrolWaypoint(position) | Self::Pickup(position) | Self::Player(position) => {
+                position
+            }
         }
     }
 }
@@ -64,6 +67,8 @@ pub fn choose_driving_target(
     current_waypoint: usize,
     pickups: &[PickupTarget],
     pickup_pursuit_radius: f32,
+    player_position: Option<Vec2>,
+    player_pursuit_radius: f32,
 ) -> Option<DrivingTarget> {
     let radius_sq = pickup_pursuit_radius * pickup_pursuit_radius;
     let pickup = pickups
@@ -82,12 +87,20 @@ pub fn choose_driving_target(
         })
         .map(|(pickup, _)| DrivingTarget::Pickup(pickup.position));
 
-    pickup.or_else(|| {
-        waypoints
-            .get(current_waypoint)
-            .copied()
-            .map(DrivingTarget::PatrolWaypoint)
-    })
+    pickup
+        .or_else(|| {
+            player_position
+                .filter(|player| {
+                    position.distance_squared(*player) <= player_pursuit_radius.powi(2)
+                })
+                .map(DrivingTarget::Player)
+        })
+        .or_else(|| {
+            waypoints
+                .get(current_waypoint)
+                .copied()
+                .map(DrivingTarget::PatrolWaypoint)
+        })
 }
 
 /// Decide how a virtual player should drive to reach `target`.
@@ -242,6 +255,8 @@ mod tests {
                 bounty: 100,
             }],
             100.0,
+            None,
+            0.0,
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
@@ -264,6 +279,8 @@ mod tests {
                 },
             ],
             100.0,
+            None,
+            0.0,
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(75.0, 0.0))));
@@ -281,6 +298,8 @@ mod tests {
                 bounty: 100,
             }],
             100.0,
+            None,
+            0.0,
         );
 
         assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
@@ -288,6 +307,58 @@ mod tests {
 
     #[test]
     fn returns_no_target_without_waypoints_or_pickups() {
-        assert_eq!(choose_driving_target(Vec2::ZERO, &[], 0, &[], 100.0), None);
+        assert_eq!(
+            choose_driving_target(Vec2::ZERO, &[], 0, &[], 100.0, None, 0.0),
+            None
+        );
+    }
+
+    #[test]
+    fn targets_player_inside_pursuit_radius_before_patrol_waypoint() {
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[Vec2::new(0.0, 500.0)],
+            0,
+            &[],
+            100.0,
+            Some(Vec2::new(200.0, 0.0)),
+            250.0,
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Player(Vec2::new(200.0, 0.0))));
+    }
+
+    #[test]
+    fn pickup_stays_higher_priority_than_player_chase() {
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[Vec2::new(0.0, 500.0)],
+            0,
+            &[PickupTarget {
+                position: Vec2::new(-50.0, 0.0),
+                bounty: 25,
+            }],
+            100.0,
+            Some(Vec2::new(50.0, 0.0)),
+            250.0,
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-50.0, 0.0))));
+    }
+
+    #[test]
+    fn ignores_player_outside_pursuit_radius() {
+        let waypoint = Vec2::new(0.0, 500.0);
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[waypoint],
+            0,
+            &[],
+            100.0,
+            Some(Vec2::new(300.0, 0.0)),
+            250.0,
+        );
+
+        assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
     }
 }

@@ -1,5 +1,6 @@
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::Pickup;
+use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_driving_target, compute_steering, next_waypoint, PickupTarget,
 };
@@ -11,13 +12,19 @@ use bevy::prelude::*;
 /// reached and advances to the next one.
 const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
+const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
 pub fn virtual_player_drive_system(
     mut query: Query<(&mut VirtualPlayer, &mut Transform)>,
+    player_query: Query<&Transform, (With<Player>, Without<VirtualPlayer>)>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
 ) {
+    let player_position = player_query
+        .get_single()
+        .ok()
+        .map(|transform| transform.translation.xy());
     let mut available_pickups: Vec<PickupTarget> = pickup_query
         .iter()
         .map(|(transform, pickup)| PickupTarget {
@@ -35,6 +42,8 @@ pub fn virtual_player_drive_system(
             ai.current_waypoint,
             &available_pickups,
             PICKUP_PURSUIT_RADIUS,
+            player_position,
+            PLAYER_PURSUIT_RADIUS,
         ) else {
             continue;
         };
@@ -86,6 +95,22 @@ mod tests {
         let mut app = App::new();
         app.add_system(virtual_player_drive_system);
         app
+    }
+
+    fn spawn_player(app: &mut App, position: Vec3) -> Entity {
+        app.world
+            .spawn((
+                Player {
+                    movement_speed: 0.0,
+                    rotation_speed: 0.0,
+                    engine_max_speed_multiplier: 0.0,
+                    forward_max_speed_base: 0.0,
+                    backward_max_speed_base: 0.0,
+                    wheels_turning_multiplier: 0.0,
+                },
+                Transform::from_translation(position),
+            ))
+            .id()
     }
 
     fn spawn_ai(app: &mut App, waypoints: Vec<Vec2>) -> Entity {
@@ -182,6 +207,44 @@ mod tests {
         assert!(
             transform.translation.x > 0.0,
             "expected opponent to turn towards pickup, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pursues_nearby_player_before_patrol_waypoint() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(200.0, 0.0, 5.0));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to turn towards player, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pickup_stays_higher_priority_than_player_chase() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(200.0, 0.0, 5.0));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Repair,
+            },
+            Transform::from_translation(Vec3::new(-200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x < 0.0,
+            "expected opponent to prioritise pickup, x={}",
             transform.translation.x
         );
     }
