@@ -305,7 +305,10 @@ fn pickup_detour(
 
     if !matches!(
         target,
-        DrivingTarget::DefendHomeBase(_) | DrivingTarget::EnemyFlag(_) | DrivingTarget::HomeBase(_)
+        DrivingTarget::DefendHomeBase(_)
+            | DrivingTarget::EnemyFlag(_)
+            | DrivingTarget::HomeBase(_)
+            | DrivingTarget::StolenHomeFlag(_)
     ) {
         return None;
     }
@@ -865,7 +868,7 @@ mod tests {
     fn defender_ignores_pickup_detours() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
-            position: Vec2::new(25.0, 0.0),
+            position: Vec2::new(25.0, 80.0),
             priority: 100,
         }];
         let target = choose_driving_target(
@@ -884,6 +887,28 @@ mod tests {
             target,
             Some(DrivingTarget::StolenHomeFlag(Vec2::new(-300.0, 0.0)))
         );
+    }
+
+    #[test]
+    fn defender_detours_for_pickup_on_stolen_flag_intercept_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(-80.0, 0.0),
+            priority: 150,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::StolenHomeFlag(Vec2::new(-300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-80.0, 0.0))));
     }
 
     #[test]
