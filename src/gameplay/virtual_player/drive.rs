@@ -57,6 +57,11 @@ pub fn virtual_player_drive_system(
             choose_capture_the_flag_target(entity, ai.team, &flags).and_then(|target| {
                 coordinate_ctf_target(target, ai.team, &flags, &claimed_ctf_targets)
             });
+        if let Some(target) = ctf_target {
+            if should_coordinate_ctf_target(target) {
+                claimed_ctf_targets.push(target);
+            }
+        }
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -71,10 +76,6 @@ pub fn virtual_player_drive_system(
         ) else {
             continue;
         };
-
-        if should_coordinate_ctf_target(target) {
-            claimed_ctf_targets.push(target);
-        }
 
         if let DrivingTarget::Pickup(target_position) = target {
             if let Some(index) = available_pickups
@@ -785,6 +786,49 @@ mod tests {
         assert!(
             second_transform.translation.x > 0.0,
             "expected spare opponent to defend the red base, x={}",
+            second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pickup_detour_still_reserves_enemy_flag_attack_role() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-400.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(-100.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+
+        assert!(
+            first_transform.translation.x < 0.0,
+            "expected attacker to detour towards pickup on the flag lane, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "expected spare opponent to defend once attack lane is reserved, x={}",
             second_transform.translation.x
         );
     }
