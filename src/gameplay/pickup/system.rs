@@ -1,3 +1,4 @@
+use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::pickup::collect::nearest_collectible;
 use crate::gameplay::pickup::{
     NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
@@ -11,6 +12,7 @@ use bevy::prelude::*;
 
 #[derive(SystemParam)]
 pub struct PickupCollectionParams<'w, 's> {
+    match_result: Option<Res<'w, CtfMatchResult>>,
     respawns: ResMut<'w, PickupRespawns>,
     nitro_boosts: ResMut<'w, NitroBoosts>,
     score: ResMut<'w, Score>,
@@ -27,6 +29,14 @@ pub struct PickupCollectionParams<'w, 's> {
 /// [`nearest_collectible`]); at 60 FPS a tight cluster is still cleared almost
 /// instantly while the behaviour stays predictable and testable.
 pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollectionParams) {
+    if params
+        .match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
     let pickups: Vec<(Entity, PickupKind, Vec2)> = params
         .pickup_query
         .iter()
@@ -140,6 +150,7 @@ pub fn pickup_respawn_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
     use crate::gameplay::pickup::PICKUP_RESPAWN_FRAMES;
     use crate::gameplay::virtual_player::ai::AiTeam;
 
@@ -407,6 +418,25 @@ mod tests {
         assert_eq!(respawns.pending[0].kind, PickupKind::Nitro);
         assert_eq!(respawns.pending[0].position, Vec2::new(10.0, 20.0));
         assert_eq!(respawns.pending[0].frames_remaining, PICKUP_RESPAWN_FRAMES);
+    }
+
+    #[test]
+    fn finished_match_leaves_pickups_and_score_unchanged() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        assert!(
+            app.world.get_entity(pickup).is_some(),
+            "post-match pickup should stay in the arena"
+        );
+        assert_eq!(app.world.resource::<Score>().collected, 0);
+        assert_eq!(app.world.resource::<Score>().cash, 0);
+        assert!(app.world.resource::<PickupRespawns>().pending.is_empty());
     }
 
     #[test]
