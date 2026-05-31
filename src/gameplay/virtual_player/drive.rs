@@ -18,7 +18,7 @@ pub fn virtual_player_drive_system(
     mut query: Query<(&mut VirtualPlayer, &mut Transform)>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
 ) {
-    let pickups: Vec<PickupTarget> = pickup_query
+    let mut available_pickups: Vec<PickupTarget> = pickup_query
         .iter()
         .map(|(transform, pickup)| PickupTarget {
             position: transform.translation.xy(),
@@ -33,11 +33,21 @@ pub fn virtual_player_drive_system(
             position,
             &ai.waypoints,
             ai.current_waypoint,
-            &pickups,
+            &available_pickups,
             PICKUP_PURSUIT_RADIUS,
         ) else {
             continue;
         };
+
+        if let crate::gameplay::virtual_player::ai::DrivingTarget::Pickup(target_position) = target
+        {
+            if let Some(index) = available_pickups
+                .iter()
+                .position(|pickup| pickup.position == target_position)
+            {
+                available_pickups.swap_remove(index);
+            }
+        }
 
         let intent = compute_steering(position, forward, target.position(), WAYPOINT_ARRIVE_RADIUS);
 
@@ -200,6 +210,40 @@ mod tests {
             transform.translation.x > 0.0,
             "expected opponent to turn towards richer pickup, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn only_one_virtual_player_pursues_a_shared_pickup() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+
+        assert!(
+            first_transform.translation.x > 0.0,
+            "expected first opponent to claim pickup, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x.abs() < 1e-4,
+            "expected second opponent to keep patrol line, x={}",
+            second_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.y > 0.0,
+            "expected second opponent to keep moving, y={}",
+            second_transform.translation.y
         );
     }
 }
