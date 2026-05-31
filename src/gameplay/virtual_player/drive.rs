@@ -15,6 +15,7 @@ use bevy::prelude::*;
 const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
+const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
 
 type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
 
@@ -347,10 +348,27 @@ fn carries_enemy_flag(entity: Entity, team: AiTeam, flags: &[FlagTarget]) -> boo
 }
 
 fn defend_home_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
-    flags
+    let own_flag = flags.iter().find(|flag| flag.team == team)?;
+    let target = flags
         .iter()
-        .find(|flag| flag.team == team)
-        .map(|flag| DrivingTarget::DefendHomeBase(flag.home))
+        .find(|flag| flag.team == team.enemy())
+        .map_or(own_flag.home, |enemy_flag| {
+            home_lane_guard_point(own_flag.home, enemy_flag.home)
+        });
+    Some(DrivingTarget::DefendHomeBase(target))
+}
+
+fn home_lane_guard_point(home: Vec2, enemy_home: Vec2) -> Vec2 {
+    let to_enemy_home = enemy_home - home;
+    let distance = to_enemy_home.length();
+    if distance <= HOME_LANE_GUARD_DISTANCE {
+        return enemy_home;
+    }
+
+    let Some(direction) = to_enemy_home.try_normalize() else {
+        return home;
+    };
+    home + direction * HOME_LANE_GUARD_DISTANCE
 }
 
 const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
@@ -764,6 +782,57 @@ mod tests {
                 (
                     Entity::from_raw(2),
                     Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn spare_defender_guards_home_flag_lane() {
+        let attacker = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(-300.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-500.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let spare = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(450.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-500.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let assignments = assign_ctf_targets(
+            &[attacker, spare],
+            &[
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-500.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::EnemyFlag(Vec2::new(-500.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(280.0, 0.0)))
                 ),
             ]
         );
