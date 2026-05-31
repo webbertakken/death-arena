@@ -25,6 +25,10 @@ pub const HOME_FLAG_DEFENSE_DISTANCE: f32 = 140.0;
 /// being on the flag lane.
 pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
 
+/// Distance from home at which a flag carrier stops gambling on pickup detours
+/// and commits to finishing the capture.
+pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -293,6 +297,12 @@ fn pickup_detour(
     target: DrivingTarget,
     choices: &DrivingChoices<'_>,
 ) -> Option<PickupTarget> {
+    if matches!(target, DrivingTarget::HomeBase(_))
+        && position.distance(target.position()) <= FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE
+    {
+        return None;
+    }
+
     if !matches!(
         target,
         DrivingTarget::DefendHomeBase(_) | DrivingTarget::EnemyFlag(_) | DrivingTarget::HomeBase(_)
@@ -826,6 +836,29 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-80.0, 0.0))));
+    }
+
+    #[test]
+    fn flag_carrier_commits_to_capture_near_home_base() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(-40.0, 0.0),
+            priority: 100,
+        }];
+        let home = Vec2::new(-120.0, 0.0);
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::HomeBase(home)),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::HomeBase(home)));
     }
 
     #[test]
