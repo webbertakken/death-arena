@@ -3,6 +3,7 @@ use crate::gameplay::pickup::{
     NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
 };
 use crate::gameplay::player::Player;
+use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::ecs::system::SystemParam;
 use bevy::math::Vec3Swizzles;
@@ -15,7 +16,8 @@ pub struct PickupCollectionParams<'w, 's> {
     score: ResMut<'w, Score>,
     opponent_score: ResMut<'w, OpponentScore>,
     player_query: Query<'w, 's, &'static Transform, With<Player>>,
-    virtual_player_query: Query<'w, 's, &'static Transform, (With<VirtualPlayer>, Without<Player>)>,
+    virtual_player_query:
+        Query<'w, 's, (&'static VirtualPlayer, &'static Transform), Without<Player>>,
     pickup_query: Query<'w, 's, (Entity, &'static Transform, &'static Pickup)>,
 }
 
@@ -47,18 +49,44 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
         }
     }
 
-    for virtual_player_transform in &params.virtual_player_query {
+    for (virtual_player, virtual_player_transform) in &params.virtual_player_query {
         let collector = virtual_player_transform.translation.xy();
         let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
             let (entity, kind, position) = available.swap_remove(index);
-            params.opponent_score.collect(kind);
-            if kind == PickupKind::Nitro {
-                params.nitro_boosts.trigger_opponent();
-            }
+            collect_for_team(
+                virtual_player.team,
+                kind,
+                &mut params.score,
+                &mut params.opponent_score,
+                &mut params.nitro_boosts,
+            );
             params.respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
+        }
+    }
+}
+
+fn collect_for_team(
+    team: AiTeam,
+    kind: PickupKind,
+    score: &mut Score,
+    opponent_score: &mut OpponentScore,
+    nitro_boosts: &mut NitroBoosts,
+) {
+    match team {
+        AiTeam::Blue => {
+            score.collect(kind);
+            if kind == PickupKind::Nitro {
+                nitro_boosts.trigger_player();
+            }
+        }
+        AiTeam::Red => {
+            opponent_score.collect(kind);
+            if kind == PickupKind::Nitro {
+                nitro_boosts.trigger_opponent();
+            }
         }
     }
 }
@@ -144,6 +172,21 @@ mod tests {
             .id()
     }
 
+    fn spawn_virtual_player(app: &mut App, team: AiTeam, position: Vec3) -> Entity {
+        app.world
+            .spawn((
+                VirtualPlayer {
+                    team,
+                    movement_speed: 0.0,
+                    rotation_speed: 0.0,
+                    waypoints: vec![],
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(position),
+            ))
+            .id()
+    }
+
     #[test]
     fn drives_over_pickup_banks_its_bounty_and_despawns_it() {
         let mut app = app_with_player_at(Vec3::ZERO);
@@ -218,16 +261,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.add_system(pickup_collection_system);
-        app.world.spawn((
-            VirtualPlayer {
-                team: AiTeam::Red,
-                movement_speed: 0.0,
-                rotation_speed: 0.0,
-                waypoints: vec![],
-                current_waypoint: 0,
-            },
-            Transform::from_translation(Vec3::ZERO),
-        ));
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
 
         app.update();
@@ -243,6 +277,32 @@ mod tests {
             app.world.resource::<OpponentScore>().cash,
             PickupKind::Cash.bounty()
         );
+    }
+
+    #[test]
+    fn teammate_pickup_banks_player_score() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.add_system(pickup_collection_system);
+        spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
+        let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        assert!(
+            app.world.get_entity(pickup).is_none(),
+            "teammate should collect the pickup"
+        );
+        assert_eq!(app.world.resource::<Score>().collected, 1);
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            PickupKind::Cash.bounty()
+        );
+        assert_eq!(app.world.resource::<OpponentScore>().collected, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
     }
 
     #[test]
@@ -268,16 +328,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.add_system(pickup_collection_system);
-        app.world.spawn((
-            VirtualPlayer {
-                team: AiTeam::Red,
-                movement_speed: 0.0,
-                rotation_speed: 0.0,
-                waypoints: vec![],
-                current_waypoint: 0,
-            },
-            Transform::from_translation(Vec3::ZERO),
-        ));
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
 
         app.update();
@@ -288,6 +339,27 @@ mod tests {
             boosts.opponent_frames,
             crate::gameplay::pickup::NITRO_BOOST_FRAMES
         );
+    }
+
+    #[test]
+    fn teammate_nitro_pickup_arms_player_boost() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.add_system(pickup_collection_system);
+        spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let boosts = app.world.resource::<NitroBoosts>();
+        assert_eq!(
+            boosts.player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(boosts.opponent_frames, 0);
     }
 
     #[test]
@@ -308,16 +380,7 @@ mod tests {
     #[test]
     fn player_gets_priority_when_sharing_pickup_with_virtual_player() {
         let mut app = app_with_player_at(Vec3::ZERO);
-        app.world.spawn((
-            VirtualPlayer {
-                team: AiTeam::Red,
-                movement_speed: 0.0,
-                rotation_speed: 0.0,
-                waypoints: vec![],
-                current_waypoint: 0,
-            },
-            Transform::from_translation(Vec3::ZERO),
-        ));
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
 
         app.update();
