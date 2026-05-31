@@ -1,6 +1,8 @@
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::Pickup;
-use crate::gameplay::virtual_player::ai::{choose_driving_target, compute_steering, next_waypoint};
+use crate::gameplay::virtual_player::ai::{
+    choose_driving_target, compute_steering, next_waypoint, PickupTarget,
+};
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
@@ -14,11 +16,14 @@ const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 /// the same movement/rotation model the human player uses.
 pub fn virtual_player_drive_system(
     mut query: Query<(&mut VirtualPlayer, &mut Transform)>,
-    pickup_query: Query<&Transform, (With<Pickup>, Without<VirtualPlayer>)>,
+    pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
 ) {
-    let pickups: Vec<Vec2> = pickup_query
+    let pickups: Vec<PickupTarget> = pickup_query
         .iter()
-        .map(|transform| transform.translation.xy())
+        .map(|(transform, pickup)| PickupTarget {
+            position: transform.translation.xy(),
+            bounty: pickup.kind.bounty(),
+        })
         .collect();
 
     for (mut ai, mut transform) in &mut query {
@@ -167,6 +172,33 @@ mod tests {
         assert!(
             transform.translation.x > 0.0,
             "expected opponent to turn towards pickup, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pursues_richer_pickup_before_closer_pickup() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Repair,
+            },
+            Transform::from_translation(Vec3::new(-25.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(150.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to turn towards richer pickup, x={}",
             transform.translation.x
         );
     }

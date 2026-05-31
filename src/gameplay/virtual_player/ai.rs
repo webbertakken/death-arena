@@ -44,16 +44,25 @@ impl DrivingTarget {
     }
 }
 
+/// A collectible target visible to virtual players.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PickupTarget {
+    pub position: Vec2,
+    pub bounty: u32,
+}
+
 /// Pick the next driving target for a virtual player.
 ///
-/// Nearby pickups take priority over the patrol route so opponents can steal
-/// trackside rewards instead of blindly lapping past them.
+/// Valuable nearby pickups take priority over the patrol route so opponents can
+/// steal trackside rewards instead of blindly lapping past them. When multiple
+/// pickups are in range, virtual players chase the richest bounty first and use
+/// distance as the tie-breaker.
 #[must_use]
 pub fn choose_driving_target(
     position: Vec2,
     waypoints: &[Vec2],
     current_waypoint: usize,
-    pickups: &[Vec2],
+    pickups: &[PickupTarget],
     pickup_pursuit_radius: f32,
 ) -> Option<DrivingTarget> {
     let radius_sq = pickup_pursuit_radius * pickup_pursuit_radius;
@@ -61,15 +70,17 @@ pub fn choose_driving_target(
         .iter()
         .copied()
         .filter_map(|pickup| {
-            let distance_sq = position.distance_squared(pickup);
+            let distance_sq = position.distance_squared(pickup.position);
             (distance_sq <= radius_sq).then_some((pickup, distance_sq))
         })
-        .min_by(|(_, a_dist), (_, b_dist)| {
-            a_dist
-                .partial_cmp(b_dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
+        .min_by(|(a_pickup, a_dist), (b_pickup, b_dist)| {
+            b_pickup.bounty.cmp(&a_pickup.bounty).then_with(|| {
+                a_dist
+                    .partial_cmp(b_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         })
-        .map(|(pickup, _)| DrivingTarget::Pickup(pickup));
+        .map(|(pickup, _)| DrivingTarget::Pickup(pickup.position));
 
     pickup.or_else(|| {
         waypoints
@@ -226,7 +237,10 @@ mod tests {
             Vec2::ZERO,
             &[Vec2::new(500.0, 0.0)],
             0,
-            &[Vec2::new(25.0, 0.0)],
+            &[PickupTarget {
+                position: Vec2::new(25.0, 0.0),
+                bounty: 100,
+            }],
             100.0,
         );
 
@@ -234,10 +248,40 @@ mod tests {
     }
 
     #[test]
+    fn targets_highest_value_pickup_in_pursuit_radius() {
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[Vec2::new(500.0, 0.0)],
+            0,
+            &[
+                PickupTarget {
+                    position: Vec2::new(25.0, 0.0),
+                    bounty: 25,
+                },
+                PickupTarget {
+                    position: Vec2::new(75.0, 0.0),
+                    bounty: 100,
+                },
+            ],
+            100.0,
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(75.0, 0.0))));
+    }
+
+    #[test]
     fn ignores_pickups_outside_pursuit_radius() {
         let waypoint = Vec2::new(500.0, 0.0);
-        let target =
-            choose_driving_target(Vec2::ZERO, &[waypoint], 0, &[Vec2::new(250.0, 0.0)], 100.0);
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            &[waypoint],
+            0,
+            &[PickupTarget {
+                position: Vec2::new(250.0, 0.0),
+                bounty: 100,
+            }],
+            100.0,
+        );
 
         assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
     }
