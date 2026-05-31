@@ -37,53 +37,18 @@ pub fn virtual_player_drive_system(
         .get_single()
         .ok()
         .map(|transform| transform.translation.xy());
-    let virtual_player_threats: Vec<ThreatTarget> = query
-        .iter()
-        .map(|(_, virtual_player, transform)| ThreatTarget {
-            team: virtual_player.team,
-            position: transform.translation.xy(),
-        })
-        .collect();
-    let mut threats = virtual_player_threats;
-    if let Some(position) = player_position {
-        threats.push(ThreatTarget {
-            team: AiTeam::Blue,
-            position,
-        });
-    }
-    let mut available_pickups: Vec<PickupTarget> = pickup_query
-        .iter()
-        .map(|(transform, pickup)| PickupTarget {
-            position: transform.translation.xy(),
-            bounty: pickup.kind.bounty(),
-        })
-        .collect();
-    let flags: Vec<FlagTarget> = flag_query
-        .iter()
-        .map(|(transform, flag)| FlagTarget {
-            team: match flag.team {
-                FlagTeam::Blue => AiTeam::Blue,
-                FlagTeam::Red => AiTeam::Red,
-            },
-            home: flag.home,
-            position: transform.translation.xy(),
-            holder: flag.holder,
-        })
-        .collect();
-    let mut claimed_ctf_targets: Vec<DrivingTarget> = Vec::new();
+    let threats = threat_targets(&query, player_position);
+    let mut available_pickups = pickup_targets(&pickup_query);
+    let flags = flag_targets(&flag_query);
+    let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
 
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target = choose_capture_the_flag_target(entity, ai.team, &flags, &threats)
-            .and_then(|target| {
-                coordinate_ctf_target(target, ai.team, &flags, &claimed_ctf_targets)
-            });
-        if let Some(target) = ctf_target {
-            if should_coordinate_ctf_target(target) {
-                claimed_ctf_targets.push(target);
-            }
-        }
+        let ctf_target = assigned_ctf_targets
+            .iter()
+            .find(|(assigned_entity, _)| *assigned_entity == entity)
+            .and_then(|(_, target)| *target);
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -136,6 +101,132 @@ pub fn virtual_player_drive_system(
     }
 }
 
+fn threat_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    player_position: Option<Vec2>,
+) -> Vec<ThreatTarget> {
+    let mut threats: Vec<ThreatTarget> = query
+        .iter()
+        .map(|(_, virtual_player, transform)| ThreatTarget {
+            team: virtual_player.team,
+            position: transform.translation.xy(),
+        })
+        .collect();
+
+    if let Some(position) = player_position {
+        threats.push(ThreatTarget {
+            team: AiTeam::Blue,
+            position,
+        });
+    }
+
+    threats
+}
+
+fn pickup_targets(
+    pickup_query: &Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
+) -> Vec<PickupTarget> {
+    pickup_query
+        .iter()
+        .map(|(transform, pickup)| PickupTarget {
+            position: transform.translation.xy(),
+            bounty: pickup.kind.bounty(),
+        })
+        .collect()
+}
+
+fn flag_targets(
+    flag_query: &Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
+) -> Vec<FlagTarget> {
+    flag_query
+        .iter()
+        .map(|(transform, flag)| FlagTarget {
+            team: match flag.team {
+                FlagTeam::Blue => AiTeam::Blue,
+                FlagTeam::Red => AiTeam::Red,
+            },
+            home: flag.home,
+            position: transform.translation.xy(),
+            holder: flag.holder,
+        })
+        .collect()
+}
+
+fn assigned_ctf_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    threats: &[ThreatTarget],
+) -> Vec<(Entity, Option<DrivingTarget>)> {
+    let candidates: Vec<CtfTargetCandidate> = query
+        .iter()
+        .filter_map(|(entity, virtual_player, transform)| {
+            choose_capture_the_flag_target(entity, virtual_player.team, flags, threats).map(
+                |target| CtfTargetCandidate {
+                    entity,
+                    team: virtual_player.team,
+                    position: transform.translation.xy(),
+                    target,
+                },
+            )
+        })
+        .collect();
+
+    assign_ctf_targets(&candidates, flags)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CtfTargetCandidate {
+    entity: Entity,
+    team: AiTeam,
+    position: Vec2,
+    target: DrivingTarget,
+}
+
+fn assign_ctf_targets(
+    candidates: &[CtfTargetCandidate],
+    flags: &[FlagTarget],
+) -> Vec<(Entity, Option<DrivingTarget>)> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let target = if is_best_candidate_for_target(*candidate, candidates) {
+                Some(candidate.target)
+            } else {
+                defend_home_target(candidate.team, flags)
+            };
+            (candidate.entity, target)
+        })
+        .collect()
+}
+
+fn is_best_candidate_for_target(
+    candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
+) -> bool {
+    if !should_coordinate_ctf_target(candidate.target) {
+        return true;
+    }
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|other| other.target == candidate.target)
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(a.target.position())
+                .partial_cmp(&b.position.distance_squared(b.target.position()))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn defend_home_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
+    flags
+        .iter()
+        .find(|flag| flag.team == team)
+        .map(|flag| DrivingTarget::DefendHomeBase(flag.home))
+}
+
 const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
     match team {
         AiTeam::Blue => boosts.player_multiplier(),
@@ -157,22 +248,6 @@ const fn player_position_for_team(team: AiTeam, player_position: Option<Vec2>) -
         AiTeam::Blue => None,
         AiTeam::Red => player_position,
     }
-}
-
-fn coordinate_ctf_target(
-    target: DrivingTarget,
-    team: AiTeam,
-    flags: &[FlagTarget],
-    claimed_targets: &[DrivingTarget],
-) -> Option<DrivingTarget> {
-    if !should_coordinate_ctf_target(target) || !claimed_targets.contains(&target) {
-        return Some(target);
-    }
-
-    flags
-        .iter()
-        .find(|flag| flag.team == team)
-        .map(|flag| DrivingTarget::DefendHomeBase(flag.home))
 }
 
 #[cfg(test)]
@@ -896,6 +971,51 @@ mod tests {
             second_transform.translation.x > 0.0,
             "expected spare opponent to defend the red base, x={}",
             second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn closest_virtual_player_claims_shared_enemy_flag() {
+        let mut app = app_with_system();
+        let far_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        let close_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(-300.0, 0.0, 4.0),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-400.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let far_transform = app.world.get::<Transform>(far_ai).unwrap();
+        let close_transform = app.world.get::<Transform>(close_ai).unwrap();
+
+        assert!(
+            far_transform.translation.x > 0.0,
+            "far opponent should defend the red base, x={}",
+            far_transform.translation.x
+        );
+        assert!(
+            close_transform.translation.x < -300.0,
+            "closest opponent should claim the blue flag, x={}",
+            close_transform.translation.x
         );
     }
 
