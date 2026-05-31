@@ -12,6 +12,8 @@ mod spawn;
 /// system.
 #[derive(Component)]
 pub struct VirtualPlayer {
+    /// Capture-the-flag team this virtual player belongs to.
+    pub team: ai::AiTeam,
     /// Linear speed in metres per second.
     pub movement_speed: f32,
     /// Rotation speed in radians per second.

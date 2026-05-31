@@ -1,5 +1,6 @@
 use crate::gameplay::pickup::{OpponentScore, Score};
 use crate::gameplay::player::Player;
+use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::{App, AppState, Plugin};
 use bevy::math::Vec3Swizzles;
@@ -24,6 +25,15 @@ impl FlagTeam {
         match self {
             Self::Blue => Self::Red,
             Self::Red => Self::Blue,
+        }
+    }
+}
+
+impl From<AiTeam> for FlagTeam {
+    fn from(team: AiTeam) -> Self {
+        match team {
+            AiTeam::Blue => Self::Blue,
+            AiTeam::Red => Self::Red,
         }
     }
 }
@@ -213,7 +223,7 @@ pub fn capture_the_flag_system(
     mut result: ResMut<CtfMatchResult>,
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
-    virtual_player_query: Query<(Entity, &Transform), VirtualPlayerOnly>,
+    virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
 ) {
     let mut collectors = Vec::new();
     if let Ok((entity, transform)) = player_query.get_single() {
@@ -227,9 +237,9 @@ pub fn capture_the_flag_system(
     collectors.extend(
         virtual_player_query
             .iter()
-            .map(|(entity, transform)| CollectorState {
+            .map(|(entity, virtual_player, transform)| CollectorState {
                 entity,
-                team: FlagTeam::Red,
+                team: virtual_player.team.into(),
                 kind: CollectorKind::Opponent,
                 position: transform.translation.xy(),
             }),
@@ -615,6 +625,59 @@ mod tests {
         );
         assert_eq!(app.world.resource::<Score>().cash, CAPTURE_CASH_BOUNTY);
         assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+    }
+
+    #[test]
+    fn system_uses_virtual_player_team_for_enemy_flags() {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(capture_the_flag_system);
+        let virtual_player = app
+            .world
+            .spawn((
+                VirtualPlayer {
+                    team: AiTeam::Blue,
+                    movement_speed: 0.0,
+                    rotation_speed: 0.0,
+                    waypoints: vec![],
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(Vec3::ZERO),
+            ))
+            .id();
+        let blue_flag = app
+            .world
+            .spawn((
+                CtfFlag {
+                    team: FlagTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    holder: None,
+                },
+                Transform::from_translation(Vec3::new(20.0, 0.0, 2.0)),
+            ))
+            .id();
+        let red_flag = app
+            .world
+            .spawn((
+                CtfFlag {
+                    team: FlagTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+                Transform::from_translation(Vec3::new(10.0, 0.0, 2.0)),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(app.world.get::<CtfFlag>(blue_flag).unwrap().holder, None);
+        assert_eq!(
+            app.world.get::<CtfFlag>(red_flag).unwrap().holder,
+            Some(virtual_player)
+        );
     }
 
     #[test]

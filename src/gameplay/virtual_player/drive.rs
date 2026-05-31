@@ -53,10 +53,9 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target =
-            choose_capture_the_flag_target(entity, AiTeam::Red, &flags).filter(|target| {
-                !should_coordinate_ctf_target(*target) || !claimed_ctf_targets.contains(target)
-            });
+        let ctf_target = choose_capture_the_flag_target(entity, ai.team, &flags).filter(|target| {
+            !should_coordinate_ctf_target(*target) || !claimed_ctf_targets.contains(target)
+        });
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -146,9 +145,14 @@ mod tests {
     }
 
     fn spawn_ai(app: &mut App, waypoints: Vec<Vec2>) -> Entity {
+        spawn_ai_on_team(app, AiTeam::Red, waypoints)
+    }
+
+    fn spawn_ai_on_team(app: &mut App, team: AiTeam, waypoints: Vec<Vec2>) -> Entity {
         app.world
             .spawn((
                 VirtualPlayer {
+                    team,
                     movement_speed: 500.0,
                     rotation_speed: f32::to_radians(360.0),
                     waypoints,
@@ -163,6 +167,7 @@ mod tests {
         app.world
             .spawn((
                 VirtualPlayer {
+                    team: AiTeam::Red,
                     movement_speed: 500.0,
                     rotation_speed: f32::to_radians(360.0),
                     waypoints,
@@ -222,6 +227,7 @@ mod tests {
             .world
             .spawn((
                 VirtualPlayer {
+                    team: AiTeam::Red,
                     movement_speed: 5000.0,
                     rotation_speed: f32::to_radians(360.0),
                     waypoints: vec![Vec2::new(BOUNDS.x, BOUNDS.y)],
@@ -400,6 +406,35 @@ mod tests {
         assert!(
             transform.translation.x < 0.0,
             "expected opponent to turn towards blue flag, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn blue_virtual_player_pursues_red_flag() {
+        let mut app = app_with_system();
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-500.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(200.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected blue opponent to turn towards red flag, x={}",
             transform.translation.x
         );
     }

@@ -113,6 +113,7 @@ pub fn pickup_respawn_system(
 mod tests {
     use super::*;
     use crate::gameplay::pickup::PICKUP_RESPAWN_FRAMES;
+    use crate::gameplay::virtual_player::ai::AiTeam;
 
     fn test_player() -> Player {
         Player {
@@ -219,6 +220,7 @@ mod tests {
         app.add_system(pickup_collection_system);
         app.world.spawn((
             VirtualPlayer {
+                team: AiTeam::Red,
                 movement_speed: 0.0,
                 rotation_speed: 0.0,
                 waypoints: vec![],
@@ -268,6 +270,7 @@ mod tests {
         app.add_system(pickup_collection_system);
         app.world.spawn((
             VirtualPlayer {
+                team: AiTeam::Red,
                 movement_speed: 0.0,
                 rotation_speed: 0.0,
                 waypoints: vec![],
@@ -307,6 +310,7 @@ mod tests {
         let mut app = app_with_player_at(Vec3::ZERO);
         app.world.spawn((
             VirtualPlayer {
+                team: AiTeam::Red,
                 movement_speed: 0.0,
                 rotation_speed: 0.0,
                 waypoints: vec![],

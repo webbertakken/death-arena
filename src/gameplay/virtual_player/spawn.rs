@@ -1,4 +1,5 @@
 use crate::gameplay::main::BOUNDS;
+use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::prelude::*;
 
@@ -31,6 +32,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         commands.spawn((
             Name::new(name),
             VirtualPlayer {
+                team: AiTeam::Red,
                 movement_speed: 420.0,
                 rotation_speed: f32::to_radians(300.0),
                 waypoints: route.clone(),
