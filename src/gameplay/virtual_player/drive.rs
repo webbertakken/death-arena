@@ -211,13 +211,30 @@ fn is_best_candidate_for_target(
         .iter()
         .copied()
         .filter(|other| other.target == candidate.target)
-        .min_by(|a, b| {
+        .min_by(compare_ctf_target_candidates)
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn compare_ctf_target_candidates(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+) -> std::cmp::Ordering {
+    a.position
+        .distance_squared(a.target.position())
+        .partial_cmp(&b.position.distance_squared(b.target.position()))
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
             a.position
-                .distance_squared(a.target.position())
-                .partial_cmp(&b.position.distance_squared(b.target.position()))
+                .x
+                .partial_cmp(&b.position.x)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .is_some_and(|best| best.entity == candidate.entity)
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 fn defend_home_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
@@ -592,6 +609,44 @@ mod tests {
                 (
                     Entity::from_raw(2),
                     Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn equal_distance_ctf_role_assignment_uses_position_tiebreakers() {
+        let left = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(-50.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::ZERO),
+        };
+        let right = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(50.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::ZERO),
+        };
+        let flags = [FlagTarget {
+            team: AiTeam::Red,
+            home: Vec2::new(500.0, 0.0),
+            position: Vec2::new(500.0, 0.0),
+            holder: None,
+        }];
+
+        let assignments = assign_ctf_targets(&[right, left], &flags);
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::EnemyFlag(Vec2::ZERO))
                 ),
             ]
         );
