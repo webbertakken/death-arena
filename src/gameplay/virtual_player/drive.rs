@@ -1,4 +1,4 @@
-use crate::gameplay::ctf::{CtfFlag, FlagTeam};
+use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
 use crate::gameplay::player::Player;
@@ -24,7 +24,15 @@ pub fn virtual_player_drive_system(
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
+    match_result: Option<Res<CtfMatchResult>>,
 ) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
     let player_position = player_query
         .get_single()
         .ok()
@@ -156,7 +164,7 @@ fn coordinate_ctf_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gameplay::ctf::{CtfFlag, FlagTeam};
+    use crate::gameplay::ctf::{CtfFlag, CtfMatchWinner, FlagTeam};
     use crate::gameplay::virtual_player::VirtualPlayer;
 
     fn app_with_system() -> App {
@@ -255,6 +263,20 @@ mod tests {
             "expected forward movement, y={}",
             transform.translation.y
         );
+    }
+
+    #[test]
+    fn finished_match_stops_virtual_players() {
+        let mut app = app_with_system();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert_eq!(transform.translation, Vec3::new(0.0, 0.0, 4.0));
     }
 
     #[test]
