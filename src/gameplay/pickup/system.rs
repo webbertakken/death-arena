@@ -1,55 +1,71 @@
 use crate::gameplay::pickup::collect::nearest_collectible;
 use crate::gameplay::pickup::{
-    OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
+    NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
 };
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::VirtualPlayer;
+use bevy::ecs::system::SystemParam;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
+
+#[derive(SystemParam)]
+pub struct PickupCollectionParams<'w, 's> {
+    respawns: ResMut<'w, PickupRespawns>,
+    nitro_boosts: ResMut<'w, NitroBoosts>,
+    score: ResMut<'w, Score>,
+    opponent_score: ResMut<'w, OpponentScore>,
+    player_query: Query<'w, 's, &'static Transform, With<Player>>,
+    virtual_player_query: Query<'w, 's, &'static Transform, (With<VirtualPlayer>, Without<Player>)>,
+    pickup_query: Query<'w, 's, (Entity, &'static Transform, &'static Pickup)>,
+}
 
 /// Collects the pickup the player is currently driving over.
 ///
 /// Only the nearest in-range pickup is banked per frame (deterministic via
 /// [`nearest_collectible`]); at 60 FPS a tight cluster is still cleared almost
 /// instantly while the behaviour stays predictable and testable.
-pub fn pickup_collection_system(
-    mut commands: Commands,
-    mut respawns: ResMut<PickupRespawns>,
-    mut score: ResMut<Score>,
-    mut opponent_score: ResMut<OpponentScore>,
-    player_query: Query<&Transform, With<Player>>,
-    virtual_player_query: Query<&Transform, (With<VirtualPlayer>, Without<Player>)>,
-    pickup_query: Query<(Entity, &Transform, &Pickup)>,
-) {
-    let pickups: Vec<(Entity, PickupKind, Vec2)> = pickup_query
+pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollectionParams) {
+    let pickups: Vec<(Entity, PickupKind, Vec2)> = params
+        .pickup_query
         .iter()
         .map(|(entity, transform, pickup)| (entity, pickup.kind, transform.translation.xy()))
         .collect();
     let mut available: Vec<(Entity, PickupKind, Vec2)> = pickups;
 
-    if let Ok(player_transform) = player_query.get_single() {
+    if let Ok(player_transform) = params.player_query.get_single() {
         let collector = player_transform.translation.xy();
         let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
             let (entity, kind, position) = available.swap_remove(index);
-            score.collect(kind);
-            respawns.queue(kind, position);
+            params.score.collect(kind);
+            if kind == PickupKind::Nitro {
+                params.nitro_boosts.trigger_player();
+            }
+            params.respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
         }
     }
 
-    for virtual_player_transform in &virtual_player_query {
+    for virtual_player_transform in &params.virtual_player_query {
         let collector = virtual_player_transform.translation.xy();
         let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
 
         if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
             let (entity, kind, position) = available.swap_remove(index);
-            opponent_score.collect(kind);
-            respawns.queue(kind, position);
+            params.opponent_score.collect(kind);
+            if kind == PickupKind::Nitro {
+                params.nitro_boosts.trigger_opponent();
+            }
+            params.respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
         }
     }
+}
+
+/// Advances active nitro timers by one fixed frame.
+pub fn nitro_boost_decay_system(mut nitro_boosts: ResMut<NitroBoosts>) {
+    nitro_boosts.tick();
 }
 
 fn advance_respawns(respawns: &mut PickupRespawns) -> Vec<(PickupKind, Vec2)> {
@@ -114,6 +130,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(pickup_collection_system);
         app.world
             .spawn((test_player(), Transform::from_translation(position)));
@@ -182,6 +199,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(pickup_collection_system);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::ZERO);
 
@@ -197,6 +215,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(pickup_collection_system);
         app.world.spawn((
             VirtualPlayer {
@@ -221,6 +240,65 @@ mod tests {
         assert_eq!(
             app.world.resource::<OpponentScore>().cash,
             PickupKind::Cash.bounty()
+        );
+    }
+
+    #[test]
+    fn nitro_pickup_arms_player_boost() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let boosts = app.world.resource::<NitroBoosts>();
+        assert_eq!(
+            boosts.player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn nitro_pickup_arms_opponent_boost() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.add_system(pickup_collection_system);
+        app.world.spawn((
+            VirtualPlayer {
+                movement_speed: 0.0,
+                rotation_speed: 0.0,
+                waypoints: vec![],
+                current_waypoint: 0,
+            },
+            Transform::from_translation(Vec3::ZERO),
+        ));
+        spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let boosts = app.world.resource::<NitroBoosts>();
+        assert_eq!(boosts.player_frames, 0);
+        assert_eq!(
+            boosts.opponent_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+    }
+
+    #[test]
+    fn nitro_boost_decay_counts_down() {
+        let mut app = App::new();
+        app.init_resource::<NitroBoosts>();
+        app.add_system(nitro_boost_decay_system);
+        app.world.resource_mut::<NitroBoosts>().trigger_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES - 1
         );
     }
 

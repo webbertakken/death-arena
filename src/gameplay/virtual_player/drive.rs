@@ -1,6 +1,6 @@
 use crate::gameplay::ctf::{CtfFlag, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::pickup::Pickup;
+use crate::gameplay::pickup::{NitroBoosts, Pickup};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compute_steering, next_waypoint, AiTeam,
@@ -23,6 +23,7 @@ pub fn virtual_player_drive_system(
     player_query: Query<&Transform, (With<Player>, Without<VirtualPlayer>)>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
+    nitro_boosts: Option<Res<NitroBoosts>>,
 ) {
     let player_position = player_query
         .get_single()
@@ -98,7 +99,10 @@ pub fn virtual_player_drive_system(
 
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
-        let movement_distance = intent.throttle * ai.movement_speed * TIME_STEP;
+        let nitro_multiplier = nitro_boosts
+            .as_ref()
+            .map_or(1.0, |boosts| boosts.opponent_multiplier());
+        let movement_distance = intent.throttle * ai.movement_speed * nitro_multiplier * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
         // Keep opponents inside the arena, just like the player.
@@ -488,6 +492,39 @@ mod tests {
             second_transform.translation.x > 0.0,
             "expected second opponent to race for another objective, x={}",
             second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn nitro_boost_increases_virtual_player_distance() {
+        let mut normal_app = app_with_system();
+        let normal_ai = spawn_ai(&mut normal_app, vec![Vec2::new(0.0, 1000.0)]);
+        normal_app.update();
+        let normal_y = normal_app
+            .world
+            .get::<Transform>(normal_ai)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut boosted_app = app_with_system();
+        boosted_app.init_resource::<NitroBoosts>();
+        boosted_app
+            .world
+            .resource_mut::<NitroBoosts>()
+            .trigger_opponent();
+        let boosted_ai = spawn_ai(&mut boosted_app, vec![Vec2::new(0.0, 1000.0)]);
+        boosted_app.update();
+        let boosted_y = boosted_app
+            .world
+            .get::<Transform>(boosted_ai)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            boosted_y > normal_y,
+            "normal={normal_y}, boosted={boosted_y}"
         );
     }
 }

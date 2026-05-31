@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gameplay::main::BOUNDS;
+    use crate::gameplay::pickup::NitroBoosts;
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
     use crate::gameplay::player::movement::car_movement_system;
     use crate::gameplay::player::Player;
@@ -71,6 +72,49 @@ mod tests {
         // Check if wheels rotated
         let fl_wheel_transform = app.world.get::<Transform>(left_wheel_id).unwrap();
         assert!(fl_wheel_transform.rotation.to_euler(EulerRot::XYZ).2 != 0.0);
+    }
+
+    #[test]
+    fn nitro_boost_increases_forward_distance() {
+        let mut normal_app = setup_test_app();
+        let normal_player = spawn_player(&mut normal_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut normal_app, normal_player);
+        normal_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        normal_app.update();
+        let normal_y = normal_app
+            .world
+            .get::<Transform>(normal_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut boosted_app = setup_test_app();
+        boosted_app.init_resource::<NitroBoosts>();
+        boosted_app
+            .world
+            .resource_mut::<NitroBoosts>()
+            .trigger_player();
+        let boosted_player = spawn_player(&mut boosted_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut boosted_app, boosted_player);
+        boosted_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        boosted_app.update();
+        let boosted_y = boosted_app
+            .world
+            .get::<Transform>(boosted_player)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            boosted_y > normal_y,
+            "normal={normal_y}, boosted={boosted_y}"
+        );
     }
 
     #[test]

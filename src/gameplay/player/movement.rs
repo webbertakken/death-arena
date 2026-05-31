@@ -1,4 +1,5 @@
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
+use crate::gameplay::pickup::NitroBoosts;
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
 use bevy::prelude::*;
@@ -9,6 +10,7 @@ type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 /// Demonstrates applying rotation and movement based on keyboard input.
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
+    nitro_boosts: Option<Res<NitroBoosts>>,
     mut query: Query<(&Player, &mut Transform)>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
@@ -18,8 +20,13 @@ pub fn car_movement_system(
     let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();
 
     // Acceleration
-    let forward_max_speed = player.forward_max_speed_base * player.engine_max_speed_multiplier;
-    let backward_max_speed = player.backward_max_speed_base * player.engine_max_speed_multiplier;
+    let nitro_multiplier = nitro_boosts
+        .as_ref()
+        .map_or(1.0, |boosts| boosts.player_multiplier());
+    let forward_max_speed =
+        player.forward_max_speed_base * player.engine_max_speed_multiplier * nitro_multiplier;
+    let backward_max_speed =
+        player.backward_max_speed_base * player.engine_max_speed_multiplier * nitro_multiplier;
 
     // Turning
     let forward_turning_speed = forward_max_speed * player.wheels_turning_multiplier;
