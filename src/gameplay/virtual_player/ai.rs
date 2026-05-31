@@ -11,6 +11,10 @@ pub const STEER_RANGE: f32 = std::f32::consts::FRAC_PI_4;
 /// Distance ahead of a friendly flag carrier that an escort tries to occupy.
 pub const ESCORT_LEAD_DISTANCE: f32 = 80.0;
 
+/// Maximum sideways distance from a CTF push where a pickup still counts as
+/// being on the flag lane.
+pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -206,6 +210,7 @@ fn pickup_detour(
         |pickup| {
             position.distance_squared(pickup.position) < target_distance_sq
                 && is_ahead_of_target_push(position, pickup.position, target.position())
+                && is_on_target_lane(position, pickup.position, target.position())
         },
     )
 }
@@ -214,6 +219,16 @@ fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
     let to_pickup = pickup - position;
     let to_target = target - position;
     to_pickup.dot(to_target) > 0.0
+}
+
+fn is_on_target_lane(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
+    let to_target = target - position;
+    let Some(direction) = to_target.try_normalize() else {
+        return false;
+    };
+
+    let lateral_distance = (pickup - position).perp_dot(direction).abs();
+    lateral_distance <= CTF_PICKUP_LANE_WIDTH
 }
 
 fn best_pickup(
@@ -546,6 +561,34 @@ mod tests {
             },
             PickupTarget {
                 position: Vec2::new(420.0, 0.0),
+                bounty: 100,
+            },
+        ];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn attacker_ignores_pickup_far_off_the_flag_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [
+            PickupTarget {
+                position: Vec2::new(80.0, 0.0),
+                bounty: 50,
+            },
+            PickupTarget {
+                position: Vec2::new(60.0, 70.0),
                 bounty: 100,
             },
         ];
