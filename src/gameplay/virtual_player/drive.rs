@@ -779,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_drives_home_before_pickup_detours() {
+    fn flag_carrier_ignores_pickup_behind_route_home() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
         spawn_flag(

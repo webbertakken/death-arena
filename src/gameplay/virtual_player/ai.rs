@@ -248,10 +248,10 @@ fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
 
 /// Pick the next driving target for a virtual player.
 ///
-/// Valuable nearby pickups take priority over the patrol route so opponents can
-/// steal trackside rewards instead of blindly lapping past them. When multiple
-/// pickups are in range, virtual players chase the richest bounty first and use
-/// distance as the tie-breaker.
+/// Valuable nearby pickups take priority over the patrol route and CTF lane
+/// pushes so opponents can steal trackside rewards without abandoning the play.
+/// When multiple pickups are in range, virtual players chase the richest bounty
+/// first and use distance as the tie-breaker.
 #[must_use]
 pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Option<DrivingTarget> {
     let ctf_target = choices.ctf_target;
@@ -295,7 +295,7 @@ fn pickup_detour(
 ) -> Option<PickupTarget> {
     if !matches!(
         target,
-        DrivingTarget::EnemyFlag(_) | DrivingTarget::DefendHomeBase(_)
+        DrivingTarget::DefendHomeBase(_) | DrivingTarget::EnemyFlag(_) | DrivingTarget::HomeBase(_)
     ) {
         return None;
     }
@@ -587,9 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_prioritises_home_base_over_pickup_detours() {
+    fn flag_carrier_prioritises_home_base_over_off_lane_pickup_detours() {
         let pickups = [PickupTarget {
-            position: Vec2::new(25.0, 0.0),
+            position: Vec2::new(25.0, 80.0),
             bounty: 100,
         }];
         let home = Vec2::new(500.0, 0.0);
@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_ignores_pickup_on_route_home() {
+    fn flag_carrier_detours_for_pickup_on_route_home() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(-80.0, 0.0),
@@ -825,7 +825,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(target, Some(DrivingTarget::HomeBase(home)));
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-80.0, 0.0))));
     }
 
     #[test]
