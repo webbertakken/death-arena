@@ -4,7 +4,7 @@ use crate::gameplay::pickup::Pickup;
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compute_steering, next_waypoint, AiTeam,
-    DrivingChoices, FlagTarget, PickupTarget,
+    DrivingChoices, DrivingTarget, FlagTarget, PickupTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -47,11 +47,15 @@ pub fn virtual_player_drive_system(
             holder: flag.holder,
         })
         .collect();
+    let mut claimed_ctf_targets: Vec<DrivingTarget> = Vec::new();
 
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target = choose_capture_the_flag_target(entity, AiTeam::Red, &flags);
+        let ctf_target =
+            choose_capture_the_flag_target(entity, AiTeam::Red, &flags).filter(|target| {
+                !should_coordinate_ctf_target(*target) || !claimed_ctf_targets.contains(target)
+            });
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -67,8 +71,11 @@ pub fn virtual_player_drive_system(
             continue;
         };
 
-        if let crate::gameplay::virtual_player::ai::DrivingTarget::Pickup(target_position) = target
-        {
+        if should_coordinate_ctf_target(target) {
+            claimed_ctf_targets.push(target);
+        }
+
+        if let DrivingTarget::Pickup(target_position) = target {
             if let Some(index) = available_pickups
                 .iter()
                 .position(|pickup| pickup.position == target_position)
@@ -80,10 +87,7 @@ pub fn virtual_player_drive_system(
         let intent = compute_steering(position, forward, target.position(), WAYPOINT_ARRIVE_RADIUS);
 
         if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
-            if matches!(
-                target,
-                crate::gameplay::virtual_player::ai::DrivingTarget::PatrolWaypoint(_)
-            ) {
+            if matches!(target, DrivingTarget::PatrolWaypoint(_)) {
                 ai.current_waypoint = next_waypoint(ai.current_waypoint, ai.waypoints.len());
             }
             continue;
@@ -103,6 +107,13 @@ pub fn virtual_player_drive_system(
         transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
         transform.translation.z = 4.0;
     }
+}
+
+const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
+    matches!(
+        target,
+        DrivingTarget::EnemyFlag(_) | DrivingTarget::StolenHomeFlag(_)
+    )
 }
 
 #[cfg(test)]
@@ -434,6 +445,49 @@ mod tests {
             transform.translation.x > 0.0,
             "expected defender to turn towards stolen red flag, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn only_one_virtual_player_pursues_a_shared_enemy_flag() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+
+        assert!(
+            first_transform.translation.x < 0.0,
+            "expected first opponent to claim the blue flag, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "expected second opponent to race for another objective, x={}",
+            second_transform.translation.x
         );
     }
 }
