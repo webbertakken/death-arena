@@ -1,8 +1,10 @@
+use crate::gameplay::ctf::{CtfFlag, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::Pickup;
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
-    choose_driving_target, compute_steering, next_waypoint, PickupTarget,
+    choose_capture_the_flag_target, choose_driving_target, compute_steering, next_waypoint, AiTeam,
+    DrivingChoices, FlagTarget, PickupTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -17,9 +19,10 @@ const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
 pub fn virtual_player_drive_system(
-    mut query: Query<(&mut VirtualPlayer, &mut Transform)>,
+    mut query: Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     player_query: Query<&Transform, (With<Player>, Without<VirtualPlayer>)>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
+    flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
 ) {
     let player_position = player_query
         .get_single()
@@ -32,18 +35,34 @@ pub fn virtual_player_drive_system(
             bounty: pickup.kind.bounty(),
         })
         .collect();
+    let flags: Vec<FlagTarget> = flag_query
+        .iter()
+        .map(|(transform, flag)| FlagTarget {
+            team: match flag.team {
+                FlagTeam::Blue => AiTeam::Blue,
+                FlagTeam::Red => AiTeam::Red,
+            },
+            home: flag.home,
+            position: transform.translation.xy(),
+            holder: flag.holder,
+        })
+        .collect();
 
-    for (mut ai, mut transform) in &mut query {
+    for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
+        let ctf_target = choose_capture_the_flag_target(entity, AiTeam::Red, &flags);
         let Some(target) = choose_driving_target(
             position,
-            &ai.waypoints,
-            ai.current_waypoint,
-            &available_pickups,
-            PICKUP_PURSUIT_RADIUS,
-            player_position,
-            PLAYER_PURSUIT_RADIUS,
+            DrivingChoices {
+                waypoints: &ai.waypoints,
+                current_waypoint: ai.current_waypoint,
+                ctf_target,
+                pickups: &available_pickups,
+                pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
+                player_position,
+                player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+            },
         ) else {
             continue;
         };
@@ -89,6 +108,7 @@ pub fn virtual_player_drive_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::ctf::{CtfFlag, FlagTeam};
     use crate::gameplay::virtual_player::VirtualPlayer;
 
     fn app_with_system() -> App {
@@ -125,6 +145,19 @@ mod tests {
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             ))
             .id()
+    }
+
+    fn spawn_flag(
+        app: &mut App,
+        team: FlagTeam,
+        home: Vec2,
+        position: Vec3,
+        holder: Option<Entity>,
+    ) {
+        app.world.spawn((
+            CtfFlag { team, home, holder },
+            Transform::from_translation(position),
+        ));
     }
 
     #[test]
@@ -307,6 +340,70 @@ mod tests {
             second_transform.translation.y > 0.0,
             "expected second opponent to keep moving, y={}",
             second_transform.translation.y
+        );
+    }
+
+    #[test]
+    fn pursues_blue_flag_before_pickup_or_patrol_waypoint() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x < 0.0,
+            "expected opponent to turn towards blue flag, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn flag_carrier_returns_to_red_base() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(0.0, 0.0, 2.0),
+            Some(ai),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected flag carrier to turn towards red base, x={}",
+            transform.translation.x
         );
     }
 }

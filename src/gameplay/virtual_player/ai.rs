@@ -31,6 +31,8 @@ impl SteeringIntent {
 /// The kind of world target a virtual player is currently chasing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DrivingTarget {
+    HomeBase(Vec2),
+    EnemyFlag(Vec2),
     PatrolWaypoint(Vec2),
     Pickup(Vec2),
     Player(Vec2),
@@ -40,11 +42,36 @@ impl DrivingTarget {
     #[must_use]
     pub const fn position(self) -> Vec2 {
         match self {
-            Self::PatrolWaypoint(position) | Self::Pickup(position) | Self::Player(position) => {
-                position
-            }
+            Self::HomeBase(position)
+            | Self::EnemyFlag(position)
+            | Self::PatrolWaypoint(position)
+            | Self::Pickup(position)
+            | Self::Player(position) => position,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiTeam {
+    Blue,
+    Red,
+}
+
+impl AiTeam {
+    pub const fn enemy(self) -> Self {
+        match self {
+            Self::Blue => Self::Red,
+            Self::Red => Self::Blue,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlagTarget {
+    pub team: AiTeam,
+    pub home: Vec2,
+    pub position: Vec2,
+    pub holder: Option<Entity>,
 }
 
 /// A collectible target visible to virtual players.
@@ -54,6 +81,36 @@ pub struct PickupTarget {
     pub bounty: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DrivingChoices<'a> {
+    pub waypoints: &'a [Vec2],
+    pub current_waypoint: usize,
+    pub ctf_target: Option<DrivingTarget>,
+    pub pickups: &'a [PickupTarget],
+    pub pickup_pursuit_radius: f32,
+    pub player_position: Option<Vec2>,
+    pub player_pursuit_radius: f32,
+}
+
+#[must_use]
+pub fn choose_capture_the_flag_target(
+    ai_entity: Entity,
+    team: AiTeam,
+    flags: &[FlagTarget],
+) -> Option<DrivingTarget> {
+    let own_flag = flags.iter().find(|flag| flag.team == team)?;
+    let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
+
+    if enemy_flag.holder == Some(ai_entity) {
+        return Some(DrivingTarget::HomeBase(own_flag.home));
+    }
+
+    enemy_flag
+        .holder
+        .is_none()
+        .then_some(DrivingTarget::EnemyFlag(enemy_flag.position))
+}
+
 /// Pick the next driving target for a virtual player.
 ///
 /// Valuable nearby pickups take priority over the patrol route so opponents can
@@ -61,17 +118,10 @@ pub struct PickupTarget {
 /// pickups are in range, virtual players chase the richest bounty first and use
 /// distance as the tie-breaker.
 #[must_use]
-pub fn choose_driving_target(
-    position: Vec2,
-    waypoints: &[Vec2],
-    current_waypoint: usize,
-    pickups: &[PickupTarget],
-    pickup_pursuit_radius: f32,
-    player_position: Option<Vec2>,
-    player_pursuit_radius: f32,
-) -> Option<DrivingTarget> {
-    let radius_sq = pickup_pursuit_radius * pickup_pursuit_radius;
-    let pickup = pickups
+pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Option<DrivingTarget> {
+    let radius_sq = choices.pickup_pursuit_radius * choices.pickup_pursuit_radius;
+    let pickup = choices
+        .pickups
         .iter()
         .copied()
         .filter_map(|pickup| {
@@ -87,17 +137,21 @@ pub fn choose_driving_target(
         })
         .map(|(pickup, _)| DrivingTarget::Pickup(pickup.position));
 
-    pickup
+    choices
+        .ctf_target
+        .or(pickup)
         .or_else(|| {
-            player_position
+            choices
+                .player_position
                 .filter(|player| {
-                    position.distance_squared(*player) <= player_pursuit_radius.powi(2)
+                    position.distance_squared(*player) <= choices.player_pursuit_radius.powi(2)
                 })
                 .map(DrivingTarget::Player)
         })
         .or_else(|| {
-            waypoints
-                .get(current_waypoint)
+            choices
+                .waypoints
+                .get(choices.current_waypoint)
                 .copied()
                 .map(DrivingTarget::PatrolWaypoint)
         })
@@ -162,6 +216,25 @@ mod tests {
     use super::*;
 
     const ARRIVE: f32 = 10.0;
+
+    fn choices<'a>(
+        waypoints: &'a [Vec2],
+        current_waypoint: usize,
+        ctf_target: Option<DrivingTarget>,
+        pickups: &'a [PickupTarget],
+        player_position: Option<Vec2>,
+        player_pursuit_radius: f32,
+    ) -> DrivingChoices<'a> {
+        DrivingChoices {
+            waypoints,
+            current_waypoint,
+            ctf_target,
+            pickups,
+            pickup_pursuit_radius: 100.0,
+            player_position,
+            player_pursuit_radius,
+        }
+    }
 
     #[test]
     fn idles_when_within_arrive_radius() {
@@ -246,17 +319,14 @@ mod tests {
 
     #[test]
     fn targets_nearby_pickup_before_patrol_waypoint() {
+        let waypoints = [Vec2::new(500.0, 0.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(25.0, 0.0),
+            bounty: 100,
+        }];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[Vec2::new(500.0, 0.0)],
-            0,
-            &[PickupTarget {
-                position: Vec2::new(25.0, 0.0),
-                bounty: 100,
-            }],
-            100.0,
-            None,
-            0.0,
+            choices(&waypoints, 0, None, &pickups, None, 0.0),
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
@@ -264,23 +334,20 @@ mod tests {
 
     #[test]
     fn targets_highest_value_pickup_in_pursuit_radius() {
+        let waypoints = [Vec2::new(500.0, 0.0)];
+        let pickups = [
+            PickupTarget {
+                position: Vec2::new(25.0, 0.0),
+                bounty: 25,
+            },
+            PickupTarget {
+                position: Vec2::new(75.0, 0.0),
+                bounty: 100,
+            },
+        ];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[Vec2::new(500.0, 0.0)],
-            0,
-            &[
-                PickupTarget {
-                    position: Vec2::new(25.0, 0.0),
-                    bounty: 25,
-                },
-                PickupTarget {
-                    position: Vec2::new(75.0, 0.0),
-                    bounty: 100,
-                },
-            ],
-            100.0,
-            None,
-            0.0,
+            choices(&waypoints, 0, None, &pickups, None, 0.0),
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(75.0, 0.0))));
@@ -289,17 +356,14 @@ mod tests {
     #[test]
     fn ignores_pickups_outside_pursuit_radius() {
         let waypoint = Vec2::new(500.0, 0.0);
+        let waypoints = [waypoint];
+        let pickups = [PickupTarget {
+            position: Vec2::new(250.0, 0.0),
+            bounty: 100,
+        }];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[waypoint],
-            0,
-            &[PickupTarget {
-                position: Vec2::new(250.0, 0.0),
-                bounty: 100,
-            }],
-            100.0,
-            None,
-            0.0,
+            choices(&waypoints, 0, None, &pickups, None, 0.0),
         );
 
         assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
@@ -308,21 +372,17 @@ mod tests {
     #[test]
     fn returns_no_target_without_waypoints_or_pickups() {
         assert_eq!(
-            choose_driving_target(Vec2::ZERO, &[], 0, &[], 100.0, None, 0.0),
+            choose_driving_target(Vec2::ZERO, choices(&[], 0, None, &[], None, 0.0)),
             None
         );
     }
 
     #[test]
     fn targets_player_inside_pursuit_radius_before_patrol_waypoint() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[Vec2::new(0.0, 500.0)],
-            0,
-            &[],
-            100.0,
-            Some(Vec2::new(200.0, 0.0)),
-            250.0,
+            choices(&waypoints, 0, None, &[], Some(Vec2::new(200.0, 0.0)), 250.0),
         );
 
         assert_eq!(target, Some(DrivingTarget::Player(Vec2::new(200.0, 0.0))));
@@ -330,17 +390,21 @@ mod tests {
 
     #[test]
     fn pickup_stays_higher_priority_than_player_chase() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(-50.0, 0.0),
+            bounty: 25,
+        }];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[Vec2::new(0.0, 500.0)],
-            0,
-            &[PickupTarget {
-                position: Vec2::new(-50.0, 0.0),
-                bounty: 25,
-            }],
-            100.0,
-            Some(Vec2::new(50.0, 0.0)),
-            250.0,
+            choices(
+                &waypoints,
+                0,
+                None,
+                &pickups,
+                Some(Vec2::new(50.0, 0.0)),
+                250.0,
+            ),
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-50.0, 0.0))));
@@ -349,16 +413,113 @@ mod tests {
     #[test]
     fn ignores_player_outside_pursuit_radius() {
         let waypoint = Vec2::new(0.0, 500.0);
+        let waypoints = [waypoint];
         let target = choose_driving_target(
             Vec2::ZERO,
-            &[waypoint],
-            0,
-            &[],
-            100.0,
-            Some(Vec2::new(300.0, 0.0)),
-            250.0,
+            choices(&waypoints, 0, None, &[], Some(Vec2::new(300.0, 0.0)), 250.0),
         );
 
         assert_eq!(target, Some(DrivingTarget::PatrolWaypoint(waypoint)));
+    }
+
+    #[test]
+    fn targets_enemy_flag_before_pickups_or_patrol() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(25.0, 0.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(-300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EnemyFlag(Vec2::new(-300.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn carrier_returns_enemy_flag_to_home_base() {
+        let ai = Entity::from_raw(7);
+        let target = choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+    }
+
+    #[test]
+    fn free_opponent_targets_unheld_enemy_flag() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EnemyFlag(Vec2::new(-450.0, 20.0)))
+        );
+    }
+
+    #[test]
+    fn ignores_enemy_flag_carried_by_someone_else() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: Some(Entity::from_raw(8)),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(target, None);
     }
 }
