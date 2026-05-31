@@ -124,6 +124,7 @@ fn advance_capture_the_flag(
         return;
     }
 
+    drop_flags_with_missing_holders(flags, collectors);
     sync_carried_flags_to_holders(flags, collectors);
 
     for collector in collectors {
@@ -139,6 +140,19 @@ fn advance_capture_the_flag(
     }
 
     sync_carried_flags_to_holders(flags, collectors);
+}
+
+fn drop_flags_with_missing_holders(flags: &mut [FlagState], collectors: &[CollectorState]) {
+    for flag in flags {
+        if let Some(holder) = flag.holder {
+            let holder_is_present = collectors
+                .iter()
+                .any(|collector| collector.entity == holder);
+            if !holder_is_present {
+                flag.holder = None;
+            }
+        }
+    }
 }
 
 fn sync_carried_flags_to_holders(flags: &mut [FlagState], collectors: &[CollectorState]) {
@@ -524,6 +538,40 @@ mod tests {
 
         assert_eq!(score.player, CAPTURES_TO_WIN);
         assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+    }
+
+    #[test]
+    fn missing_holder_drops_flag_at_last_position() {
+        let dropped_position = Vec2::new(125.0, 50.0);
+        let mut flags = vec![FlagState {
+            holder: Some(entity(99)),
+            position: dropped_position,
+            ..flag(10, FlagTeam::Blue, Vec2::ZERO)
+        }];
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[], &mut score);
+
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, dropped_position);
+        assert_eq!(score, CaptureScore::default());
+    }
+
+    #[test]
+    fn teammate_returns_dropped_home_flag_same_frame() {
+        let mut flags = vec![FlagState {
+            holder: Some(entity(99)),
+            position: Vec2::new(40.0, 0.0),
+            ..flag(10, FlagTeam::Blue, Vec2::ZERO)
+        }];
+        let collector = blue_collector(Vec2::new(45.0, 0.0));
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[collector], &mut score);
+
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, flags[0].home);
+        assert_eq!(score, CaptureScore::default());
     }
 
     #[test]
