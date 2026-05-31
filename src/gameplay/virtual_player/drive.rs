@@ -229,7 +229,7 @@ fn assign_ctf_targets(
             let target = if is_best_candidate_for_target(*candidate, candidates) {
                 Some(candidate.target)
             } else {
-                fallback_ctf_target(*candidate, flags)
+                fallback_ctf_target(*candidate, candidates, flags)
             };
             (candidate.entity, target)
         })
@@ -238,13 +238,16 @@ fn assign_ctf_targets(
 
 fn fallback_ctf_target(
     candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
     flags: &[FlagTarget],
 ) -> Option<DrivingTarget> {
     if candidate.carries_enemy_flag {
         return Some(DrivingTarget::HomeBase(candidate.home_base));
     }
 
-    defend_home_target(candidate.team, flags)
+    is_best_fallback_home_defender(candidate, candidates)
+        .then(|| defend_home_target(candidate.team, flags))
+        .flatten()
 }
 
 fn is_best_candidate_for_target(
@@ -261,6 +264,44 @@ fn is_best_candidate_for_target(
         .filter(|other| other.target == candidate.target)
         .min_by(compare_ctf_target_candidates)
         .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn is_best_fallback_home_defender(
+    candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
+) -> bool {
+    candidates
+        .iter()
+        .copied()
+        .filter(|other| {
+            other.team == candidate.team
+                && !other.carries_enemy_flag
+                && !is_best_candidate_for_target(*other, candidates)
+        })
+        .min_by(compare_fallback_home_defenders)
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn compare_fallback_home_defenders(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+) -> std::cmp::Ordering {
+    a.position
+        .distance_squared(a.home_base)
+        .partial_cmp(&b.position.distance_squared(b.home_base))
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            a.position
+                .x
+                .partial_cmp(&b.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 fn compare_ctf_target_candidates(
@@ -1290,6 +1331,58 @@ mod tests {
             second_transform.translation.x > 0.0,
             "expected spare opponent to defend the red base, x={}",
             second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn only_one_spare_virtual_player_defends_home_base() {
+        let attacker = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(-300.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let close_spare = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(450.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let far_spare = CtfTargetCandidate {
+            entity: Entity::from_raw(3),
+            team: AiTeam::Red,
+            position: Vec2::new(0.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let assignments = assign_ctf_targets(
+            &[attacker, close_spare, far_spare],
+            &[FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            }],
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                ),
+                (Entity::from_raw(3), None),
+            ]
         );
     }
 
