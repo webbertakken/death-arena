@@ -11,6 +11,9 @@ pub const STEER_RANGE: f32 = std::f32::consts::FRAC_PI_4;
 /// Distance ahead of a friendly flag carrier that an escort tries to occupy.
 pub const ESCORT_LEAD_DISTANCE: f32 = 80.0;
 
+/// Distance at which an enemy near a home flag becomes a defensive emergency.
+pub const HOME_FLAG_THREAT_RADIUS: f32 = 500.0;
+
 /// Maximum sideways distance from a CTF push where a pickup still counts as
 /// being on the flag lane.
 pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
@@ -87,6 +90,12 @@ pub struct FlagTarget {
     pub holder: Option<Entity>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThreatTarget {
+    pub team: AiTeam,
+    pub position: Vec2,
+}
+
 /// A collectible target visible to virtual players.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PickupTarget {
@@ -110,6 +119,7 @@ pub fn choose_capture_the_flag_target(
     ai_entity: Entity,
     team: AiTeam,
     flags: &[FlagTarget],
+    threats: &[ThreatTarget],
 ) -> Option<DrivingTarget> {
     let own_flag = flags.iter().find(|flag| flag.team == team)?;
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
@@ -129,10 +139,23 @@ pub fn choose_capture_the_flag_target(
         )));
     }
 
+    if home_flag_threatened(team, own_flag, threats) {
+        return Some(DrivingTarget::DefendHomeBase(own_flag.position));
+    }
+
     enemy_flag
         .holder
         .is_none()
         .then_some(DrivingTarget::EnemyFlag(enemy_flag.position))
+}
+
+fn home_flag_threatened(team: AiTeam, own_flag: &FlagTarget, threats: &[ThreatTarget]) -> bool {
+    own_flag.holder.is_none()
+        && threats.iter().any(|threat| {
+            threat.team == team.enemy()
+                && threat.position.distance_squared(own_flag.position)
+                    <= HOME_FLAG_THREAT_RADIUS * HOME_FLAG_THREAT_RADIUS
+        })
 }
 
 fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
@@ -724,6 +747,7 @@ mod tests {
                     holder: None,
                 },
             ],
+            &[],
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
@@ -750,6 +774,7 @@ mod tests {
                     holder: Some(thief),
                 },
             ],
+            &[],
         );
 
         assert_eq!(
@@ -777,6 +802,7 @@ mod tests {
                     holder: None,
                 },
             ],
+            &[],
         );
 
         assert_eq!(
@@ -804,6 +830,7 @@ mod tests {
                     holder: Some(Entity::from_raw(1)),
                 },
             ],
+            &[],
         );
 
         assert_eq!(
@@ -831,11 +858,74 @@ mod tests {
                     holder: None,
                 },
             ],
+            &[],
         );
 
         let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
             panic!("expected escort target, got {target:?}");
         };
         assert_vec2_near(position, Vec2::new(-370.01773, 18.316162));
+    }
+
+    #[test]
+    fn defender_protects_home_flag_before_it_is_stolen() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn defender_ignores_distant_home_flag_threats() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-100.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EnemyFlag(Vec2::new(-450.0, 20.0)))
+        );
     }
 }

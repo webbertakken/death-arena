@@ -4,7 +4,7 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compute_steering, next_waypoint, AiTeam,
-    DrivingChoices, DrivingTarget, FlagTarget, PickupTarget,
+    DrivingChoices, DrivingTarget, FlagTarget, PickupTarget, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -37,6 +37,20 @@ pub fn virtual_player_drive_system(
         .get_single()
         .ok()
         .map(|transform| transform.translation.xy());
+    let virtual_player_threats: Vec<ThreatTarget> = query
+        .iter()
+        .map(|(_, virtual_player, transform)| ThreatTarget {
+            team: virtual_player.team,
+            position: transform.translation.xy(),
+        })
+        .collect();
+    let mut threats = virtual_player_threats;
+    if let Some(position) = player_position {
+        threats.push(ThreatTarget {
+            team: AiTeam::Blue,
+            position,
+        });
+    }
     let mut available_pickups: Vec<PickupTarget> = pickup_query
         .iter()
         .map(|(transform, pickup)| PickupTarget {
@@ -61,8 +75,8 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target =
-            choose_capture_the_flag_target(entity, ai.team, &flags).and_then(|target| {
+        let ctf_target = choose_capture_the_flag_target(entity, ai.team, &flags, &threats)
+            .and_then(|target| {
                 coordinate_ctf_target(target, ai.team, &flags, &claimed_ctf_targets)
             });
         if let Some(target) = ctf_target {
@@ -499,6 +513,36 @@ mod tests {
         assert!(
             transform.translation.x < 0.0,
             "expected opponent to turn towards blue flag, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn defends_red_flag_when_player_is_about_to_steal_it() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(250.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-400.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to defend the threatened red flag, x={}",
             transform.translation.x
         );
     }
