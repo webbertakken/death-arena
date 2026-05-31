@@ -160,12 +160,18 @@ fn assigned_ctf_targets(
     let candidates: Vec<CtfTargetCandidate> = query
         .iter()
         .filter_map(|(entity, virtual_player, transform)| {
+            let home_base = flags
+                .iter()
+                .find(|flag| flag.team == virtual_player.team)?
+                .home;
             choose_capture_the_flag_target(entity, virtual_player.team, flags, threats).map(
                 |target| CtfTargetCandidate {
                     entity,
                     team: virtual_player.team,
                     position: transform.translation.xy(),
                     target,
+                    home_base,
+                    carries_enemy_flag: carries_enemy_flag(entity, virtual_player.team, flags),
                 },
             )
         })
@@ -180,6 +186,8 @@ struct CtfTargetCandidate {
     team: AiTeam,
     position: Vec2,
     target: DrivingTarget,
+    home_base: Vec2,
+    carries_enemy_flag: bool,
 }
 
 fn assign_ctf_targets(
@@ -192,11 +200,22 @@ fn assign_ctf_targets(
             let target = if is_best_candidate_for_target(*candidate, candidates) {
                 Some(candidate.target)
             } else {
-                defend_home_target(candidate.team, flags)
+                fallback_ctf_target(*candidate, flags)
             };
             (candidate.entity, target)
         })
         .collect()
+}
+
+fn fallback_ctf_target(
+    candidate: CtfTargetCandidate,
+    flags: &[FlagTarget],
+) -> Option<DrivingTarget> {
+    if candidate.carries_enemy_flag {
+        return Some(DrivingTarget::HomeBase(candidate.home_base));
+    }
+
+    defend_home_target(candidate.team, flags)
 }
 
 fn is_best_candidate_for_target(
@@ -219,6 +238,20 @@ fn compare_ctf_target_candidates(
     a: &CtfTargetCandidate,
     b: &CtfTargetCandidate,
 ) -> std::cmp::Ordering {
+    if matches!(a.target, DrivingTarget::StolenHomeFlag(_)) {
+        return a
+            .carries_enemy_flag
+            .cmp(&b.carries_enemy_flag)
+            .then_with(|| compare_ctf_target_distance(a, b));
+    }
+
+    compare_ctf_target_distance(a, b)
+}
+
+fn compare_ctf_target_distance(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+) -> std::cmp::Ordering {
     a.position
         .distance_squared(a.target.position())
         .partial_cmp(&b.position.distance_squared(b.target.position()))
@@ -235,6 +268,12 @@ fn compare_ctf_target_candidates(
                 .partial_cmp(&b.position.y)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
+}
+
+fn carries_enemy_flag(entity: Entity, team: AiTeam, flags: &[FlagTarget]) -> bool {
+    flags
+        .iter()
+        .any(|flag| flag.team == team.enemy() && flag.holder == Some(entity))
 }
 
 fn defend_home_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
@@ -582,12 +621,16 @@ mod tests {
             team: AiTeam::Red,
             position: Vec2::new(350.0, 0.0),
             target: DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
         };
         let second = CtfTargetCandidate {
             entity: Entity::from_raw(2),
             team: AiTeam::Red,
             position: Vec2::new(0.0, 0.0),
             target: DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
         };
         let assignments = assign_ctf_targets(
             &[first, second],
@@ -621,12 +664,16 @@ mod tests {
             team: AiTeam::Red,
             position: Vec2::new(-50.0, 0.0),
             target: DrivingTarget::EnemyFlag(Vec2::ZERO),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
         };
         let right = CtfTargetCandidate {
             entity: Entity::from_raw(2),
             team: AiTeam::Red,
             position: Vec2::new(50.0, 0.0),
             target: DrivingTarget::EnemyFlag(Vec2::ZERO),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
         };
         let flags = [FlagTarget {
             team: AiTeam::Red,
@@ -872,6 +919,47 @@ mod tests {
             transform.translation.x < 0.0,
             "expected flag carrier to defend stolen home flag, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn teammate_defends_stolen_home_flag_before_flag_carrier() {
+        let mut app = app_with_system();
+        let carrier = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let defender = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 50.0, 4.0),
+        );
+        let player = spawn_player(&mut app, Vec3::new(-800.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(0.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(-800.0, 0.0, 2.0),
+            Some(player),
+        );
+
+        app.update();
+
+        let carrier_transform = app.world.get::<Transform>(carrier).unwrap();
+        let defender_transform = app.world.get::<Transform>(defender).unwrap();
+        assert!(
+            carrier_transform.translation.x > 0.0,
+            "flag carrier should wait on the scoring route, x={}",
+            carrier_transform.translation.x
+        );
+        assert!(
+            defender_transform.translation.x < 0.0,
+            "free teammate should chase the stolen home flag, x={}",
+            defender_transform.translation.x
         );
     }
 
