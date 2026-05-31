@@ -127,8 +127,16 @@ fn advance_respawns(respawns: &mut PickupRespawns) -> Vec<(PickupKind, Vec2)> {
 pub fn pickup_respawn_system(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    match_result: Option<Res<CtfMatchResult>>,
     mut respawns: ResMut<PickupRespawns>,
 ) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
     let texture = asset_server.load("textures/wrench.png");
     for (kind, position) in advance_respawns(&mut respawns) {
         commands.spawn((
@@ -463,6 +471,33 @@ mod tests {
         assert_eq!(
             respawns.pending[0].frames_remaining,
             PICKUP_RESPAWN_FRAMES - 1
+        );
+    }
+
+    #[test]
+    fn finished_match_pauses_pickup_respawns() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugin(bevy::asset::AssetPlugin::default());
+        app.init_resource::<PickupRespawns>();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Opponents),
+        });
+        app.add_system(pickup_respawn_system);
+        app.world
+            .resource_mut::<PickupRespawns>()
+            .queue(PickupKind::Repair, Vec2::new(-12.0, 34.0));
+        app.world.resource_mut::<PickupRespawns>().pending[0].frames_remaining = 1;
+
+        app.update();
+
+        let respawns = app.world.resource::<PickupRespawns>();
+        assert_eq!(respawns.pending.len(), 1);
+        assert_eq!(respawns.pending[0].frames_remaining, 1);
+        assert_eq!(
+            app.world.query::<&Pickup>().iter(&app.world).count(),
+            0,
+            "post-match respawn should stay paused"
         );
     }
 }
