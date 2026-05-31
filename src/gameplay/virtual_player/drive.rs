@@ -1098,6 +1098,49 @@ mod tests {
     }
 
     #[test]
+    fn spare_defender_detours_for_pickup_on_home_lane() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-400.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+
+        assert!(
+            first_transform.translation.x < 0.0,
+            "expected attacker to keep the blue flag role, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "expected spare defender to detour through the home-lane pickup, x={}",
+            second_transform.translation.x
+        );
+    }
+
+    #[test]
     fn nitro_boost_increases_virtual_player_distance() {
         let normal_y = one_frame_ai_y(AiTeam::Red, None);
         let boosted_y = one_frame_ai_y(AiTeam::Red, Some(NitroBoosts::trigger_opponent));

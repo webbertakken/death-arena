@@ -268,7 +268,10 @@ fn pickup_detour(
     target: DrivingTarget,
     choices: &DrivingChoices<'_>,
 ) -> Option<PickupTarget> {
-    if !matches!(target, DrivingTarget::EnemyFlag(_)) {
+    if !matches!(
+        target,
+        DrivingTarget::EnemyFlag(_) | DrivingTarget::DefendHomeBase(_)
+    ) {
         return None;
     }
 
@@ -796,6 +799,53 @@ mod tests {
         assert_eq!(
             target,
             Some(DrivingTarget::StolenHomeFlag(Vec2::new(-300.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn home_defender_detours_for_pickup_on_defensive_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 0.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::DefendHomeBase(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn home_defender_ignores_pickup_far_off_defensive_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 70.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::DefendHomeBase(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::DefendHomeBase(Vec2::new(300.0, 0.0)))
         );
     }
 
