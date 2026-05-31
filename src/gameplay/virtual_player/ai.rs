@@ -131,6 +131,11 @@ pub fn choose_capture_the_flag_target(
         return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
     }
 
+    if own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
+    {
+        return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
+    }
+
     if enemy_flag.holder == Some(ai_entity) {
         return Some(DrivingTarget::HomeBase(own_flag.home));
     }
@@ -947,6 +952,34 @@ mod tests {
                     home: Vec2::new(500.0, 0.0),
                     position: Vec2::new(100.0, 0.0),
                     holder: Some(Entity::from_raw(1)),
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(100.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn defender_recovers_dropped_own_flag_before_enemy_flag() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: None,
                 },
             ],
             &[],

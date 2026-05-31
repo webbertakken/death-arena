@@ -159,7 +159,9 @@ fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorStat
         return;
     };
 
-    if own_flag.holder.is_some()
+    let own_flag_is_away = own_flag.holder.is_some()
+        || own_flag.position.distance_squared(own_flag.home) > f32::EPSILON;
+    if own_flag_is_away
         && own_flag.holder != Some(collector.entity)
         && collector.position.distance_squared(own_flag.position)
             <= FLAG_TOUCH_RADIUS * FLAG_TOUCH_RADIUS
@@ -582,6 +584,25 @@ mod tests {
         let mut flags = vec![
             FlagState {
                 holder: Some(entity(2)),
+                position: Vec2::new(-20.0, 0.0),
+                ..flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0))
+            },
+            flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0)),
+        ];
+        let collector = blue_collector(Vec2::ZERO);
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[collector], &mut score);
+
+        assert_eq!(score, CaptureScore::default());
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, flags[0].home);
+    }
+
+    #[test]
+    fn player_returns_dropped_blue_flag_by_touching_it() {
+        let mut flags = vec![
+            FlagState {
                 position: Vec2::new(-20.0, 0.0),
                 ..flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0))
             },
