@@ -1067,10 +1067,10 @@ mod tests {
     }
 
     #[test]
-    fn defender_chases_stolen_red_flag_before_enemy_flag() {
+    fn defender_intercepts_stolen_red_flag_before_enemy_flag() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
-        let player = spawn_player(&mut app, Vec3::new(200.0, 0.0, 5.0));
+        let player = spawn_player(&mut app, Vec3::new(300.0, 0.0, 5.0));
         spawn_flag(
             &mut app,
             FlagTeam::Blue,
@@ -1091,13 +1091,13 @@ mod tests {
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert!(
             transform.translation.x > 0.0,
-            "expected defender to turn towards stolen red flag, x={}",
+            "expected defender to cut off the stolen red flag, x={}",
             transform.translation.x
         );
     }
 
     #[test]
-    fn defender_chases_current_carrier_position_for_held_home_flag() {
+    fn defender_intercepts_current_carrier_for_held_home_flag() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
         let player = spawn_player(&mut app, Vec3::new(250.0, 0.0, 5.0));
@@ -1121,7 +1121,7 @@ mod tests {
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert!(
             transform.translation.x > 0.0,
-            "expected defender to chase the current carrier position, x={}",
+            "expected defender to cut off the current carrier, x={}",
             transform.translation.x
         );
     }

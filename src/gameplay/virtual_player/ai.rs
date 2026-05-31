@@ -128,7 +128,10 @@ pub fn choose_capture_the_flag_target(
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
 
     if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
-        return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
+        return Some(DrivingTarget::StolenHomeFlag(stolen_flag_intercept_point(
+            own_flag.position,
+            enemy_flag.home,
+        )));
     }
 
     if own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
@@ -208,6 +211,19 @@ fn defensive_intercept_point(flag_position: Vec2, threat_position: Vec2) -> Vec2
     }
 
     let Some(direction) = to_threat.try_normalize() else {
+        return flag_position;
+    };
+    flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE
+}
+
+fn stolen_flag_intercept_point(flag_position: Vec2, enemy_home: Vec2) -> Vec2 {
+    let to_enemy_home = enemy_home - flag_position;
+    let distance = to_enemy_home.length();
+    if distance <= HOME_FLAG_DEFENSE_DISTANCE {
+        return flag_position;
+    }
+
+    let Some(direction) = to_enemy_home.try_normalize() else {
         return flag_position;
     };
     flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE
@@ -904,7 +920,7 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-200.0, 0.0)))
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-340.0, 0.0)))
         );
     }
 
@@ -960,7 +976,35 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::StolenHomeFlag(Vec2::new(100.0, 0.0)))
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-40.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn defender_intercepts_stolen_home_flag_towards_enemy_base() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-500.0, 0.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(Entity::from_raw(1)),
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-40.0, 0.0)))
         );
     }
 
