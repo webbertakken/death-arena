@@ -33,6 +33,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate Pages workflow
+        run: bash scripts/check_pages_workflow.sh
+
       # Restore LFS assets from cache, so that you don't have to check them out every time, which saves GitHub bundle costs.
       - name: Create LFS file list
         run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
@@ -73,13 +76,10 @@ jobs:
 
       - name: Build Release
         run: |
-          trunk build --release --public-url "${GITHUB_REPOSITORY#*/}"
+          trunk build --release --public-url "/${GITHUB_REPOSITORY#*/}/"
 
-      # Optimise the build.
-      - name: Optimize Wasm
-        uses: NiklasEi/wasm-opt-action@v2
-        with:
-          file: dist/*.wasm
+      - name: Validate Pages dist
+        run: bash scripts/check_pages_dist.sh
 
 #      # This step actually creates a branch named gh-pages.
 #      # which is really not what you want if you have 5MB+ in assets.
