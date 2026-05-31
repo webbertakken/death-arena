@@ -1,12 +1,14 @@
 use arena::ArenaPlugin;
 use bevy::app::PluginGroup;
 use bevy::app::PluginGroupBuilder;
+use ctf::CtfPlugin;
 
 use pickup::PickupPlugin;
 use player::PlayerPlugin;
 use virtual_player::VirtualPlayerPlugin;
 
 mod arena;
+mod ctf;
 mod main;
 mod pickup;
 mod player;
@@ -20,6 +22,7 @@ impl PluginGroup for GameplayPlugins {
             .add(PlayerPlugin)
             .add(VirtualPlayerPlugin)
             .add(PickupPlugin)
+            .add(CtfPlugin)
             .add(ArenaPlugin)
     }
 }

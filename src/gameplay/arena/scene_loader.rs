@@ -1,6 +1,7 @@
 use crate::app::physics::collider::ColliderData;
 
 use crate::gameplay::arena::scene::{Position, Scale, Scene, SpriteData};
+use crate::gameplay::ctf::{flag_team_from_asset_path, CtfFlag};
 use crate::gameplay::main::BOUNDS;
 
 use crate::AppState;
@@ -160,6 +161,12 @@ pub fn move_to_next_state(
         info!("All images loaded");
 
         for sprite in &state.handles {
+            let translation = Vec3::new(
+                -BOUNDS.x / 2.0 + sprite.position.x,
+                BOUNDS.y / 2.0 - sprite.position.y,
+                sprite.position.z,
+            );
+
             // Spawn the object
             let mut my_handle = commands.spawn_empty();
 
@@ -173,17 +180,21 @@ pub fn move_to_next_state(
                         ..default()
                     },
                     transform: Transform {
-                        translation: Vec3::new(
-                            -BOUNDS.x / 2.0 + sprite.position.x,
-                            BOUNDS.y / 2.0 - sprite.position.y,
-                            sprite.position.z,
-                        ),
+                        translation,
                         scale: Vec3::new(sprite.scale.x, sprite.scale.y, 1.0),
                         rotation: Quat::from_rotation_z(-sprite.rotation.to_radians()),
                     },
                     ..default()
                 },
             ));
+
+            if let Some(team) = flag_team_from_asset_path(&sprite.name) {
+                my_handle.insert(CtfFlag {
+                    team,
+                    home: translation.truncate(),
+                    holder: None,
+                });
+            }
 
             // Body
             my_handle.insert(if sprite.is_static {
