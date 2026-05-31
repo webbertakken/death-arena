@@ -8,6 +8,9 @@ pub const MIN_THROTTLE: f32 = 0.3;
 /// Within this range steering is proportional to the heading error.
 pub const STEER_RANGE: f32 = std::f32::consts::FRAC_PI_4;
 
+/// Distance ahead of a friendly flag carrier that an escort tries to occupy.
+pub const ESCORT_LEAD_DISTANCE: f32 = 80.0;
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -116,13 +119,29 @@ pub fn choose_capture_the_flag_target(
     }
 
     if enemy_flag.holder.is_some() {
-        return Some(DrivingTarget::EscortFlagCarrier(enemy_flag.position));
+        return Some(DrivingTarget::EscortFlagCarrier(escort_lead_point(
+            enemy_flag.position,
+            own_flag.home,
+        )));
     }
 
     enemy_flag
         .holder
         .is_none()
         .then_some(DrivingTarget::EnemyFlag(enemy_flag.position))
+}
+
+fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
+    let to_home = home - carrier_position;
+    let distance = to_home.length();
+    if distance <= ESCORT_LEAD_DISTANCE {
+        return home;
+    }
+
+    let Some(direction) = to_home.try_normalize() else {
+        return carrier_position;
+    };
+    carrier_position + direction * ESCORT_LEAD_DISTANCE
 }
 
 /// Pick the next driving target for a virtual player.
@@ -278,6 +297,7 @@ mod tests {
     use super::*;
 
     const ARRIVE: f32 = 10.0;
+    const EPSILON: f32 = 1e-3;
 
     fn choices<'a>(
         waypoints: &'a [Vec2],
@@ -296,6 +316,13 @@ mod tests {
             player_position,
             player_pursuit_radius,
         }
+    }
+
+    fn assert_vec2_near(actual: Vec2, expected: Vec2) {
+        assert!(
+            actual.distance(expected) <= EPSILON,
+            "actual={actual}, expected={expected}"
+        );
     }
 
     #[test]
@@ -738,9 +765,9 @@ mod tests {
             ],
         );
 
-        assert_eq!(
-            target,
-            Some(DrivingTarget::EscortFlagCarrier(Vec2::new(-450.0, 20.0)))
-        );
+        let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
+            panic!("expected escort target, got {target:?}");
+        };
+        assert_vec2_near(position, Vec2::new(-370.01773, 18.316162));
     }
 }
