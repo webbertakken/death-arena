@@ -1,5 +1,4 @@
 use crate::gameplay::ctf::CtfMatchResult;
-use crate::gameplay::pickup::collect::nearest_collectible;
 use crate::gameplay::pickup::{
     NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
 };
@@ -44,29 +43,13 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
         .collect();
     let mut available: Vec<(Entity, PickupKind, Vec2)> = pickups;
 
-    if let Ok(player_transform) = params.player_query.get_single() {
-        let collector = player_transform.translation.xy();
-        let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
+    let collectors = pickup_collectors(&params.player_query, &params.virtual_player_query);
 
-        if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
-            let (entity, kind, position) = available.swap_remove(index);
-            params.score.collect(kind);
-            if kind == PickupKind::Nitro {
-                params.nitro_boosts.trigger_player();
-            }
-            params.respawns.queue(kind, position);
-            commands.entity(entity).despawn_recursive();
-        }
-    }
-
-    for (virtual_player, virtual_player_transform) in &params.virtual_player_query {
-        let collector = virtual_player_transform.translation.xy();
-        let positions: Vec<Vec2> = available.iter().map(|&(_, _, pos)| pos).collect();
-
-        if let Some(index) = nearest_collectible(collector, &positions, PICKUP_RADIUS) {
+    for (collector_index, collector) in collectors.iter().copied().enumerate() {
+        if let Some(index) = nearest_claimed_pickup(collector_index, &collectors, &available) {
             let (entity, kind, position) = available.swap_remove(index);
             collect_for_team(
-                virtual_player.team,
+                collector.team,
                 kind,
                 &mut params.score,
                 &mut params.opponent_score,
@@ -76,6 +59,88 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
             commands.entity(entity).despawn_recursive();
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PickupCollector {
+    team: AiTeam,
+    position: Vec2,
+}
+
+fn pickup_collectors(
+    player_query: &Query<&Transform, With<Player>>,
+    virtual_player_query: &Query<(&VirtualPlayer, &Transform), Without<Player>>,
+) -> Vec<PickupCollector> {
+    let mut collectors = Vec::new();
+
+    if let Ok(player_transform) = player_query.get_single() {
+        collectors.push(PickupCollector {
+            team: AiTeam::Blue,
+            position: player_transform.translation.xy(),
+        });
+    }
+
+    collectors.extend(
+        virtual_player_query
+            .iter()
+            .map(|(virtual_player, transform)| PickupCollector {
+                team: virtual_player.team,
+                position: transform.translation.xy(),
+            }),
+    );
+
+    collectors
+}
+
+fn nearest_claimed_pickup(
+    collector_index: usize,
+    collectors: &[PickupCollector],
+    pickups: &[(Entity, PickupKind, Vec2)],
+) -> Option<usize> {
+    pickups
+        .iter()
+        .enumerate()
+        .filter_map(|(pickup_index, &(_, _, position))| {
+            collector_claim_distance_sq(collector_index, collectors, position)
+                .map(|distance_sq| (pickup_index, distance_sq))
+        })
+        .min_by(|(a_index, a_dist), (b_index, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a_index.cmp(b_index))
+        })
+        .map(|(pickup_index, _)| pickup_index)
+}
+
+fn collector_claim_distance_sq(
+    collector_index: usize,
+    collectors: &[PickupCollector],
+    pickup_position: Vec2,
+) -> Option<f32> {
+    let collector_distance_sq = collectors
+        .get(collector_index)?
+        .position
+        .distance_squared(pickup_position);
+    if collector_distance_sq > PICKUP_RADIUS * PICKUP_RADIUS {
+        return None;
+    }
+
+    collectors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, collector)| {
+            let distance_sq = collector.position.distance_squared(pickup_position);
+            (distance_sq <= PICKUP_RADIUS * PICKUP_RADIUS).then_some((index, distance_sq))
+        })
+        .min_by(|(a_index, a_dist), (b_index, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a_index.cmp(b_index))
+        })
+        .filter(|(winner_index, _)| *winner_index == collector_index)
+        .map(|(_, distance_sq)| distance_sq)
 }
 
 fn collect_for_team(
@@ -412,6 +477,24 @@ mod tests {
         );
         assert_eq!(app.world.resource::<OpponentScore>().collected, 0);
         assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+    }
+
+    #[test]
+    fn closer_opponent_wins_contested_pickup() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::new(90.0, 0.0, 0.0));
+        let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(100.0, 0.0, 0.0));
+
+        app.update();
+
+        assert!(app.world.get_entity(pickup).is_none());
+        assert_eq!(app.world.resource::<Score>().collected, 0);
+        assert_eq!(app.world.resource::<Score>().cash, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().collected, 1);
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            PickupKind::Cash.bounty()
+        );
     }
 
     #[test]
