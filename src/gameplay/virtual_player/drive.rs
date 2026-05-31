@@ -237,7 +237,8 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(
         target,
-        DrivingTarget::EnemyFlag(_)
+        DrivingTarget::DefendHomeBase(_)
+            | DrivingTarget::EnemyFlag(_)
             | DrivingTarget::EscortFlagCarrier(_)
             | DrivingTarget::StolenHomeFlag(_)
     )
@@ -554,6 +555,45 @@ mod tests {
             second_transform.translation.y > 0.0,
             "expected second opponent to keep moving, y={}",
             second_transform.translation.y
+        );
+    }
+
+    #[test]
+    fn only_one_virtual_player_intercepts_home_flag_threat() {
+        let first = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(350.0, 0.0),
+            target: DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)),
+        };
+        let second = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(0.0, 0.0),
+            target: DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)),
+        };
+        let assignments = assign_ctf_targets(
+            &[first, second],
+            &[FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            }],
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                ),
+            ]
         );
     }
 
