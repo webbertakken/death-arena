@@ -29,6 +29,9 @@ pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
 /// and commits to finishing the capture.
 pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
 
+/// Minimum pickup priority that justifies interrupting a CTF objective.
+pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -319,7 +322,8 @@ fn pickup_detour(
         choices.pickups,
         choices.pickup_pursuit_radius,
         |pickup| {
-            position.distance_squared(pickup.position) < target_distance_sq
+            pickup.priority >= CTF_PICKUP_DETOUR_MIN_PRIORITY
+                && position.distance_squared(pickup.position) < target_distance_sq
                 && is_ahead_of_target_push(position, pickup.position, target.position())
                 && is_on_target_lane(position, pickup.position, target.position())
         },
@@ -766,6 +770,31 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn attacker_ignores_low_value_pickup_on_flag_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 0.0),
+            priority: 25,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0)))
+        );
     }
 
     #[test]
