@@ -406,4 +406,34 @@ mod tests {
             transform.translation.x
         );
     }
+
+    #[test]
+    fn defender_chases_stolen_red_flag_before_enemy_flag() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let player = spawn_player(&mut app, Vec3::new(200.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(200.0, 0.0, 2.0),
+            Some(player),
+        );
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected defender to turn towards stolen red flag, x={}",
+            transform.translation.x
+        );
+    }
 }

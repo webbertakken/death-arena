@@ -36,6 +36,7 @@ pub enum DrivingTarget {
     PatrolWaypoint(Vec2),
     Pickup(Vec2),
     Player(Vec2),
+    StolenHomeFlag(Vec2),
 }
 
 impl DrivingTarget {
@@ -46,7 +47,8 @@ impl DrivingTarget {
             | Self::EnemyFlag(position)
             | Self::PatrolWaypoint(position)
             | Self::Pickup(position)
-            | Self::Player(position) => position,
+            | Self::Player(position)
+            | Self::StolenHomeFlag(position) => position,
         }
     }
 }
@@ -103,6 +105,10 @@ pub fn choose_capture_the_flag_target(
 
     if enemy_flag.holder == Some(ai_entity) {
         return Some(DrivingTarget::HomeBase(own_flag.home));
+    }
+
+    if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
+        return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
     }
 
     enemy_flag
@@ -496,6 +502,33 @@ mod tests {
         assert_eq!(
             target,
             Some(DrivingTarget::EnemyFlag(Vec2::new(-450.0, 20.0)))
+        );
+    }
+
+    #[test]
+    fn defender_targets_stolen_own_flag_before_enemy_flag() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(Entity::from_raw(1)),
+                },
+            ],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(100.0, 0.0)))
         );
     }
 

@@ -87,6 +87,8 @@ fn advance_capture_the_flag(
     score: &mut CaptureScore,
 ) {
     for collector in collectors {
+        try_return_stolen_own_flag(flags, collector);
+
         if try_score_carried_flag(flags, collector, score) {
             continue;
         }
@@ -105,6 +107,21 @@ fn advance_capture_the_flag(
                 flag.position = collector.position;
             }
         }
+    }
+}
+
+fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorState) {
+    let Some(own_flag) = flags.iter_mut().find(|flag| flag.team == collector.team) else {
+        return;
+    };
+
+    if own_flag.holder.is_some()
+        && own_flag.holder != Some(collector.entity)
+        && collector.position.distance_squared(own_flag.position)
+            <= FLAG_TOUCH_RADIUS * FLAG_TOUCH_RADIUS
+    {
+        own_flag.holder = None;
+        own_flag.position = own_flag.home;
     }
 }
 
@@ -358,6 +375,46 @@ mod tests {
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[1].holder, Some(collector.entity));
+    }
+
+    #[test]
+    fn opponent_returns_stolen_red_flag_by_tagging_player() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0)),
+            FlagState {
+                holder: Some(entity(1)),
+                position: Vec2::new(20.0, 0.0),
+                ..flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0))
+            },
+        ];
+        let collector = red_collector(Vec2::ZERO);
+        let mut score = CaptureScore::default();
+
+        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+
+        assert_eq!(score, CaptureScore::default());
+        assert_eq!(flags[1].holder, None);
+        assert_eq!(flags[1].position, flags[1].home);
+    }
+
+    #[test]
+    fn player_returns_stolen_blue_flag_by_tagging_opponent() {
+        let mut flags = vec![
+            FlagState {
+                holder: Some(entity(2)),
+                position: Vec2::new(-20.0, 0.0),
+                ..flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0))
+            },
+            flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0)),
+        ];
+        let collector = blue_collector(Vec2::ZERO);
+        let mut score = CaptureScore::default();
+
+        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+
+        assert_eq!(score, CaptureScore::default());
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, flags[0].home);
     }
 
     #[test]
