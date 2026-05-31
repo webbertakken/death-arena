@@ -53,9 +53,10 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target = choose_capture_the_flag_target(entity, ai.team, &flags).filter(|target| {
-            !should_coordinate_ctf_target(*target) || !claimed_ctf_targets.contains(target)
-        });
+        let ctf_target =
+            choose_capture_the_flag_target(entity, ai.team, &flags).and_then(|target| {
+                coordinate_ctf_target(target, ai.team, &flags, &claimed_ctf_targets)
+            });
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -114,6 +115,22 @@ pub fn virtual_player_drive_system(
 
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(target, DrivingTarget::EnemyFlag(_))
+}
+
+fn coordinate_ctf_target(
+    target: DrivingTarget,
+    team: AiTeam,
+    flags: &[FlagTarget],
+    claimed_targets: &[DrivingTarget],
+) -> Option<DrivingTarget> {
+    if !should_coordinate_ctf_target(target) || !claimed_targets.contains(&target) {
+        return Some(target);
+    }
+
+    flags
+        .iter()
+        .find(|flag| flag.team == team)
+        .map(|flag| DrivingTarget::DefendHomeBase(flag.home))
 }
 
 #[cfg(test)]
@@ -653,6 +670,43 @@ mod tests {
         assert!(
             second_transform.translation.x > 0.0,
             "expected second opponent to race for another objective, x={}",
+            second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn spare_attacker_defends_home_base_when_enemy_flag_is_claimed() {
+        let mut app = app_with_system();
+        let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_ai).unwrap();
+        let second_transform = app.world.get::<Transform>(second_ai).unwrap();
+
+        assert!(
+            first_transform.translation.x < 0.0,
+            "expected first opponent to claim the blue flag, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "expected spare opponent to defend the red base, x={}",
             second_transform.translation.x
         );
     }

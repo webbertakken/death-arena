@@ -31,6 +31,7 @@ impl SteeringIntent {
 /// The kind of world target a virtual player is currently chasing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DrivingTarget {
+    DefendHomeBase(Vec2),
     HomeBase(Vec2),
     EnemyFlag(Vec2),
     EscortFlagCarrier(Vec2),
@@ -44,7 +45,8 @@ impl DrivingTarget {
     #[must_use]
     pub const fn position(self) -> Vec2 {
         match self {
-            Self::HomeBase(position)
+            Self::DefendHomeBase(position)
+            | Self::HomeBase(position)
             | Self::EnemyFlag(position)
             | Self::EscortFlagCarrier(position)
             | Self::PatrolWaypoint(position)
