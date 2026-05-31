@@ -107,12 +107,12 @@ pub fn choose_capture_the_flag_target(
     let own_flag = flags.iter().find(|flag| flag.team == team)?;
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
 
-    if enemy_flag.holder == Some(ai_entity) {
-        return Some(DrivingTarget::HomeBase(own_flag.home));
-    }
-
     if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
         return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
+    }
+
+    if enemy_flag.holder == Some(ai_entity) {
+        return Some(DrivingTarget::HomeBase(own_flag.home));
     }
 
     if enemy_flag.holder.is_some() {
@@ -632,6 +632,35 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+    }
+
+    #[test]
+    fn carrier_hunts_stolen_home_flag_before_returning_to_base() {
+        let ai = Entity::from_raw(7);
+        let thief = Entity::from_raw(1);
+        let target = choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(-200.0, 0.0),
+                    holder: Some(thief),
+                },
+            ],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-200.0, 0.0)))
+        );
     }
 
     #[test]
