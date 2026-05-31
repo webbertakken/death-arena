@@ -107,7 +107,7 @@ pub struct ThreatTarget {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PickupTarget {
     pub position: Vec2,
-    pub bounty: u32,
+    pub priority: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -250,7 +250,7 @@ fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
 ///
 /// Valuable nearby pickups take priority over the patrol route and CTF lane
 /// pushes so opponents can steal trackside rewards without abandoning the play.
-/// When multiple pickups are in range, virtual players chase the richest bounty
+/// When multiple pickups are in range, virtual players chase the highest priority
 /// first and use distance as the tie-breaker.
 #[must_use]
 pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Option<DrivingTarget> {
@@ -345,7 +345,7 @@ fn best_pickup(
             (distance_sq <= radius_sq).then_some((pickup, distance_sq))
         })
         .min_by(|(a_pickup, a_dist), (b_pickup, b_dist)| {
-            b_pickup.bounty.cmp(&a_pickup.bounty).then_with(|| {
+            b_pickup.priority.cmp(&a_pickup.priority).then_with(|| {
                 a_dist
                     .partial_cmp(b_dist)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -555,7 +555,7 @@ mod tests {
         let waypoints = [Vec2::new(500.0, 0.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -571,11 +571,11 @@ mod tests {
         let pickups = [
             PickupTarget {
                 position: Vec2::new(25.0, 0.0),
-                bounty: 25,
+                priority: 25,
             },
             PickupTarget {
                 position: Vec2::new(75.0, 0.0),
-                bounty: 100,
+                priority: 100,
             },
         ];
         let target = choose_driving_target(
@@ -590,7 +590,7 @@ mod tests {
     fn flag_carrier_prioritises_home_base_over_off_lane_pickup_detours() {
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 80.0),
-            bounty: 100,
+            priority: 100,
         }];
         let home = Vec2::new(500.0, 0.0);
         let target = choose_driving_target(
@@ -614,7 +614,7 @@ mod tests {
         let waypoints = [waypoint];
         let pickups = [PickupTarget {
             position: Vec2::new(250.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -648,7 +648,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(-50.0, 0.0),
-            bounty: 25,
+            priority: 25,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -682,7 +682,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(-25.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -705,11 +705,11 @@ mod tests {
         let pickups = [
             PickupTarget {
                 position: Vec2::new(80.0, 0.0),
-                bounty: 50,
+                priority: 50,
             },
             PickupTarget {
                 position: Vec2::new(420.0, 0.0),
-                bounty: 100,
+                priority: 100,
             },
         ];
         let target = choose_driving_target(
@@ -733,11 +733,11 @@ mod tests {
         let pickups = [
             PickupTarget {
                 position: Vec2::new(80.0, 0.0),
-                bounty: 50,
+                priority: 50,
             },
             PickupTarget {
                 position: Vec2::new(60.0, 70.0),
-                bounty: 100,
+                priority: 100,
             },
         ];
         let target = choose_driving_target(
@@ -760,7 +760,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(100.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -785,7 +785,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -810,7 +810,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(-80.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let home = Vec2::new(-300.0, 0.0);
         let target = choose_driving_target(
@@ -833,7 +833,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -858,7 +858,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(80.0, 0.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,
@@ -880,7 +880,7 @@ mod tests {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(80.0, 70.0),
-            bounty: 100,
+            priority: 100,
         }];
         let target = choose_driving_target(
             Vec2::ZERO,

@@ -134,7 +134,7 @@ fn pickup_targets(
         .iter()
         .map(|(transform, pickup)| PickupTarget {
             position: transform.translation.xy(),
-            bounty: pickup.kind.bounty(),
+            priority: pickup.kind.virtual_player_priority(),
         })
         .collect()
 }
@@ -620,6 +620,33 @@ mod tests {
         assert!(
             transform.translation.x > 0.0,
             "expected opponent to turn towards richer pickup, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pursues_nitro_before_cash_for_race_pressure() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(-25.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Nitro,
+            },
+            Transform::from_translation(Vec3::new(150.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to prioritise nitro pressure, x={}",
             transform.translation.x
         );
     }
