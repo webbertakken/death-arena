@@ -275,7 +275,7 @@ fn pickup_detour(
 ) -> Option<PickupTarget> {
     if !matches!(
         target,
-        DrivingTarget::EnemyFlag(_) | DrivingTarget::HomeBase(_) | DrivingTarget::DefendHomeBase(_)
+        DrivingTarget::EnemyFlag(_) | DrivingTarget::DefendHomeBase(_)
     ) {
         return None;
     }
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_detours_for_pickup_on_route_home() {
+    fn flag_carrier_prioritises_home_base_over_pickup_detours() {
         let pickups = [PickupTarget {
             position: Vec2::new(25.0, 0.0),
             bounty: 100,
@@ -557,7 +557,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
+        assert_eq!(target, Some(DrivingTarget::HomeBase(home)));
     }
 
     #[test]
@@ -758,25 +758,26 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_takes_pickup_on_route_home() {
+    fn flag_carrier_ignores_pickup_on_route_home() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
             position: Vec2::new(-80.0, 0.0),
             bounty: 100,
         }];
+        let home = Vec2::new(-300.0, 0.0);
         let target = choose_driving_target(
             Vec2::ZERO,
             choices(
                 &waypoints,
                 0,
-                Some(DrivingTarget::HomeBase(Vec2::new(-300.0, 0.0))),
+                Some(DrivingTarget::HomeBase(home)),
                 &pickups,
                 None,
                 0.0,
             ),
         );
 
-        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-80.0, 0.0))));
+        assert_eq!(target, Some(DrivingTarget::HomeBase(home)));
     }
 
     #[test]
