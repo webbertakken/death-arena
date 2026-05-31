@@ -124,7 +124,9 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(
         target,
-        DrivingTarget::EnemyFlag(_) | DrivingTarget::EscortFlagCarrier(_)
+        DrivingTarget::EnemyFlag(_)
+            | DrivingTarget::EscortFlagCarrier(_)
+            | DrivingTarget::StolenHomeFlag(_)
     )
 }
 
@@ -707,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn all_virtual_players_hunt_stolen_red_flag() {
+    fn only_one_virtual_player_intercepts_stolen_red_flag() {
         let mut app = app_with_system();
         let first_ai = spawn_ai_at(
             &mut app,
@@ -719,7 +721,7 @@ mod tests {
             vec![Vec2::new(0.0, 1000.0)],
             Vec3::new(0.0, 50.0, 4.0),
         );
-        let player = spawn_player(&mut app, Vec3::new(800.0, 0.0, 5.0));
+        let player = spawn_player(&mut app, Vec3::new(-800.0, 0.0, 5.0));
         spawn_flag(
             &mut app,
             FlagTeam::Blue,
@@ -731,7 +733,7 @@ mod tests {
             &mut app,
             FlagTeam::Red,
             Vec2::new(500.0, 0.0),
-            Vec3::new(800.0, 0.0, 2.0),
+            Vec3::new(-800.0, 0.0, 2.0),
             Some(player),
         );
 
@@ -740,13 +742,13 @@ mod tests {
         let first_transform = app.world.get::<Transform>(first_ai).unwrap();
         let second_transform = app.world.get::<Transform>(second_ai).unwrap();
         assert!(
-            first_transform.translation.x > 0.0,
+            first_transform.translation.x < 0.0,
             "first opponent should hunt the flag carrier, x={}",
             first_transform.translation.x
         );
         assert!(
             second_transform.translation.x > 0.0,
-            "second opponent should also hunt the flag carrier, x={}",
+            "second opponent should defend the red base instead, x={}",
             second_transform.translation.x
         );
     }
