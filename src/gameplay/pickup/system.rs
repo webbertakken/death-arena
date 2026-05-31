@@ -167,7 +167,17 @@ fn collect_for_team(
 }
 
 /// Advances active nitro timers by one fixed frame.
-pub fn nitro_boost_decay_system(mut nitro_boosts: ResMut<NitroBoosts>) {
+pub fn nitro_boost_decay_system(
+    match_result: Option<Res<CtfMatchResult>>,
+    mut nitro_boosts: ResMut<NitroBoosts>,
+) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
     nitro_boosts.tick();
 }
 
@@ -458,6 +468,24 @@ mod tests {
         assert_eq!(
             app.world.resource::<NitroBoosts>().player_frames,
             crate::gameplay::pickup::NITRO_BOOST_FRAMES - 1
+        );
+    }
+
+    #[test]
+    fn finished_match_pauses_nitro_boost_decay() {
+        let mut app = App::new();
+        app.init_resource::<NitroBoosts>();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.add_system(nitro_boost_decay_system);
+        app.world.resource_mut::<NitroBoosts>().trigger_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
         );
     }
 
