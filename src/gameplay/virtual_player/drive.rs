@@ -65,7 +65,7 @@ pub fn virtual_player_drive_system(
                 ctf_target,
                 pickups: &available_pickups,
                 pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
-                player_position,
+                player_position: player_position_for_team(ai.team, player_position),
                 player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
             },
         ) else {
@@ -122,6 +122,13 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
 
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(target, DrivingTarget::EnemyFlag(_))
+}
+
+const fn player_position_for_team(team: AiTeam, player_position: Option<Vec2>) -> Option<Vec2> {
+    match team {
+        AiTeam::Blue => None,
+        AiTeam::Red => player_position,
+    }
 }
 
 fn coordinate_ctf_target(
@@ -326,6 +333,27 @@ mod tests {
             transform.translation.x > 0.0,
             "expected opponent to turn towards player, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn blue_virtual_player_does_not_chase_human_teammate() {
+        let mut app = app_with_system();
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(200.0, 0.0, 5.0));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x.abs() < 1e-4,
+            "expected blue teammate to stay on patrol, x={}",
+            transform.translation.x
+        );
+        assert!(
+            transform.translation.y > 0.0,
+            "expected blue teammate to keep moving, y={}",
+            transform.translation.y
         );
     }
 
