@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn attacker_detours_for_closer_pickup_before_distant_blue_flag() {
+    fn attacker_detours_for_closer_pickup_along_blue_flag_push() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
         spawn_flag(
@@ -478,15 +478,15 @@ mod tests {
             Pickup {
                 kind: crate::gameplay::pickup::PickupKind::Cash,
             },
-            Transform::from_translation(Vec3::new(100.0, 0.0, 2.0)),
+            Transform::from_translation(Vec3::new(-100.0, 0.0, 2.0)),
         ));
 
         app.update();
 
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert!(
-            transform.translation.x > 0.0,
-            "expected attacker to detour towards closer pickup, x={}",
+            transform.translation.x < 0.0,
+            "expected attacker to stay on the flag-side pickup lane, x={}",
             transform.translation.x
         );
     }

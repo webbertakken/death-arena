@@ -181,8 +181,17 @@ fn pickup_detour(
         position,
         choices.pickups,
         choices.pickup_pursuit_radius,
-        |pickup| position.distance_squared(pickup.position) < target_distance_sq,
+        |pickup| {
+            position.distance_squared(pickup.position) < target_distance_sq
+                && is_ahead_of_target_push(position, pickup.position, target.position())
+        },
     )
+}
+
+fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
+    let to_pickup = pickup - position;
+    let to_target = target - position;
+    to_pickup.dot(to_target) > 0.0
 }
 
 fn best_pickup(
@@ -479,7 +488,7 @@ mod tests {
     fn targets_closer_pickup_before_distant_enemy_flag() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
-            position: Vec2::new(25.0, 0.0),
+            position: Vec2::new(-25.0, 0.0),
             bounty: 100,
         }];
         let target = choose_driving_target(
@@ -494,7 +503,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(-25.0, 0.0))));
     }
 
     #[test]
@@ -523,6 +532,31 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn attacker_ignores_pickup_behind_enemy_flag_push() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(100.0, 0.0),
+            bounty: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(-300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::EnemyFlag(Vec2::new(-300.0, 0.0)))
+        );
     }
 
     #[test]
