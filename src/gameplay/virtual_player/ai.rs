@@ -1,8 +1,12 @@
 use bevy::prelude::*;
 
 /// Minimum forward throttle so a virtual player keeps moving (and can therefore
-/// keep turning) even when its target is to the side or behind it.
+/// keep turning) even when its target is to the side.
 pub const MIN_THROTTLE: f32 = 0.3;
+
+/// Heading dot-product below which a virtual player backs up instead of doing a
+/// wide forward loop.
+pub const REVERSE_DOT_THRESHOLD: f32 = -0.35;
 
 /// Angular error (radians) at which the steering output saturates to full lock.
 /// Within this range steering is proportional to the heading error.
@@ -379,13 +383,31 @@ pub fn compute_steering(
     // Signed angle from the car's heading to the target direction.
     // Positive => target is to the left (counter-clockwise).
     let angle = heading.perp_dot(dir).atan2(heading.dot(dir));
-    let steer = (angle / STEER_RANGE).clamp(-1.0, 1.0);
+    let alignment = heading.dot(dir);
+
+    if alignment < REVERSE_DOT_THRESHOLD {
+        return reverse_steering_intent(angle, alignment);
+    }
 
     // Drive hardest when aligned, but never stall: a car cannot strafe, so it
-    // must keep rolling to rotate towards a target that is to the side/behind.
-    let throttle = heading.dot(dir).clamp(MIN_THROTTLE, 1.0);
+    // must keep rolling to rotate towards a target that is to the side.
+    let steer = (angle / STEER_RANGE).clamp(-1.0, 1.0);
+    let throttle = alignment.clamp(MIN_THROTTLE, 1.0);
 
     SteeringIntent { throttle, steer }
+}
+
+fn reverse_steering_intent(angle: f32, alignment: f32) -> SteeringIntent {
+    let reverse_angle = if angle >= 0.0 {
+        angle - std::f32::consts::PI
+    } else {
+        angle + std::f32::consts::PI
+    };
+
+    SteeringIntent {
+        throttle: alignment.clamp(-1.0, -MIN_THROTTLE),
+        steer: (reverse_angle / STEER_RANGE).clamp(-1.0, 1.0),
+    }
 }
 
 /// Index of the next waypoint in a cyclic patrol route.
@@ -478,17 +500,27 @@ mod tests {
     }
 
     #[test]
-    fn saturates_steering_when_target_is_behind() {
-        // Facing +Y; target directly behind (-Y) but slightly left so the sign
-        // is well defined.
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(-1.0, -500.0), ARRIVE);
-        assert!((intent.steer - 1.0).abs() < 1e-4, "steer {}", intent.steer);
-        // Still crawls forward so it can spin around.
+    fn reverses_left_when_target_is_in_left_rear_quarter() {
+        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(-500.0, -500.0), ARRIVE);
+
+        assert!((intent.steer + 1.0).abs() < 1e-4, "steer {}", intent.steer);
         assert!(
-            (intent.throttle - MIN_THROTTLE).abs() < 1e-4,
+            (intent.throttle + std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4,
             "throttle {}",
             intent.throttle
         );
+    }
+
+    #[test]
+    fn reverses_when_target_is_directly_behind() {
+        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(0.0, -500.0), ARRIVE);
+
+        assert!(
+            intent.throttle < 0.0,
+            "expected reverse throttle, got {}",
+            intent.throttle
+        );
+        assert!(intent.steer.abs() < 1e-4, "steer {}", intent.steer);
     }
 
     #[test]

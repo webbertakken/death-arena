@@ -441,6 +441,21 @@ mod tests {
     }
 
     #[test]
+    fn reverses_towards_a_waypoint_behind_the_car() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, -1000.0)]);
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.y < 0.0,
+            "expected reverse movement, y={}",
+            transform.translation.y
+        );
+    }
+
+    #[test]
     fn finished_match_stops_virtual_players() {
         let mut app = app_with_system();
         app.insert_resource(CtfMatchResult {
