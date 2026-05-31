@@ -2,6 +2,6 @@
 set -euo pipefail
 
 cargo fmt --all -- --check
-cargo clippy -- -D warnings
-cargo test
-cargo check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+cargo check --all-targets --all-features

@@ -986,7 +986,7 @@ mod tests {
         let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
             panic!("expected escort target, got {target:?}");
         };
-        assert_vec2_near(position, Vec2::new(-370.01773, 18.316162));
+        assert_vec2_near(position, Vec2::new(-370.01773, 18.316_162));
     }
 
     #[test]
