@@ -124,6 +124,8 @@ fn advance_capture_the_flag(
         return;
     }
 
+    sync_carried_flags_to_holders(flags, collectors);
+
     for collector in collectors {
         try_return_stolen_own_flag(flags, collector);
 
@@ -136,6 +138,10 @@ fn advance_capture_the_flag(
         }
     }
 
+    sync_carried_flags_to_holders(flags, collectors);
+}
+
+fn sync_carried_flags_to_holders(flags: &mut [FlagState], collectors: &[CollectorState]) {
     for flag in flags {
         if let Some(holder) = flag.holder {
             if let Some(collector) = collectors
@@ -585,6 +591,27 @@ mod tests {
         let mut score = CaptureScore::default();
 
         advance_flags(&mut flags, &[collector], &mut score);
+
+        assert_eq!(score, CaptureScore::default());
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(flags[0].position, flags[0].home);
+    }
+
+    #[test]
+    fn player_returns_stolen_blue_flag_using_current_carrier_position() {
+        let mut flags = vec![
+            FlagState {
+                holder: Some(entity(2)),
+                position: Vec2::new(800.0, 0.0),
+                ..flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0))
+            },
+            flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0)),
+        ];
+        let blue = blue_collector(Vec2::ZERO);
+        let red = red_collector(Vec2::new(20.0, 0.0));
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[blue, red], &mut score);
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[0].holder, None);
