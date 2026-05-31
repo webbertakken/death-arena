@@ -24,13 +24,19 @@ struct VirtualPlayerSpawn {
     translation: Vec3,
 }
 
-const fn spawn_roster() -> [VirtualPlayerSpawn; 4] {
+const fn spawn_roster() -> [VirtualPlayerSpawn; 5] {
     [
         VirtualPlayerSpawn {
             name: "Teammate 1",
             team: AiTeam::Blue,
             start_waypoint: 3,
             translation: Vec3::new(-430.0, 200.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Teammate 2",
+            team: AiTeam::Blue,
+            start_waypoint: 2,
+            translation: Vec3::new(0.0, -380.0, 4.0),
         },
         VirtualPlayerSpawn {
             name: "Opponent 1",
@@ -108,11 +114,19 @@ mod tests {
     }
 
     #[test]
-    fn roster_includes_player_team_and_opponents() {
+    fn roster_balances_human_team_against_opponents() {
         let roster = spawn_roster();
 
-        assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Blue));
-        assert!(roster.iter().any(|spawn| spawn.team == AiTeam::Red));
+        let blue_teammates = roster
+            .iter()
+            .filter(|spawn| spawn.team == AiTeam::Blue)
+            .count();
+        let red_opponents = roster
+            .iter()
+            .filter(|spawn| spawn.team == AiTeam::Red)
+            .count();
+
+        assert_eq!(blue_teammates + 1, red_opponents);
     }
 
     #[test]
