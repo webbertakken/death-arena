@@ -133,32 +133,21 @@ pub fn choose_capture_the_flag_target(
 /// distance as the tie-breaker.
 #[must_use]
 pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Option<DrivingTarget> {
-    let radius_sq = choices.pickup_pursuit_radius * choices.pickup_pursuit_radius;
-    let pickup = choices
-        .pickups
-        .iter()
-        .copied()
-        .filter_map(|pickup| {
-            let distance_sq = position.distance_squared(pickup.position);
-            (distance_sq <= radius_sq).then_some((pickup, distance_sq))
-        })
-        .min_by(|(a_pickup, a_dist), (b_pickup, b_dist)| {
-            b_pickup.bounty.cmp(&a_pickup.bounty).then_with(|| {
-                a_dist
-                    .partial_cmp(b_dist)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        })
-        .map(|(pickup, _)| pickup);
-
     let ctf_target = choices.ctf_target;
     if let Some(target) = ctf_target {
-        if target_allows_pickup_detour(position, target, pickup) {
+        let pickup = pickup_detour(position, target, &choices);
+        if pickup.is_some() {
             return pickup.map(|pickup| DrivingTarget::Pickup(pickup.position));
         }
         return Some(target);
     }
 
+    let pickup = best_pickup(
+        position,
+        choices.pickups,
+        choices.pickup_pursuit_radius,
+        |_| true,
+    );
     pickup
         .map(|pickup| DrivingTarget::Pickup(pickup.position))
         .or_else(|| {
@@ -178,16 +167,47 @@ pub fn choose_driving_target(position: Vec2, choices: DrivingChoices<'_>) -> Opt
         })
 }
 
-fn target_allows_pickup_detour(
+fn pickup_detour(
     position: Vec2,
     target: DrivingTarget,
-    pickup: Option<PickupTarget>,
-) -> bool {
-    matches!(target, DrivingTarget::EnemyFlag(_))
-        && pickup.is_some_and(|pickup| {
-            position.distance_squared(pickup.position)
-                < position.distance_squared(target.position())
+    choices: &DrivingChoices<'_>,
+) -> Option<PickupTarget> {
+    if !matches!(target, DrivingTarget::EnemyFlag(_)) {
+        return None;
+    }
+
+    let target_distance_sq = position.distance_squared(target.position());
+    best_pickup(
+        position,
+        choices.pickups,
+        choices.pickup_pursuit_radius,
+        |pickup| position.distance_squared(pickup.position) < target_distance_sq,
+    )
+}
+
+fn best_pickup(
+    position: Vec2,
+    pickups: &[PickupTarget],
+    pursuit_radius: f32,
+    is_eligible: impl Fn(PickupTarget) -> bool,
+) -> Option<PickupTarget> {
+    let radius_sq = pursuit_radius * pursuit_radius;
+    pickups
+        .iter()
+        .copied()
+        .filter(|pickup| is_eligible(*pickup))
+        .filter_map(|pickup| {
+            let distance_sq = position.distance_squared(pickup.position);
+            (distance_sq <= radius_sq).then_some((pickup, distance_sq))
         })
+        .min_by(|(a_pickup, a_dist), (b_pickup, b_dist)| {
+            b_pickup.bounty.cmp(&a_pickup.bounty).then_with(|| {
+                a_dist
+                    .partial_cmp(b_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        })
+        .map(|(pickup, _)| pickup)
 }
 
 /// Decide how a virtual player should drive to reach `target`.
@@ -475,6 +495,34 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(25.0, 0.0))));
+    }
+
+    #[test]
+    fn attacker_chooses_affordable_detour_when_richest_pickup_is_past_flag() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [
+            PickupTarget {
+                position: Vec2::new(80.0, 0.0),
+                bounty: 50,
+            },
+            PickupTarget {
+                position: Vec2::new(420.0, 0.0),
+                bounty: 100,
+            },
+        ];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
     }
 
     #[test]
