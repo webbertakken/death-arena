@@ -9,7 +9,7 @@ pub const MIN_THROTTLE: f32 = 0.3;
 pub const STEER_RANGE: f32 = std::f32::consts::FRAC_PI_4;
 
 /// Distance ahead of a friendly flag carrier that an escort tries to occupy.
-pub const ESCORT_LEAD_DISTANCE: f32 = 80.0;
+pub const ESCORT_LEAD_DISTANCE: f32 = 120.0;
 
 /// Distance at which an enemy near a home flag becomes a defensive emergency.
 pub const HOME_FLAG_THREAT_RADIUS: f32 = 500.0;
@@ -1016,7 +1016,7 @@ mod tests {
         let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
             panic!("expected escort target, got {target:?}");
         };
-        assert_vec2_near(position, Vec2::new(-370.01773, 18.316_162));
+        assert_vec2_near(position, Vec2::new(-330.02658, 17.474_243));
     }
 
     #[test]

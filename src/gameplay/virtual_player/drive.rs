@@ -16,11 +16,13 @@ const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 
+type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
+
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
 pub fn virtual_player_drive_system(
     mut query: Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
-    player_query: Query<&Transform, (With<Player>, Without<VirtualPlayer>)>,
+    player_query: Query<(Entity, &Transform), HumanPlayerTransform>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
@@ -33,13 +35,15 @@ pub fn virtual_player_drive_system(
         return;
     }
 
-    let player_position = player_query
+    let player = player_query
         .get_single()
         .ok()
-        .map(|transform| transform.translation.xy());
+        .map(|(entity, transform)| (entity, transform.translation.xy()));
+    let player_position = player.map(|(_, position)| position);
     let threats = threat_targets(&query, player_position);
     let mut available_pickups = pickup_targets(&pickup_query);
-    let flags = flag_targets(&flag_query);
+    let holder_positions = holder_positions(&query, player);
+    let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
 
     for (entity, mut ai, mut transform) in &mut query {
@@ -137,6 +141,7 @@ fn pickup_targets(
 
 fn flag_targets(
     flag_query: &Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
+    holder_positions: &[(Entity, Vec2)],
 ) -> Vec<FlagTarget> {
     flag_query
         .iter()
@@ -146,10 +151,34 @@ fn flag_targets(
                 FlagTeam::Red => AiTeam::Red,
             },
             home: flag.home,
-            position: transform.translation.xy(),
+            position: flag
+                .holder
+                .and_then(|holder| {
+                    holder_positions
+                        .iter()
+                        .find(|(entity, _)| *entity == holder)
+                        .map(|(_, position)| *position)
+                })
+                .unwrap_or_else(|| transform.translation.xy()),
             holder: flag.holder,
         })
         .collect()
+}
+
+fn holder_positions(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    player: Option<(Entity, Vec2)>,
+) -> Vec<(Entity, Vec2)> {
+    let mut positions: Vec<(Entity, Vec2)> = query
+        .iter()
+        .map(|(entity, _, transform)| (entity, transform.translation.xy()))
+        .collect();
+
+    if let Some(player) = player {
+        positions.push(player);
+    }
+
+    positions
 }
 
 fn assigned_ctf_targets(
@@ -993,8 +1022,8 @@ mod tests {
 
         let transform = app.world.get::<Transform>(escort).unwrap();
         assert!(
-            transform.translation.x < 0.0,
-            "expected escort to turn towards flag carrier, x={}",
+            transform.translation.x > 0.0,
+            "expected escort to lead the carrier towards home, x={}",
             transform.translation.x
         );
     }
@@ -1026,8 +1055,8 @@ mod tests {
         let second_transform = app.world.get::<Transform>(second_escort).unwrap();
 
         assert!(
-            first_transform.translation.x < 0.0,
-            "expected first teammate to escort the carrier, x={}",
+            first_transform.translation.x > 0.0,
+            "expected first teammate to lead the carrier home, x={}",
             first_transform.translation.x
         );
         assert!(
@@ -1063,6 +1092,36 @@ mod tests {
         assert!(
             transform.translation.x > 0.0,
             "expected defender to turn towards stolen red flag, x={}",
+            transform.translation.x
+        );
+    }
+
+    #[test]
+    fn defender_chases_current_carrier_position_for_held_home_flag() {
+        let mut app = app_with_system();
+        let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let player = spawn_player(&mut app, Vec3::new(250.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(-250.0, 0.0, 2.0),
+            Some(player),
+        );
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected defender to chase the current carrier position, x={}",
             transform.translation.x
         );
     }
