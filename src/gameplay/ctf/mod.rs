@@ -6,6 +6,7 @@ use bevy::prelude::*;
 
 pub const FLAG_TOUCH_RADIUS: f32 = 120.0;
 pub const BASE_CAPTURE_RADIUS: f32 = 160.0;
+pub const CAPTURES_TO_WIN: u32 = 3;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -48,6 +49,17 @@ impl CaptureScore {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CtfMatchWinner {
+    Player,
+    Opponents,
+}
+
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtfMatchResult {
+    pub winner: Option<CtfMatchWinner>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollectorKind {
     Player,
     Opponent,
@@ -85,11 +97,16 @@ fn advance_capture_the_flag(
     flags: &mut [FlagState],
     collectors: &[CollectorState],
     score: &mut CaptureScore,
+    result: &mut CtfMatchResult,
 ) {
+    if result.winner.is_some() {
+        return;
+    }
+
     for collector in collectors {
         try_return_stolen_own_flag(flags, collector);
 
-        if try_score_carried_flag(flags, collector, score) {
+        if try_score_carried_flag(flags, collector, score, result) {
             continue;
         }
 
@@ -129,6 +146,7 @@ fn try_score_carried_flag(
     flags: &mut [FlagState],
     collector: &CollectorState,
     score: &mut CaptureScore,
+    result: &mut CtfMatchResult,
 ) -> bool {
     let Some(carried_flag_index) = flags
         .iter()
@@ -151,6 +169,15 @@ fn try_score_carried_flag(
     }
 
     score.capture_for(collector.kind);
+    match collector.kind {
+        CollectorKind::Player if score.player >= CAPTURES_TO_WIN => {
+            result.winner = Some(CtfMatchWinner::Player);
+        }
+        CollectorKind::Opponent if score.opponents >= CAPTURES_TO_WIN => {
+            result.winner = Some(CtfMatchWinner::Opponents);
+        }
+        _ => {}
+    }
     let carried_flag = &mut flags[carried_flag_index];
     carried_flag.holder = None;
     carried_flag.position = carried_flag.home;
@@ -179,6 +206,7 @@ fn nearest_touchable_enemy_flag(flags: &[FlagState], collector: &CollectorState)
 
 pub fn capture_the_flag_system(
     mut score: ResMut<CaptureScore>,
+    mut result: ResMut<CtfMatchResult>,
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &Transform), VirtualPlayerOnly>,
@@ -214,7 +242,7 @@ pub fn capture_the_flag_system(
         })
         .collect();
 
-    advance_capture_the_flag(&mut flags, &collectors, &mut score);
+    advance_capture_the_flag(&mut flags, &collectors, &mut score, &mut result);
 
     for (entity, mut flag, mut transform) in &mut flag_query {
         if let Some(updated) = flags.iter().find(|updated| updated.entity == entity) {
@@ -230,9 +258,11 @@ pub struct CtfPlugin;
 
 impl Plugin for CtfPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CaptureScore>().add_system_set(
-            SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
-        );
+        app.init_resource::<CaptureScore>()
+            .init_resource::<CtfMatchResult>()
+            .add_system_set(
+                SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
+            );
     }
 }
 
@@ -272,6 +302,15 @@ mod tests {
         }
     }
 
+    fn advance_flags(
+        flags: &mut [FlagState],
+        collectors: &[CollectorState],
+        score: &mut CaptureScore,
+    ) {
+        let mut result = CtfMatchResult::default();
+        advance_capture_the_flag(flags, collectors, score, &mut result);
+    }
+
     fn test_player() -> Player {
         Player {
             movement_speed: 0.0,
@@ -308,7 +347,7 @@ mod tests {
         let collector = blue_collector(Vec2::ZERO);
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(flags[1].holder, Some(collector.entity));
         assert_eq!(flags[1].position, collector.position);
@@ -327,12 +366,58 @@ mod tests {
         let collector = blue_collector(Vec2::new(10.0, 0.0));
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(score.player, 1);
         assert_eq!(score.opponents, 0);
         assert_eq!(flags[1].holder, None);
         assert_eq!(flags[1].position, flags[1].home);
+    }
+
+    #[test]
+    fn player_capture_at_limit_wins_the_match() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::ZERO),
+            FlagState {
+                holder: Some(entity(1)),
+                ..flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0))
+            },
+        ];
+        let collector = blue_collector(Vec2::new(10.0, 0.0));
+        let mut score = CaptureScore {
+            player: CAPTURES_TO_WIN - 1,
+            opponents: 0,
+        };
+        let mut result = CtfMatchResult::default();
+
+        advance_capture_the_flag(&mut flags, &[collector], &mut score, &mut result);
+
+        assert_eq!(score.player, CAPTURES_TO_WIN);
+        assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+    }
+
+    #[test]
+    fn finished_match_ignores_later_captures() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::ZERO),
+            FlagState {
+                holder: Some(entity(1)),
+                ..flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0))
+            },
+        ];
+        let collector = blue_collector(Vec2::new(10.0, 0.0));
+        let mut score = CaptureScore {
+            player: CAPTURES_TO_WIN,
+            opponents: 0,
+        };
+        let mut result = CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        };
+
+        advance_capture_the_flag(&mut flags, &[collector], &mut score, &mut result);
+
+        assert_eq!(score.player, CAPTURES_TO_WIN);
+        assert_eq!(result.winner, Some(CtfMatchWinner::Player));
     }
 
     #[test]
@@ -347,7 +432,7 @@ mod tests {
         let collector = red_collector(Vec2::new(0.0, -10.0));
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(score.player, 0);
         assert_eq!(score.opponents, 1);
@@ -371,7 +456,7 @@ mod tests {
         let collector = blue_collector(Vec2::ZERO);
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[1].holder, Some(collector.entity));
@@ -390,7 +475,7 @@ mod tests {
         let collector = red_collector(Vec2::ZERO);
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[1].holder, None);
@@ -410,7 +495,7 @@ mod tests {
         let collector = blue_collector(Vec2::ZERO);
         let mut score = CaptureScore::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score);
+        advance_flags(&mut flags, &[collector], &mut score);
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[0].holder, None);
@@ -421,6 +506,7 @@ mod tests {
     fn system_tracks_player_capture_without_query_conflicts() {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
+        app.init_resource::<CtfMatchResult>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
@@ -454,6 +540,47 @@ mod tests {
                 player: 1,
                 opponents: 0,
             }
+        );
+    }
+
+    #[test]
+    fn system_records_match_winner_at_capture_limit() {
+        let mut app = App::new();
+        app.insert_resource(CaptureScore {
+            player: CAPTURES_TO_WIN - 1,
+            opponents: 0,
+        });
+        app.init_resource::<CtfMatchResult>();
+        app.add_system(capture_the_flag_system);
+        let player = app
+            .world
+            .spawn((
+                test_player(),
+                Transform::from_translation(Vec3::new(10.0, 0.0, 5.0)),
+            ))
+            .id();
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::ZERO,
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(0.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: Some(player),
+            },
+            Transform::from_translation(Vec3::new(10.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player)
         );
     }
 }
