@@ -122,7 +122,10 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
 }
 
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
-    matches!(target, DrivingTarget::EnemyFlag(_))
+    matches!(
+        target,
+        DrivingTarget::EnemyFlag(_) | DrivingTarget::EscortFlagCarrier(_)
+    )
 }
 
 const fn player_position_for_team(team: AiTeam, player_position: Option<Vec2>) -> Option<Vec2> {
@@ -632,6 +635,44 @@ mod tests {
             transform.translation.x < 0.0,
             "expected escort to turn towards flag carrier, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn only_one_teammate_escorts_flag_carrier() {
+        let mut app = app_with_system();
+        let carrier = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let first_escort = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_escort = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-200.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let first_transform = app.world.get::<Transform>(first_escort).unwrap();
+        let second_transform = app.world.get::<Transform>(second_escort).unwrap();
+
+        assert!(
+            first_transform.translation.x < 0.0,
+            "expected first teammate to escort the carrier, x={}",
+            first_transform.translation.x
+        );
+        assert!(
+            second_transform.translation.x > 0.0,
+            "expected spare teammate to defend the red base, x={}",
+            second_transform.translation.x
         );
     }
 
