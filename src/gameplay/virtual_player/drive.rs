@@ -1667,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_waits_at_red_base_when_home_flag_is_stolen() {
+    fn flag_carrier_intercepts_stolen_home_flag_before_scoring() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
         let player = spawn_player(&mut app, Vec3::new(-800.0, 0.0, 5.0));
@@ -1690,8 +1690,8 @@ mod tests {
 
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert!(
-            transform.translation.x > 0.0,
-            "expected flag carrier to keep pushing home, x={}",
+            transform.translation.x < 0.0,
+            "expected flag carrier to intercept stolen home flag, x={}",
             transform.translation.x
         );
     }

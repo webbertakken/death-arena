@@ -170,6 +170,12 @@ pub fn choose_capture_the_flag_target(
         if own_flag_is_dropped(own_flag) {
             return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
         }
+        if own_flag.holder.is_some() {
+            return Some(DrivingTarget::StolenHomeFlag(stolen_flag_intercept_point(
+                own_flag.position,
+                enemy_flag.home,
+            )));
+        }
         if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
             return Some(DrivingTarget::ContestedHomeBaseStaging(
                 contested_home_base_staging_point(own_flag.home, threat.position),
@@ -1329,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_waits_at_home_base_while_home_flag_is_stolen() {
+    fn carrier_intercepts_stolen_home_flag_before_scoring() {
         let ai = Entity::from_raw(7);
         let thief = Entity::from_raw(1);
         let target = choose_capture_the_flag_target(
@@ -1352,7 +1358,10 @@ mod tests {
             &[],
         );
 
-        assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-340.0, 0.0)))
+        );
     }
 
     #[test]
