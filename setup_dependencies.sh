@@ -1,9 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 # Install system dependencies for Death Arena (Bevy and audio)
 # This script is intended for Ubuntu/Debian systems.
-
-set -e
 
 echo "Updating package lists..."
 sudo apt-get update
