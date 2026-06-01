@@ -3,6 +3,14 @@ set -euo pipefail
 
 workflow=".github/workflows/pages.yml"
 
+if grep -Fq "git reset --hard" "${workflow}"; then
+  cat >&2 <<'ERROR'
+Pages workflow must not use git reset --hard.
+Checkout and git lfs pull should leave the workspace ready without destructive cleanup.
+ERROR
+  exit 1
+fi
+
 if ! grep -Fq 'trunk build --release --public-url "/${GITHUB_REPOSITORY#*/}/"' "${workflow}"; then
   cat >&2 <<'ERROR'
 Pages workflow must build with an absolute GitHub Pages base path.

@@ -49,10 +49,7 @@ jobs:
 
       # Pull any LFS assets that weren't yet cached.
       - name: Git LFS Pull
-        run: |
-          git lfs pull
-          git add .
-          git reset --hard
+        run: git lfs pull
 
       # Cache deps/builds, so that you don't have to compile intermediate libs everytime.
       - name: Cache
