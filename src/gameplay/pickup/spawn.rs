@@ -18,6 +18,8 @@ pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
         (PickupKind::Cash, Vec2::new(0.0, 0.0)),
         (PickupKind::Cash, Vec2::new(x * 0.45, 0.0)),
         (PickupKind::Cash, Vec2::new(-x * 0.45, 0.0)),
+        (PickupKind::Nitro, Vec2::new(x * 0.75, 0.0)),
+        (PickupKind::Nitro, Vec2::new(-x * 0.75, 0.0)),
         (PickupKind::Cash, Vec2::new(x, y)),
         (PickupKind::Cash, Vec2::new(-x, -y)),
         (PickupKind::Repair, Vec2::new(-x, y)),
@@ -109,6 +111,23 @@ mod tests {
         assert!(
             lane_pickups >= 2,
             "expected mirrored pickups on the central capture lane"
+        );
+    }
+
+    #[test]
+    fn layout_places_nitro_on_capture_lane() {
+        let nitro_lane_pickups = pickup_layout()
+            .into_iter()
+            .filter(|(kind, position)| {
+                *kind == PickupKind::Nitro
+                    && position.x.abs() > f32::EPSILON
+                    && position.y.abs() <= f32::EPSILON
+            })
+            .count();
+
+        assert!(
+            nitro_lane_pickups >= 2,
+            "expected mirrored nitro pickups on the central capture lane"
         );
     }
 }
