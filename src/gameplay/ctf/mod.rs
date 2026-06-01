@@ -419,6 +419,7 @@ pub fn capture_the_flag_system(
         &mut player_economy,
         &mut opponent_economy,
     );
+    award_flag_steal_momentum_boosts(previous_steals, *steals, &mut nitro_boosts);
     award_capture_momentum_boosts(previous_score, *score, &mut nitro_boosts);
     award_flag_return_bounties(
         previous_returns,
@@ -488,6 +489,19 @@ const fn award_flag_return_bounties(
 const fn award_capture_momentum_boosts(
     previous: CaptureScore,
     current: CaptureScore,
+    nitro_boosts: &mut NitroBoosts,
+) {
+    if current.player > previous.player {
+        nitro_boosts.trigger_player();
+    }
+    if current.opponents > previous.opponents {
+        nitro_boosts.trigger_opponent();
+    }
+}
+
+const fn award_flag_steal_momentum_boosts(
+    previous: FlagStealScore,
+    current: FlagStealScore,
     nitro_boosts: &mut NitroBoosts,
 ) {
     if current.player > previous.player {
@@ -734,6 +748,52 @@ mod tests {
                 opponents: 0,
             },
             CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(nitro_boosts.player_frames, 0);
+        assert_eq!(
+            nitro_boosts.opponent_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+    }
+
+    #[test]
+    fn player_flag_steal_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_flag_steal_momentum_boosts(
+            FlagStealScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagStealScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(
+            nitro_boosts.player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(nitro_boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn opponent_flag_steal_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_flag_steal_momentum_boosts(
+            FlagStealScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagStealScore {
                 player: 0,
                 opponents: 1,
             },
@@ -1340,6 +1400,11 @@ mod tests {
             }
         );
         assert_eq!(app.world.resource::<Score>().cash, FLAG_STEAL_CASH_BOUNTY);
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(app.world.resource::<NitroBoosts>().opponent_frames, 0);
     }
 
     #[test]
