@@ -24,9 +24,19 @@ pub fn car_movement_system(
         return;
     }
 
-    let (player, mut transform) = query.single_mut();
-    let (front_left_wheel, mut front_left_wheel_transform) = front_left_wheel_query.single_mut();
-    let (front_right_wheel, mut front_right_wheel_transform) = front_right_wheel_query.single_mut();
+    let Ok((player, mut transform)) = query.get_single_mut() else {
+        return;
+    };
+    let Ok((front_left_wheel, mut front_left_wheel_transform)) =
+        front_left_wheel_query.get_single_mut()
+    else {
+        return;
+    };
+    let Ok((front_right_wheel, mut front_right_wheel_transform)) =
+        front_right_wheel_query.get_single_mut()
+    else {
+        return;
+    };
 
     // Acceleration
     let nitro_multiplier = nitro_boosts

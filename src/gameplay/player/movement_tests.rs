@@ -94,6 +94,26 @@ mod tests {
     }
 
     #[test]
+    fn movement_system_skips_frame_without_player() {
+        let mut app = setup_test_app();
+        app.update();
+    }
+
+    #[test]
+    fn movement_system_skips_frame_without_front_wheels() {
+        let mut app = setup_test_app();
+        let player_id = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        app.world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+
+        app.update();
+
+        let player_transform = app.world.get::<Transform>(player_id).unwrap();
+        assert_eq!(player_transform.translation, Vec3::new(0.0, 0.0, 5.0));
+    }
+
+    #[test]
     fn nitro_boost_increases_forward_distance() {
         let mut normal_app = setup_test_app();
         let normal_player = spawn_player(&mut normal_app, Vec3::new(0.0, 0.0, 5.0));
