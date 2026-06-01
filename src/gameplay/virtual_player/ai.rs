@@ -443,6 +443,7 @@ fn pickup_detour(
             | DrivingTarget::HomeBase(_)
             | DrivingTarget::MidfieldInterceptor(_)
             | DrivingTarget::StolenHomeFlag(_)
+            | DrivingTarget::StolenHomeFlagRouteGuard(_)
     ) {
         return None;
     }
@@ -1209,6 +1210,30 @@ mod tests {
                 &waypoints,
                 0,
                 Some(DrivingTarget::MidfieldInterceptor(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn stolen_flag_route_guard_detours_for_pickup_on_guard_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 0.0),
+            priority: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::StolenHomeFlagRouteGuard(Vec2::new(
+                    300.0, 0.0,
+                ))),
                 &pickups,
                 None,
                 0.0,
