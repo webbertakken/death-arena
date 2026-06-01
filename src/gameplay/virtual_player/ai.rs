@@ -165,6 +165,9 @@ pub fn choose_capture_the_flag_target(
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
 
     if enemy_flag.holder == Some(ai_entity) {
+        if own_flag_is_dropped(own_flag) {
+            return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
+        }
         if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
             return Some(DrivingTarget::ContestedHomeBaseStaging(
                 contested_home_base_staging_point(own_flag.home, threat.position),
@@ -212,6 +215,10 @@ pub fn choose_capture_the_flag_target(
         .holder
         .is_none()
         .then_some(DrivingTarget::EnemyFlag(enemy_flag.position))
+}
+
+fn own_flag_is_dropped(own_flag: &FlagTarget) -> bool {
+    own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
 }
 
 fn closest_home_flag_threat(
@@ -1319,6 +1326,35 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+    }
+
+    #[test]
+    fn carrier_recovers_dropped_home_flag_before_scoring() {
+        let ai = Entity::from_raw(7);
+        let target = choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(260.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::StolenHomeFlag(Vec2::new(260.0, 0.0)))
+        );
     }
 
     #[test]
