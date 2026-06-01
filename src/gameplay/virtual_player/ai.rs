@@ -159,6 +159,15 @@ pub fn choose_capture_the_flag_target(
     let own_flag = flags.iter().find(|flag| flag.team == team)?;
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
 
+    if enemy_flag.holder == Some(ai_entity) {
+        if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
+            return Some(DrivingTarget::ContestedHomeBaseStaging(
+                contested_home_base_staging_point(own_flag.home, threat.position),
+            ));
+        }
+        return Some(DrivingTarget::HomeBase(own_flag.home));
+    }
+
     if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
         return Some(DrivingTarget::StolenHomeFlag(stolen_flag_intercept_point(
             own_flag.position,
@@ -169,15 +178,6 @@ pub fn choose_capture_the_flag_target(
     if own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
     {
         return Some(DrivingTarget::StolenHomeFlag(own_flag.position));
-    }
-
-    if enemy_flag.holder == Some(ai_entity) {
-        if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
-            return Some(DrivingTarget::ContestedHomeBaseStaging(
-                contested_home_base_staging_point(own_flag.home, threat.position),
-            ));
-        }
-        return Some(DrivingTarget::HomeBase(own_flag.home));
     }
 
     if enemy_flag.holder.is_some() {
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_hunts_stolen_home_flag_before_returning_to_base() {
+    fn carrier_waits_at_home_base_while_home_flag_is_stolen() {
         let ai = Entity::from_raw(7);
         let thief = Entity::from_raw(1);
         let target = choose_capture_the_flag_target(
@@ -1274,10 +1274,7 @@ mod tests {
             &[],
         );
 
-        assert_eq!(
-            target,
-            Some(DrivingTarget::StolenHomeFlag(Vec2::new(-340.0, 0.0)))
-        );
+        assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
     }
 
     #[test]
