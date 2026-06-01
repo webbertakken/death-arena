@@ -17,6 +17,7 @@ const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
 const MIDFIELD_LANE_GUARD_FACTOR: f32 = 0.5;
+const TEAMMATE_SPACING_RADIUS: f32 = 90.0;
 
 type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
 
@@ -47,6 +48,7 @@ pub fn virtual_player_drive_system(
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
+    let teammate_positions = virtual_player_positions(&query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
         &assigned_ctf_targets,
@@ -80,7 +82,11 @@ pub fn virtual_player_drive_system(
             continue;
         };
 
-        let intent = compute_steering(position, forward, target.position(), WAYPOINT_ARRIVE_RADIUS);
+        let spacing_target = matches!(target, DrivingTarget::PatrolWaypoint(_))
+            .then(|| teammate_spacing_target(entity, ai.team, position, &teammate_positions))
+            .flatten();
+        let target_position = spacing_target.unwrap_or_else(|| target.position());
+        let intent = compute_steering(position, forward, target_position, WAYPOINT_ARRIVE_RADIUS);
 
         if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
             if matches!(target, DrivingTarget::PatrolWaypoint(_)) {
@@ -105,6 +111,55 @@ pub fn virtual_player_drive_system(
         transform.translation.x = transform.translation.x.clamp(-extents.x, extents.x);
         transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
         transform.translation.z = 4.0;
+    }
+}
+
+fn virtual_player_positions(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+) -> Vec<(Entity, AiTeam, Vec2)> {
+    query
+        .iter()
+        .map(|(entity, virtual_player, transform)| {
+            (entity, virtual_player.team, transform.translation.xy())
+        })
+        .collect()
+}
+
+fn teammate_spacing_target(
+    entity: Entity,
+    team: AiTeam,
+    position: Vec2,
+    virtual_players: &[(Entity, AiTeam, Vec2)],
+) -> Option<Vec2> {
+    let spacing_radius_sq = TEAMMATE_SPACING_RADIUS * TEAMMATE_SPACING_RADIUS;
+    virtual_players
+        .iter()
+        .copied()
+        .filter(|(other_entity, other_team, _)| *other_entity != entity && *other_team == team)
+        .filter_map(|(other_entity, _, other_position)| {
+            let offset = position - other_position;
+            let distance_sq = offset.length_squared();
+            (distance_sq <= spacing_radius_sq).then_some((other_entity, offset, distance_sq))
+        })
+        .min_by(|(a_entity, _, a_dist), (b_entity, _, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a_entity.index().cmp(&b_entity.index()))
+        })
+        .map(|(other_entity, offset, _)| {
+            let direction = offset
+                .try_normalize()
+                .unwrap_or_else(|| deterministic_spacing_direction(entity, other_entity));
+            position + direction * TEAMMATE_SPACING_RADIUS
+        })
+}
+
+const fn deterministic_spacing_direction(entity: Entity, other_entity: Entity) -> Vec2 {
+    if entity.index() <= other_entity.index() {
+        Vec2::NEG_X
+    } else {
+        Vec2::X
     }
 }
 
@@ -922,7 +977,11 @@ mod tests {
     fn only_one_virtual_player_pursues_a_shared_pickup() {
         let mut app = app_with_system();
         let first_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
-        let second_ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        let second_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 100.0, 4.0),
+        );
         app.world.spawn((
             Pickup {
                 kind: crate::gameplay::pickup::PickupKind::Cash,
@@ -946,9 +1005,40 @@ mod tests {
             second_transform.translation.x
         );
         assert!(
-            second_transform.translation.y > 0.0,
+            second_transform.translation.y > 100.0,
             "expected second opponent to keep moving, y={}",
             second_transform.translation.y
+        );
+    }
+
+    #[test]
+    fn nearby_teammates_spread_out_before_patrolling() {
+        let mut app = app_with_system();
+        let left_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        let right_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(40.0, 1000.0)],
+            Vec3::new(40.0, 0.0, 4.0),
+        );
+
+        app.update();
+
+        let left_transform = app.world.get::<Transform>(left_ai).unwrap();
+        let right_transform = app.world.get::<Transform>(right_ai).unwrap();
+
+        assert!(
+            left_transform.translation.x < 0.0,
+            "expected left teammate to steer away, x={}",
+            left_transform.translation.x
+        );
+        assert!(
+            right_transform.translation.x > 40.0,
+            "expected right teammate to steer away, x={}",
+            right_transform.translation.x
         );
     }
 
