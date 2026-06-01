@@ -95,6 +95,8 @@ pub struct Score {
     pub collected: u32,
     /// Number of CTF captures rewarded to the player team.
     pub captures: u32,
+    /// Number of enemy flag steals rewarded to the player team.
+    pub steals: u32,
     /// Number of home flag returns rewarded to the player team.
     pub returns: u32,
 }
@@ -110,6 +112,12 @@ impl Score {
     pub const fn bank_capture_bonus(&mut self, captures: u32, bounty: u32) {
         self.cash += captures * bounty;
         self.captures += captures;
+    }
+
+    /// Apply enemy flag steal rewards to the tally.
+    pub const fn bank_flag_steal_bonus(&mut self, steals: u32, bounty: u32) {
+        self.cash += steals * bounty;
+        self.steals += steals;
     }
 
     /// Apply home flag return rewards to the tally.
@@ -128,6 +136,8 @@ pub struct OpponentScore {
     pub collected: u32,
     /// Number of CTF captures rewarded to virtual opponents.
     pub captures: u32,
+    /// Number of enemy flag steals rewarded to virtual opponents.
+    pub steals: u32,
     /// Number of home flag returns rewarded to virtual opponents.
     pub returns: u32,
 }
@@ -143,6 +153,12 @@ impl OpponentScore {
     pub const fn bank_capture_bonus(&mut self, captures: u32, bounty: u32) {
         self.cash += captures * bounty;
         self.captures += captures;
+    }
+
+    /// Apply enemy flag steal rewards to the opponent tally.
+    pub const fn bank_flag_steal_bonus(&mut self, steals: u32, bounty: u32) {
+        self.cash += steals * bounty;
+        self.steals += steals;
     }
 
     /// Apply home flag return rewards to the tally.
@@ -183,6 +199,7 @@ mod tests {
                 cash: PickupKind::Cash.bounty() + PickupKind::Repair.bounty(),
                 collected: 2,
                 captures: 0,
+                steals: 0,
                 returns: 0,
             }
         );
@@ -198,6 +215,23 @@ mod tests {
                 cash: 500,
                 collected: 0,
                 captures: 2,
+                steals: 0,
+                returns: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn flag_steal_bonus_accumulates_cash_and_steal_count() {
+        let mut score = Score::default();
+        score.bank_flag_steal_bonus(2, 50);
+        assert_eq!(
+            score,
+            Score {
+                cash: 100,
+                collected: 0,
+                captures: 0,
+                steals: 2,
                 returns: 0,
             }
         );
@@ -213,6 +247,7 @@ mod tests {
                 cash: 150,
                 collected: 0,
                 captures: 0,
+                steals: 0,
                 returns: 2,
             }
         );
@@ -229,6 +264,7 @@ mod tests {
                 cash: PickupKind::Nitro.bounty() + PickupKind::Cash.bounty(),
                 collected: 2,
                 captures: 0,
+                steals: 0,
                 returns: 0,
             }
         );
@@ -244,6 +280,23 @@ mod tests {
                 cash: 250,
                 collected: 0,
                 captures: 1,
+                steals: 0,
+                returns: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn opponent_flag_steal_bonus_accumulates_cash_and_steal_count() {
+        let mut score = OpponentScore::default();
+        score.bank_flag_steal_bonus(1, 50);
+        assert_eq!(
+            score,
+            OpponentScore {
+                cash: 50,
+                collected: 0,
+                captures: 0,
+                steals: 1,
                 returns: 0,
             }
         );
@@ -259,6 +312,7 @@ mod tests {
                 cash: 75,
                 collected: 0,
                 captures: 0,
+                steals: 0,
                 returns: 1,
             }
         );
