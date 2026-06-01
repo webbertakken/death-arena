@@ -448,6 +448,7 @@ fn pickup_detour(
         target,
         DrivingTarget::DefendHomeBase(_)
             | DrivingTarget::EnemyFlag(_)
+            | DrivingTarget::EscortFlagCarrier(_)
             | DrivingTarget::HomeBase(_)
             | DrivingTarget::MidfieldInterceptor(_)
             | DrivingTarget::StolenHomeFlag(_)
@@ -1242,6 +1243,28 @@ mod tests {
                 Some(DrivingTarget::StolenHomeFlagRouteGuard(Vec2::new(
                     300.0, 0.0,
                 ))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn escort_detours_for_pickup_on_flag_carrier_lane() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 0.0),
+            priority: 100,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EscortFlagCarrier(Vec2::new(300.0, 0.0))),
                 &pickups,
                 None,
                 0.0,
