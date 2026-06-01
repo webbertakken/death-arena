@@ -165,7 +165,7 @@ fn closest_eligible_pickup_claimant(
     player_position: Option<Vec2>,
 ) -> Option<Entity> {
     let pickup_candidates = [pickup];
-    query
+    let (entity, position) = query
         .iter()
         .filter_map(|(entity, ai, transform)| {
             let ctf_target = assigned_ctf_targets
@@ -206,7 +206,28 @@ fn closest_eligible_pickup_claimant(
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         })
-        .map(|(entity, _)| entity)
+        .filter(|(_, position)| {
+            !player_has_better_pickup_claim(player_position, pickup, *position)
+        })?;
+
+    Some(entity)
+}
+
+fn player_has_better_pickup_claim(
+    player_position: Option<Vec2>,
+    pickup: PickupTarget,
+    virtual_player_position: Vec2,
+) -> bool {
+    let Some(player_position) = player_position else {
+        return false;
+    };
+
+    let player_distance_sq = player_position.distance_squared(pickup.position);
+    if player_distance_sq > PICKUP_PURSUIT_RADIUS * PICKUP_PURSUIT_RADIUS {
+        return false;
+    }
+
+    player_distance_sq <= virtual_player_position.distance_squared(pickup.position)
 }
 
 fn flag_targets(
@@ -760,6 +781,33 @@ mod tests {
         assert!(
             transform.translation.y > 0.0,
             "expected blue teammate to keep moving, y={}",
+            transform.translation.y
+        );
+    }
+
+    #[test]
+    fn blue_virtual_player_leaves_player_claimed_pickup_alone() {
+        let mut app = app_with_system();
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(180.0, 0.0, 5.0));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x.abs() < 1e-4,
+            "expected teammate to leave player-claimed pickup alone, x={}",
+            transform.translation.x
+        );
+        assert!(
+            transform.translation.y > 0.0,
+            "expected teammate to keep patrolling, y={}",
             transform.translation.y
         );
     }
