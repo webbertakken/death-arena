@@ -38,6 +38,9 @@ pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
 /// Distance around home base where an enemy blocks a carried-flag capture.
 pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
 
+/// Distance around a friendly flag carrier where enemies count as pursuers.
+pub const FLAG_CARRIER_PURSUER_RADIUS: f32 = 260.0;
+
 /// Distance from home where a flag carrier waits while the base is contested.
 pub const CONTESTED_HOME_BASE_STAGING_DISTANCE: f32 = 240.0;
 
@@ -73,6 +76,7 @@ pub enum DrivingTarget {
     ContestedHomeBaseStaging(Vec2),
     DefendHomeBase(Vec2),
     HomeBase(Vec2),
+    BlockFlagCarrierPursuer(Vec2),
     EnemyFlag(Vec2),
     EscortFlagCarrier(Vec2),
     MidfieldInterceptor(Vec2),
@@ -90,6 +94,7 @@ impl DrivingTarget {
             Self::ContestedHomeBaseStaging(position)
             | Self::DefendHomeBase(position)
             | Self::HomeBase(position)
+            | Self::BlockFlagCarrierPursuer(position)
             | Self::EnemyFlag(position)
             | Self::EscortFlagCarrier(position)
             | Self::MidfieldInterceptor(position)
@@ -184,6 +189,9 @@ pub fn choose_capture_the_flag_target(
         if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
             return Some(DrivingTarget::UrgentDefendHomeBase(threat.position));
         }
+        if let Some(threat) = closest_flag_carrier_pursuer(team, enemy_flag.position, threats) {
+            return Some(DrivingTarget::BlockFlagCarrierPursuer(threat.position));
+        }
         return Some(DrivingTarget::EscortFlagCarrier(escort_lead_point(
             enemy_flag.position,
             own_flag.home,
@@ -257,6 +265,42 @@ fn closest_home_base_contester(
         .copied()
         .filter_map(|threat| {
             let distance_sq = threat.position.distance_squared(home_base);
+            (threat.team == team.enemy() && distance_sq <= radius_sq)
+                .then_some((threat, distance_sq))
+        })
+        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .x
+                        .partial_cmp(&b_threat.position.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .y
+                        .partial_cmp(&b_threat.position.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+        .map(|(threat, _)| threat)
+}
+
+fn closest_flag_carrier_pursuer(
+    team: AiTeam,
+    carrier_position: Vec2,
+    threats: &[ThreatTarget],
+) -> Option<ThreatTarget> {
+    let radius_sq = FLAG_CARRIER_PURSUER_RADIUS * FLAG_CARRIER_PURSUER_RADIUS;
+    threats
+        .iter()
+        .copied()
+        .filter_map(|threat| {
+            let distance_sq = threat.position.distance_squared(carrier_position);
             (threat.team == team.enemy() && distance_sq <= radius_sq)
                 .then_some((threat, distance_sq))
         })
@@ -1419,6 +1463,72 @@ mod tests {
             target,
             Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(430.0, 0.0)))
         );
+    }
+
+    #[test]
+    fn teammate_blocks_flag_carrier_pursuer_before_escorting() {
+        let carrier = Entity::from_raw(8);
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(carrier),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-40.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::BlockFlagCarrierPursuer(Vec2::new(
+                -40.0, 0.0
+            )))
+        );
+    }
+
+    #[test]
+    fn teammate_escorts_flag_carrier_when_pursuer_is_distant() {
+        let carrier = Entity::from_raw(8);
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(carrier),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-200.0, 0.0),
+            }],
+        );
+
+        let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
+            panic!("expected escort target, got {target:?}");
+        };
+        assert_vec2_near(position, Vec2::new(220.0, 0.0));
     }
 
     #[test]

@@ -627,7 +627,8 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(
         target,
-        DrivingTarget::DefendHomeBase(_)
+        DrivingTarget::BlockFlagCarrierPursuer(_)
+            | DrivingTarget::DefendHomeBase(_)
             | DrivingTarget::EnemyFlag(_)
             | DrivingTarget::EscortFlagCarrier(_)
             | DrivingTarget::StolenHomeFlag(_)
@@ -1706,6 +1707,41 @@ mod tests {
             transform.translation.x > 0.0,
             "expected escort to lead the carrier towards home, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn teammate_blocks_nearby_flag_carrier_pursuer() {
+        let mut app = app_with_system();
+        let carrier = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(-120.0, 0.0, 4.0),
+        );
+        let blocker = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(-240.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-120.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let blocker_transform = app.world.get::<Transform>(blocker).unwrap();
+        assert!(
+            blocker_transform.translation.x < 0.0,
+            "expected teammate to block the pursuer, x={}",
+            blocker_transform.translation.x
         );
     }
 
