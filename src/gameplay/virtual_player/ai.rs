@@ -28,6 +28,9 @@ pub const URGENT_HOME_FLAG_THREAT_RADIUS: f32 = 220.0;
 /// being on the flag lane.
 pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
 
+/// Wider detour lane for high-value pickups that are worth a short gamble.
+pub const CTF_HIGH_VALUE_PICKUP_LANE_WIDTH: f32 = 100.0;
+
 /// Distance from home at which a flag carrier stops gambling on pickup detours
 /// and commits to finishing the capture.
 pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
@@ -40,6 +43,9 @@ pub const CONTESTED_HOME_BASE_STAGING_DISTANCE: f32 = 240.0;
 
 /// Minimum pickup priority that justifies interrupting a CTF objective.
 pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
+
+/// Priority at which a pickup justifies the wider CTF detour lane.
+pub const CTF_WIDE_DETOUR_MIN_PRIORITY: u32 = 150;
 
 /// Normalised driving intent produced by the virtual player brain.
 ///
@@ -396,7 +402,12 @@ fn pickup_detour(
             pickup.priority >= CTF_PICKUP_DETOUR_MIN_PRIORITY
                 && position.distance_squared(pickup.position) < target_distance_sq
                 && is_ahead_of_target_push(position, pickup.position, target.position())
-                && is_on_target_lane(position, pickup.position, target.position())
+                && is_on_target_lane(
+                    position,
+                    pickup.position,
+                    target.position(),
+                    pickup_lane_width(pickup.priority),
+                )
         },
     )
 }
@@ -407,14 +418,22 @@ fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
     to_pickup.dot(to_target) > 0.0
 }
 
-fn is_on_target_lane(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
+const fn pickup_lane_width(priority: u32) -> f32 {
+    if priority >= CTF_WIDE_DETOUR_MIN_PRIORITY {
+        CTF_HIGH_VALUE_PICKUP_LANE_WIDTH
+    } else {
+        CTF_PICKUP_LANE_WIDTH
+    }
+}
+
+fn is_on_target_lane(position: Vec2, pickup: Vec2, target: Vec2, lane_width: f32) -> bool {
     let to_target = target - position;
     let Some(direction) = to_target.try_normalize() else {
         return false;
     };
 
     let lateral_distance = (pickup - position).perp_dot(direction).abs();
-    lateral_distance <= CTF_PICKUP_LANE_WIDTH
+    lateral_distance <= lane_width
 }
 
 fn best_pickup(
@@ -884,6 +903,28 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(80.0, 0.0))));
+    }
+
+    #[test]
+    fn attacker_detours_wider_for_high_value_pickup_on_flag_push() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(50.0, 70.0),
+            priority: 150,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(50.0, 70.0))));
     }
 
     #[test]
