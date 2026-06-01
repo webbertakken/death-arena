@@ -32,6 +32,9 @@ pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
 /// and commits to finishing the capture.
 pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
 
+/// Distance around home base where an enemy blocks a carried-flag capture.
+pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
+
 /// Minimum pickup priority that justifies interrupting a CTF objective.
 pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
 
@@ -158,6 +161,9 @@ pub fn choose_capture_the_flag_target(
     }
 
     if enemy_flag.holder == Some(ai_entity) {
+        if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
+            return Some(DrivingTarget::UrgentDefendHomeBase(threat.position));
+        }
         return Some(DrivingTarget::HomeBase(own_flag.home));
     }
 
@@ -199,6 +205,42 @@ fn closest_home_flag_threat(
         .copied()
         .filter_map(|threat| {
             let distance_sq = threat.position.distance_squared(own_flag.position);
+            (threat.team == team.enemy() && distance_sq <= radius_sq)
+                .then_some((threat, distance_sq))
+        })
+        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .x
+                        .partial_cmp(&b_threat.position.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .y
+                        .partial_cmp(&b_threat.position.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+        .map(|(threat, _)| threat)
+}
+
+fn closest_home_base_contester(
+    team: AiTeam,
+    home_base: Vec2,
+    threats: &[ThreatTarget],
+) -> Option<ThreatTarget> {
+    let radius_sq = HOME_BASE_CONTEST_RADIUS * HOME_BASE_CONTEST_RADIUS;
+    threats
+        .iter()
+        .copied()
+        .filter_map(|threat| {
+            let distance_sq = threat.position.distance_squared(home_base);
             (threat.team == team.enemy() && distance_sq <= radius_sq)
                 .then_some((threat, distance_sq))
         })
@@ -1046,6 +1088,38 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+    }
+
+    #[test]
+    fn carrier_clears_contested_home_base_before_scoring() {
+        let ai = Entity::from_raw(7);
+        let target = choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(100.0, 0.0),
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(430.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(430.0, 0.0)))
+        );
     }
 
     #[test]
