@@ -148,12 +148,23 @@ fn claimed_pickups_for_virtual_players(
     pickups: &[PickupTarget],
     player_position: Option<Vec2>,
 ) -> Vec<(Entity, PickupTarget)> {
-    pickups
+    let mut ordered_pickups = pickups.to_vec();
+    ordered_pickups.sort_by(compare_pickup_claim_priority);
+
+    let mut claimed_entities = Vec::new();
+    ordered_pickups
         .iter()
         .copied()
         .filter_map(|pickup| {
-            closest_eligible_pickup_claimant(query, assigned_ctf_targets, pickup, player_position)
-                .map(|entity| (entity, pickup))
+            let entity = closest_eligible_pickup_claimant(
+                query,
+                assigned_ctf_targets,
+                pickup,
+                player_position,
+                &claimed_entities,
+            )?;
+            claimed_entities.push(entity);
+            Some((entity, pickup))
         })
         .collect()
 }
@@ -163,10 +174,12 @@ fn closest_eligible_pickup_claimant(
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
     pickup: PickupTarget,
     player_position: Option<Vec2>,
+    claimed_entities: &[Entity],
 ) -> Option<Entity> {
     let pickup_candidates = [pickup];
     let (entity, position) = query
         .iter()
+        .filter(|(entity, _, _)| !claimed_entities.contains(entity))
         .filter_map(|(entity, ai, transform)| {
             let ctf_target = assigned_ctf_targets
                 .iter()
@@ -211,6 +224,23 @@ fn closest_eligible_pickup_claimant(
         })?;
 
     Some(entity)
+}
+
+fn compare_pickup_claim_priority(a: &PickupTarget, b: &PickupTarget) -> std::cmp::Ordering {
+    b.priority
+        .cmp(&a.priority)
+        .then_with(|| {
+            a.position
+                .x
+                .partial_cmp(&b.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 fn player_has_better_pickup_claim(
@@ -961,6 +991,49 @@ mod tests {
             close_transform.translation.x > 120.0,
             "expected closer opponent to claim pickup, x={}",
             close_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn second_virtual_player_claims_next_pickup_when_closest_ai_is_busy() {
+        let mut app = app_with_system();
+        let close_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        let far_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(300.0, 1000.0)],
+            Vec3::new(300.0, 0.0, 4.0),
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Nitro,
+            },
+            Transform::from_translation(Vec3::new(-150.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(80.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let close_transform = app.world.get::<Transform>(close_ai).unwrap();
+        let far_transform = app.world.get::<Transform>(far_ai).unwrap();
+
+        assert!(
+            close_transform.translation.x < 0.0,
+            "expected closest opponent to take high-value nitro, x={}",
+            close_transform.translation.x
+        );
+        assert!(
+            far_transform.translation.x < 300.0,
+            "expected second opponent to claim remaining cash, x={}",
+            far_transform.translation.x
         );
     }
 
