@@ -177,11 +177,27 @@ impl Plugin for PickupPlugin {
             .init_resource::<OpponentScore>()
             .init_resource::<NitroBoosts>()
             .init_resource::<PickupRespawns>()
-            .add_system_set(SystemSet::on_enter(AppState::InGame).with_system(spawn::setup));
+            .add_system_set(
+                SystemSet::on_enter(AppState::InGame)
+                    .with_system(reset_pickup_match_resources)
+                    .with_system(spawn::setup),
+            );
         app.add_system(system::nitro_boost_decay_system.before(system::pickup_collection_system))
             .add_system(system::pickup_collection_system)
             .add_system(system::pickup_respawn_system.after(system::pickup_collection_system));
     }
+}
+
+fn reset_pickup_match_resources(
+    mut score: ResMut<Score>,
+    mut opponent_score: ResMut<OpponentScore>,
+    mut nitro_boosts: ResMut<NitroBoosts>,
+    mut respawns: ResMut<PickupRespawns>,
+) {
+    *score = Score::default();
+    *opponent_score = OpponentScore::default();
+    *nitro_boosts = NitroBoosts::default();
+    *respawns = PickupRespawns::default();
 }
 
 #[cfg(test)]
@@ -345,5 +361,45 @@ mod tests {
         assert_multiplier_eq(boosts.opponent_multiplier(), 1.0);
         assert_eq!(boosts.player_frames, 0);
         assert_eq!(boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn entering_match_resets_pickup_economy_and_timers() {
+        let mut app = App::new();
+        app.insert_resource(Score {
+            cash: 500,
+            collected: 2,
+            captures: 1,
+            steals: 1,
+            returns: 1,
+        });
+        app.insert_resource(OpponentScore {
+            cash: 300,
+            collected: 1,
+            captures: 1,
+            steals: 1,
+            returns: 1,
+        });
+        app.insert_resource(NitroBoosts {
+            player_frames: 12,
+            opponent_frames: 34,
+        });
+        let mut respawns = PickupRespawns::default();
+        respawns.queue(PickupKind::Cash, Vec2::new(1.0, 2.0));
+        app.insert_resource(respawns);
+        app.add_system(reset_pickup_match_resources);
+
+        app.update();
+
+        assert_eq!(*app.world.resource::<Score>(), Score::default());
+        assert_eq!(
+            *app.world.resource::<OpponentScore>(),
+            OpponentScore::default()
+        );
+        assert_eq!(*app.world.resource::<NitroBoosts>(), NitroBoosts::default());
+        assert_eq!(
+            *app.world.resource::<PickupRespawns>(),
+            PickupRespawns::default()
+        );
     }
 }

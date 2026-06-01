@@ -536,9 +536,24 @@ impl Plugin for CtfPlugin {
             .init_resource::<NitroBoosts>()
             .init_resource::<CtfMatchResult>()
             .add_system_set(
+                SystemSet::on_enter(AppState::InGame).with_system(reset_ctf_match_resources),
+            )
+            .add_system_set(
                 SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
             );
     }
+}
+
+fn reset_ctf_match_resources(
+    mut captures: ResMut<CaptureScore>,
+    mut steals: ResMut<FlagStealScore>,
+    mut returns: ResMut<FlagReturnScore>,
+    mut result: ResMut<CtfMatchResult>,
+) {
+    *captures = CaptureScore::default();
+    *steals = FlagStealScore::default();
+    *returns = FlagReturnScore::default();
+    *result = CtfMatchResult::default();
 }
 
 #[cfg(test)]
@@ -548,6 +563,46 @@ mod tests {
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw(id)
+    }
+
+    #[test]
+    fn entering_match_resets_ctf_scores_and_result() {
+        let mut app = App::new();
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 1,
+        });
+        app.insert_resource(FlagStealScore {
+            player: 3,
+            opponents: 4,
+        });
+        app.insert_resource(FlagReturnScore {
+            player: 5,
+            opponents: 6,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Opponents),
+        });
+        app.add_system(reset_ctf_match_resources);
+
+        app.update();
+
+        assert_eq!(
+            *app.world.resource::<CaptureScore>(),
+            CaptureScore::default()
+        );
+        assert_eq!(
+            *app.world.resource::<FlagStealScore>(),
+            FlagStealScore::default()
+        );
+        assert_eq!(
+            *app.world.resource::<FlagReturnScore>(),
+            FlagReturnScore::default()
+        );
+        assert_eq!(
+            *app.world.resource::<CtfMatchResult>(),
+            CtfMatchResult::default()
+        );
     }
 
     fn blue_collector(position: Vec2) -> CollectorState {
