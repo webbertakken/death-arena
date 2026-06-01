@@ -1524,7 +1524,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_carrier_clears_contested_red_base() {
+    fn flag_carrier_stages_outside_contested_red_base() {
         let mut app = app_with_system();
         let ai = spawn_ai_at(
             &mut app,
@@ -1551,8 +1551,8 @@ mod tests {
 
         let transform = app.world.get::<Transform>(ai).unwrap();
         assert!(
-            transform.translation.y > 0.0,
-            "expected flag carrier to clear the contested base, y={}",
+            transform.translation.y < 0.0,
+            "expected flag carrier to stage away from red-base contest, y={}",
             transform.translation.y
         );
     }

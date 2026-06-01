@@ -35,6 +35,9 @@ pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
 /// Distance around home base where an enemy blocks a carried-flag capture.
 pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
 
+/// Distance from home where a flag carrier waits while the base is contested.
+pub const CONTESTED_HOME_BASE_STAGING_DISTANCE: f32 = 240.0;
+
 /// Minimum pickup priority that justifies interrupting a CTF objective.
 pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
 
@@ -61,6 +64,7 @@ impl SteeringIntent {
 /// The kind of world target a virtual player is currently chasing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DrivingTarget {
+    ContestedHomeBaseStaging(Vec2),
     DefendHomeBase(Vec2),
     HomeBase(Vec2),
     EnemyFlag(Vec2),
@@ -77,7 +81,8 @@ impl DrivingTarget {
     #[must_use]
     pub const fn position(self) -> Vec2 {
         match self {
-            Self::DefendHomeBase(position)
+            Self::ContestedHomeBaseStaging(position)
+            | Self::DefendHomeBase(position)
             | Self::HomeBase(position)
             | Self::EnemyFlag(position)
             | Self::EscortFlagCarrier(position)
@@ -162,7 +167,9 @@ pub fn choose_capture_the_flag_target(
 
     if enemy_flag.holder == Some(ai_entity) {
         if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
-            return Some(DrivingTarget::UrgentDefendHomeBase(threat.position));
+            return Some(DrivingTarget::ContestedHomeBaseStaging(
+                contested_home_base_staging_point(own_flag.home, threat.position),
+            ));
         }
         return Some(DrivingTarget::HomeBase(own_flag.home));
     }
@@ -267,6 +274,15 @@ fn closest_home_base_contester(
                 })
         })
         .map(|(threat, _)| threat)
+}
+
+fn contested_home_base_staging_point(home_base: Vec2, threat_position: Vec2) -> Vec2 {
+    let to_home = home_base - threat_position;
+    let Some(direction) = to_home.try_normalize() else {
+        return home_base + Vec2::X * CONTESTED_HOME_BASE_STAGING_DISTANCE;
+    };
+
+    home_base + direction * CONTESTED_HOME_BASE_STAGING_DISTANCE
 }
 
 fn defensive_intercept_point(flag_position: Vec2, threat_position: Vec2) -> Vec2 {
@@ -1137,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_clears_contested_home_base_before_scoring() {
+    fn carrier_stages_outside_contested_home_base_before_scoring() {
         let ai = Entity::from_raw(7);
         let target = choose_capture_the_flag_target(
             ai,
@@ -1164,7 +1180,9 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(430.0, 0.0)))
+            Some(DrivingTarget::ContestedHomeBaseStaging(Vec2::new(
+                740.0, 0.0
+            )))
         );
     }
 
