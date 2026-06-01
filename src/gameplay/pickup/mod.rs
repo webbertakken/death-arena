@@ -95,6 +95,8 @@ pub struct Score {
     pub collected: u32,
     /// Number of CTF captures rewarded to the player team.
     pub captures: u32,
+    /// Number of home flag returns rewarded to the player team.
+    pub returns: u32,
 }
 
 impl Score {
@@ -109,6 +111,12 @@ impl Score {
         self.cash += captures * bounty;
         self.captures += captures;
     }
+
+    /// Apply home flag return rewards to the tally.
+    pub const fn bank_flag_return_bonus(&mut self, returns: u32, bounty: u32) {
+        self.cash += returns * bounty;
+        self.returns += returns;
+    }
 }
 
 /// Running tally of pickups stolen by virtual opponents.
@@ -120,6 +128,8 @@ pub struct OpponentScore {
     pub collected: u32,
     /// Number of CTF captures rewarded to virtual opponents.
     pub captures: u32,
+    /// Number of home flag returns rewarded to virtual opponents.
+    pub returns: u32,
 }
 
 impl OpponentScore {
@@ -133,6 +143,12 @@ impl OpponentScore {
     pub const fn bank_capture_bonus(&mut self, captures: u32, bounty: u32) {
         self.cash += captures * bounty;
         self.captures += captures;
+    }
+
+    /// Apply home flag return rewards to the tally.
+    pub const fn bank_flag_return_bonus(&mut self, returns: u32, bounty: u32) {
+        self.cash += returns * bounty;
+        self.returns += returns;
     }
 }
 
@@ -167,6 +183,7 @@ mod tests {
                 cash: PickupKind::Cash.bounty() + PickupKind::Repair.bounty(),
                 collected: 2,
                 captures: 0,
+                returns: 0,
             }
         );
     }
@@ -181,6 +198,22 @@ mod tests {
                 cash: 500,
                 collected: 0,
                 captures: 2,
+                returns: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn flag_return_bonus_accumulates_cash_and_return_count() {
+        let mut score = Score::default();
+        score.bank_flag_return_bonus(2, 75);
+        assert_eq!(
+            score,
+            Score {
+                cash: 150,
+                collected: 0,
+                captures: 0,
+                returns: 2,
             }
         );
     }
@@ -196,6 +229,7 @@ mod tests {
                 cash: PickupKind::Nitro.bounty() + PickupKind::Cash.bounty(),
                 collected: 2,
                 captures: 0,
+                returns: 0,
             }
         );
     }
@@ -210,6 +244,22 @@ mod tests {
                 cash: 250,
                 collected: 0,
                 captures: 1,
+                returns: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn opponent_flag_return_bonus_accumulates_cash_and_return_count() {
+        let mut score = OpponentScore::default();
+        score.bank_flag_return_bonus(1, 75);
+        assert_eq!(
+            score,
+            OpponentScore {
+                cash: 75,
+                collected: 0,
+                captures: 0,
+                returns: 1,
             }
         );
     }

@@ -10,9 +10,17 @@ pub const FLAG_TOUCH_RADIUS: f32 = 120.0;
 pub const BASE_CAPTURE_RADIUS: f32 = 160.0;
 pub const CAPTURES_TO_WIN: u32 = 3;
 pub const CAPTURE_CASH_BOUNTY: u32 = 250;
+pub const FLAG_RETURN_CASH_BOUNTY: u32 = 75;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
+type CtfMatchResources<'w> = (
+    ResMut<'w, CaptureScore>,
+    ResMut<'w, FlagReturnScore>,
+    ResMut<'w, Score>,
+    ResMut<'w, OpponentScore>,
+    ResMut<'w, CtfMatchResult>,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlagTeam {
@@ -53,6 +61,21 @@ pub struct CaptureScore {
 
 impl CaptureScore {
     const fn capture_for(&mut self, collector: CollectorKind) {
+        match collector {
+            CollectorKind::Player => self.player += 1,
+            CollectorKind::Opponent => self.opponents += 1,
+        }
+    }
+}
+
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlagReturnScore {
+    pub player: u32,
+    pub opponents: u32,
+}
+
+impl FlagReturnScore {
+    const fn return_for(&mut self, collector: CollectorKind) {
         match collector {
             CollectorKind::Player => self.player += 1,
             CollectorKind::Opponent => self.opponents += 1,
@@ -118,6 +141,7 @@ fn advance_capture_the_flag(
     flags: &mut [FlagState],
     collectors: &[CollectorState],
     score: &mut CaptureScore,
+    returns: &mut FlagReturnScore,
     result: &mut CtfMatchResult,
 ) {
     if result.winner.is_some() {
@@ -132,7 +156,9 @@ fn advance_capture_the_flag(
             break;
         }
 
-        try_return_stolen_own_flag(flags, collector);
+        if try_return_stolen_own_flag(flags, collector) {
+            returns.return_for(collector.kind);
+        }
 
         try_score_carried_flag(flags, collectors, collector, score, result);
     }
@@ -169,9 +195,9 @@ fn sync_carried_flags_to_holders(flags: &mut [FlagState], collectors: &[Collecto
     }
 }
 
-fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorState) {
+fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorState) -> bool {
     let Some(own_flag) = flags.iter_mut().find(|flag| flag.team == collector.team) else {
-        return;
+        return false;
     };
 
     let own_flag_is_away = own_flag.holder.is_some()
@@ -183,7 +209,10 @@ fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorStat
     {
         own_flag.holder = None;
         own_flag.position = own_flag.home;
+        return true;
     }
+
+    false
 }
 
 fn try_score_carried_flag(
@@ -298,14 +327,12 @@ fn collector_is_carrying_flag(
 }
 
 pub fn capture_the_flag_system(
-    mut score: ResMut<CaptureScore>,
-    mut player_economy: ResMut<Score>,
-    mut opponent_economy: ResMut<OpponentScore>,
-    mut result: ResMut<CtfMatchResult>,
+    resources: CtfMatchResources,
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
 ) {
+    let (mut score, mut returns, mut player_economy, mut opponent_economy, mut result) = resources;
     let mut collectors = Vec::new();
     if let Ok((entity, transform)) = player_query.get_single() {
         collectors.push(CollectorState {
@@ -338,10 +365,23 @@ pub fn capture_the_flag_system(
         .collect();
 
     let previous_score = *score;
-    advance_capture_the_flag(&mut flags, &collectors, &mut score, &mut result);
+    let previous_returns = *returns;
+    advance_capture_the_flag(
+        &mut flags,
+        &collectors,
+        &mut score,
+        &mut returns,
+        &mut result,
+    );
     award_capture_bounties(
         previous_score,
         *score,
+        &mut player_economy,
+        &mut opponent_economy,
+    );
+    award_flag_return_bounties(
+        previous_returns,
+        *returns,
         &mut player_economy,
         &mut opponent_economy,
     );
@@ -371,12 +411,29 @@ const fn award_capture_bounties(
     );
 }
 
+const fn award_flag_return_bounties(
+    previous: FlagReturnScore,
+    current: FlagReturnScore,
+    player_economy: &mut Score,
+    opponent_economy: &mut OpponentScore,
+) {
+    player_economy.bank_flag_return_bonus(
+        current.player.saturating_sub(previous.player),
+        FLAG_RETURN_CASH_BOUNTY,
+    );
+    opponent_economy.bank_flag_return_bonus(
+        current.opponents.saturating_sub(previous.opponents),
+        FLAG_RETURN_CASH_BOUNTY,
+    );
+}
+
 #[derive(Default)]
 pub struct CtfPlugin;
 
 impl Plugin for CtfPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CaptureScore>()
+            .init_resource::<FlagReturnScore>()
             .init_resource::<CtfMatchResult>()
             .add_system_set(
                 SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
@@ -436,7 +493,8 @@ mod tests {
         score: &mut CaptureScore,
     ) {
         let mut result = CtfMatchResult::default();
-        advance_capture_the_flag(flags, collectors, score, &mut result);
+        let mut returns = FlagReturnScore::default();
+        advance_capture_the_flag(flags, collectors, score, &mut returns, &mut result);
     }
 
     fn test_player() -> Player {
@@ -499,6 +557,30 @@ mod tests {
         assert_eq!(opponent_economy.cash, CAPTURE_CASH_BOUNTY);
         assert_eq!(opponent_economy.captures, 1);
         assert_eq!(opponent_economy.collected, 0);
+    }
+
+    #[test]
+    fn flag_return_bounty_rewards_only_new_returns() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_flag_return_bounties(
+            FlagReturnScore {
+                player: 1,
+                opponents: 0,
+            },
+            FlagReturnScore {
+                player: 2,
+                opponents: 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, FLAG_RETURN_CASH_BOUNTY);
+        assert_eq!(player_economy.returns, 1);
+        assert_eq!(opponent_economy.cash, FLAG_RETURN_CASH_BOUNTY);
+        assert_eq!(opponent_economy.returns, 1);
     }
 
     #[test]
@@ -584,9 +666,16 @@ mod tests {
             player: CAPTURES_TO_WIN - 1,
             opponents: 0,
         };
+        let mut returns = FlagReturnScore::default();
         let mut result = CtfMatchResult::default();
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score, &mut result);
+        advance_capture_the_flag(
+            &mut flags,
+            &[collector],
+            &mut score,
+            &mut returns,
+            &mut result,
+        );
 
         assert_eq!(score.player, CAPTURES_TO_WIN);
         assert_eq!(result.winner, Some(CtfMatchWinner::Player));
@@ -606,11 +695,18 @@ mod tests {
             player: CAPTURES_TO_WIN,
             opponents: 0,
         };
+        let mut returns = FlagReturnScore::default();
         let mut result = CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
         };
 
-        advance_capture_the_flag(&mut flags, &[collector], &mut score, &mut result);
+        advance_capture_the_flag(
+            &mut flags,
+            &[collector],
+            &mut score,
+            &mut returns,
+            &mut result,
+        );
 
         assert_eq!(score.player, CAPTURES_TO_WIN);
         assert_eq!(result.winner, Some(CtfMatchWinner::Player));
@@ -632,9 +728,16 @@ mod tests {
             player: CAPTURES_TO_WIN - 1,
             opponents: CAPTURES_TO_WIN - 1,
         };
+        let mut returns = FlagReturnScore::default();
         let mut result = CtfMatchResult::default();
 
-        advance_capture_the_flag(&mut flags, &[blue, teammate], &mut score, &mut result);
+        advance_capture_the_flag(
+            &mut flags,
+            &[blue, teammate],
+            &mut score,
+            &mut returns,
+            &mut result,
+        );
 
         assert_eq!(
             score,
@@ -828,6 +931,7 @@ mod tests {
     fn system_tracks_player_capture_without_query_conflicts() {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagReturnScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
@@ -870,9 +974,54 @@ mod tests {
     }
 
     #[test]
+    fn system_rewards_player_for_returning_home_flag() {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagReturnScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(capture_the_flag_system);
+        app.world.spawn((
+            test_player(),
+            Transform::from_translation(Vec3::new(-20.0, 0.0, 5.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-20.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(500.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            *app.world.resource::<FlagReturnScore>(),
+            FlagReturnScore {
+                player: 1,
+                opponents: 0,
+            }
+        );
+        assert_eq!(app.world.resource::<Score>().cash, FLAG_RETURN_CASH_BOUNTY);
+        assert_eq!(app.world.resource::<Score>().returns, 1);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+    }
+
+    #[test]
     fn system_uses_virtual_player_team_for_enemy_flags() {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagReturnScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
@@ -926,6 +1075,7 @@ mod tests {
     fn blue_virtual_player_capture_scores_for_player_team() {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagReturnScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
@@ -980,6 +1130,7 @@ mod tests {
             player: CAPTURES_TO_WIN - 1,
             opponents: 0,
         });
+        app.init_resource::<FlagReturnScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
