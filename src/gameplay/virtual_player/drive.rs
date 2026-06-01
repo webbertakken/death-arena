@@ -232,7 +232,7 @@ fn closest_eligible_pickup_claimant(
     claimed_entities: &[Entity],
 ) -> Option<Entity> {
     let pickup_candidates = [pickup];
-    let (entity, position) = query
+    let (entity, _, position) = query
         .iter()
         .filter(|(entity, _, _)| !claimed_entities.contains(entity))
         .filter_map(|(entity, ai, transform)| {
@@ -254,9 +254,10 @@ fn closest_eligible_pickup_claimant(
                 },
             );
 
-            (target == Some(DrivingTarget::Pickup(pickup.position))).then_some((entity, position))
+            (target == Some(DrivingTarget::Pickup(pickup.position)))
+                .then_some((entity, ai.team, position))
         })
-        .min_by(|(_, a_position), (_, b_position)| {
+        .min_by(|(_, _, a_position), (_, _, b_position)| {
             a_position
                 .distance_squared(pickup.position)
                 .partial_cmp(&b_position.distance_squared(pickup.position))
@@ -274,8 +275,8 @@ fn closest_eligible_pickup_claimant(
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         })
-        .filter(|(_, position)| {
-            !player_has_better_pickup_claim(player_position, pickup, *position)
+        .filter(|(_, team, position)| {
+            !virtual_player_yields_player_pickup_claim(*team, player_position, pickup, *position)
         })?;
 
     Some(entity)
@@ -313,6 +314,16 @@ fn player_has_better_pickup_claim(
     }
 
     player_distance_sq <= virtual_player_position.distance_squared(pickup.position)
+}
+
+fn virtual_player_yields_player_pickup_claim(
+    team: AiTeam,
+    player_position: Option<Vec2>,
+    pickup: PickupTarget,
+    virtual_player_position: Vec2,
+) -> bool {
+    team == AiTeam::Blue
+        && player_has_better_pickup_claim(player_position, pickup, virtual_player_position)
 }
 
 fn flag_targets(
@@ -894,6 +905,62 @@ mod tests {
             transform.translation.y > 0.0,
             "expected teammate to keep patrolling, y={}",
             transform.translation.y
+        );
+    }
+
+    #[test]
+    fn blue_virtual_player_does_not_claim_pickup_when_player_is_closer() {
+        let pickup = PickupTarget {
+            position: Vec2::new(200.0, 0.0),
+            priority: 100,
+        };
+
+        let yields = virtual_player_yields_player_pickup_claim(
+            AiTeam::Blue,
+            Some(Vec2::new(180.0, 0.0)),
+            pickup,
+            Vec2::ZERO,
+        );
+
+        assert!(yields);
+    }
+
+    #[test]
+    fn red_virtual_player_claims_pickup_even_when_player_is_closer() {
+        let pickup = PickupTarget {
+            position: Vec2::new(200.0, 0.0),
+            priority: 100,
+        };
+
+        let yields = virtual_player_yields_player_pickup_claim(
+            AiTeam::Red,
+            Some(Vec2::new(180.0, 0.0)),
+            pickup,
+            Vec2::ZERO,
+        );
+
+        assert!(!yields);
+    }
+
+    #[test]
+    fn red_virtual_player_contests_player_claimed_pickup() {
+        let mut app = app_with_system();
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_player(&mut app, Vec3::new(180.0, 0.0, 5.0));
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(ai).unwrap();
+        assert!(
+            transform.translation.x > 0.0,
+            "expected opponent to contest player-claimed pickup, x={}",
+            transform.translation.x
         );
     }
 
