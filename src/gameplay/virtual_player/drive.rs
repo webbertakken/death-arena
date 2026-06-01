@@ -43,10 +43,16 @@ pub fn virtual_player_drive_system(
         .map(|(entity, transform)| (entity, transform.translation.xy()));
     let player_position = player.map(|(_, position)| position);
     let threats = threat_targets(&query, player_position);
-    let mut available_pickups = pickup_targets(&pickup_query);
+    let available_pickups = pickup_targets(&pickup_query);
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
+    let claimed_pickups = claimed_pickups_for_virtual_players(
+        &query,
+        &assigned_ctf_targets,
+        &available_pickups,
+        player_position,
+    );
 
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
@@ -55,13 +61,17 @@ pub fn virtual_player_drive_system(
             .iter()
             .find(|(assigned_entity, _)| *assigned_entity == entity)
             .and_then(|(_, target)| *target);
+        let entity_pickups: Vec<PickupTarget> = claimed_pickups
+            .iter()
+            .filter_map(|(assigned_entity, pickup)| (*assigned_entity == entity).then_some(*pickup))
+            .collect();
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
                 waypoints: &ai.waypoints,
                 current_waypoint: ai.current_waypoint,
                 ctf_target,
-                pickups: &available_pickups,
+                pickups: &entity_pickups,
                 pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                 player_position: player_position_for_team(ai.team, player_position),
                 player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
@@ -69,15 +79,6 @@ pub fn virtual_player_drive_system(
         ) else {
             continue;
         };
-
-        if let DrivingTarget::Pickup(target_position) = target {
-            if let Some(index) = available_pickups
-                .iter()
-                .position(|pickup| pickup.position == target_position)
-            {
-                available_pickups.swap_remove(index);
-            }
-        }
 
         let intent = compute_steering(position, forward, target.position(), WAYPOINT_ARRIVE_RADIUS);
 
@@ -139,6 +140,73 @@ fn pickup_targets(
             priority: pickup.kind.virtual_player_priority(),
         })
         .collect()
+}
+
+fn claimed_pickups_for_virtual_players(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
+    pickups: &[PickupTarget],
+    player_position: Option<Vec2>,
+) -> Vec<(Entity, PickupTarget)> {
+    pickups
+        .iter()
+        .copied()
+        .filter_map(|pickup| {
+            closest_eligible_pickup_claimant(query, assigned_ctf_targets, pickup, player_position)
+                .map(|entity| (entity, pickup))
+        })
+        .collect()
+}
+
+fn closest_eligible_pickup_claimant(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
+    pickup: PickupTarget,
+    player_position: Option<Vec2>,
+) -> Option<Entity> {
+    let pickup_candidates = [pickup];
+    query
+        .iter()
+        .filter_map(|(entity, ai, transform)| {
+            let ctf_target = assigned_ctf_targets
+                .iter()
+                .find(|(assigned_entity, _)| *assigned_entity == entity)
+                .and_then(|(_, target)| *target);
+            let position = transform.translation.xy();
+            let target = choose_driving_target(
+                position,
+                DrivingChoices {
+                    waypoints: &ai.waypoints,
+                    current_waypoint: ai.current_waypoint,
+                    ctf_target,
+                    pickups: &pickup_candidates,
+                    pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
+                    player_position: player_position_for_team(ai.team, player_position),
+                    player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+                },
+            );
+
+            (target == Some(DrivingTarget::Pickup(pickup.position))).then_some((entity, position))
+        })
+        .min_by(|(_, a_position), (_, b_position)| {
+            a_position
+                .distance_squared(pickup.position)
+                .partial_cmp(&b_position.distance_squared(pickup.position))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a_position
+                        .x
+                        .partial_cmp(&b_position.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    a_position
+                        .y
+                        .partial_cmp(&b_position.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+        .map(|(entity, _)| entity)
 }
 
 fn flag_targets(
@@ -803,6 +871,48 @@ mod tests {
             second_transform.translation.y > 0.0,
             "expected second opponent to keep moving, y={}",
             second_transform.translation.y
+        );
+    }
+
+    #[test]
+    fn closest_virtual_player_claims_shared_pickup_even_if_spawned_later() {
+        let mut app = app_with_system();
+        let far_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        let close_ai = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(120.0, 1000.0)],
+            Vec3::new(120.0, 0.0, 4.0),
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Cash,
+            },
+            Transform::from_translation(Vec3::new(220.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        let far_transform = app.world.get::<Transform>(far_ai).unwrap();
+        let close_transform = app.world.get::<Transform>(close_ai).unwrap();
+
+        assert!(
+            far_transform.translation.x.abs() < 1e-4,
+            "expected farther opponent to keep patrol line, x={}",
+            far_transform.translation.x
+        );
+        assert!(
+            far_transform.translation.y > 0.0,
+            "expected farther opponent to keep moving, y={}",
+            far_transform.translation.y
+        );
+        assert!(
+            close_transform.translation.x > 120.0,
+            "expected closer opponent to claim pickup, x={}",
+            close_transform.translation.x
         );
     }
 
