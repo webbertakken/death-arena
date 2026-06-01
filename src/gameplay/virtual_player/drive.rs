@@ -1491,6 +1491,51 @@ mod tests {
     }
 
     #[test]
+    fn teammate_clears_contested_red_base_for_flag_carrier() {
+        let mut app = app_with_system();
+        let carrier = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(300.0, 0.0, 4.0),
+        );
+        let defender = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(560.0, 0.0, 4.0),
+        );
+        spawn_player(&mut app, Vec3::new(430.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(300.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+
+        app.update();
+
+        let carrier_transform = app.world.get::<Transform>(carrier).unwrap();
+        let defender_transform = app.world.get::<Transform>(defender).unwrap();
+        assert!(
+            carrier_transform.translation.x > 300.0,
+            "expected carrier to keep pushing home, x={}",
+            carrier_transform.translation.x
+        );
+        assert!(
+            defender_transform.translation.x < 560.0,
+            "expected teammate to clear base contester, x={}",
+            defender_transform.translation.x
+        );
+    }
+
+    #[test]
     fn flag_carrier_hunts_stolen_home_flag_before_red_base() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);

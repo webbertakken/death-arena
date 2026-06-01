@@ -168,6 +168,9 @@ pub fn choose_capture_the_flag_target(
     }
 
     if enemy_flag.holder.is_some() {
+        if let Some(threat) = closest_home_base_contester(team, own_flag.home, threats) {
+            return Some(DrivingTarget::UrgentDefendHomeBase(threat.position));
+        }
         return Some(DrivingTarget::EscortFlagCarrier(escort_lead_point(
             enemy_flag.position,
             own_flag.home,
@@ -1261,6 +1264,38 @@ mod tests {
         assert_eq!(
             target,
             Some(DrivingTarget::StolenHomeFlag(Vec2::new(100.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn teammate_clears_contested_home_base_for_flag_carrier() {
+        let carrier = Entity::from_raw(8);
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(300.0, 0.0),
+                    holder: Some(carrier),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(430.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(430.0, 0.0)))
         );
     }
 
