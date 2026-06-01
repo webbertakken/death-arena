@@ -84,6 +84,7 @@ pub enum DrivingTarget {
     Pickup(Vec2),
     Player(Vec2),
     StolenHomeFlag(Vec2),
+    StolenHomeFlagRouteGuard(Vec2),
     UrgentDefendHomeBase(Vec2),
 }
 
@@ -102,6 +103,7 @@ impl DrivingTarget {
             | Self::Pickup(position)
             | Self::Player(position)
             | Self::StolenHomeFlag(position)
+            | Self::StolenHomeFlagRouteGuard(position)
             | Self::UrgentDefendHomeBase(position) => position,
         }
     }

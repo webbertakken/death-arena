@@ -432,6 +432,10 @@ fn fallback_ctf_target(
         return Some(DrivingTarget::HomeBase(candidate.home_base));
     }
 
+    if is_best_fallback_stolen_flag_route_guard(candidate, candidates, flags) {
+        return stolen_flag_route_guard_target(candidate.team, flags);
+    }
+
     if is_best_fallback_home_defender(candidate, candidates) {
         return defend_home_target(candidate.team, flags);
     }
@@ -441,6 +445,52 @@ fn fallback_ctf_target(
     }
 
     None
+}
+
+fn is_best_fallback_stolen_flag_route_guard(
+    candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
+    flags: &[FlagTarget],
+) -> bool {
+    let Some(DrivingTarget::StolenHomeFlagRouteGuard(target)) =
+        stolen_flag_route_guard_target(candidate.team, flags)
+    else {
+        return false;
+    };
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|other| {
+            other.team == candidate.team
+                && !other.carries_enemy_flag
+                && !is_best_candidate_for_target(*other, candidates)
+        })
+        .min_by(|a, b| compare_fallback_stolen_flag_route_guards(a, b, target))
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn compare_fallback_stolen_flag_route_guards(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+    target: Vec2,
+) -> std::cmp::Ordering {
+    a.position
+        .distance_squared(target)
+        .partial_cmp(&b.position.distance_squared(target))
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            a.position
+                .x
+                .partial_cmp(&b.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 fn is_best_candidate_for_target(
@@ -604,6 +654,18 @@ fn midfield_interceptor_target(team: AiTeam, flags: &[FlagTarget]) -> Option<Dri
     Some(DrivingTarget::MidfieldInterceptor(target))
 }
 
+fn stolen_flag_route_guard_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
+    let own_flag = flags.iter().find(|flag| flag.team == team)?;
+    if own_flag.holder.is_none()
+        && own_flag.position.distance_squared(own_flag.home) <= f32::EPSILON
+    {
+        return None;
+    }
+
+    let target = own_flag.position + (own_flag.home - own_flag.position) * 0.5;
+    Some(DrivingTarget::StolenHomeFlagRouteGuard(target))
+}
+
 fn home_lane_guard_point(home: Vec2, enemy_home: Vec2) -> Vec2 {
     let to_enemy_home = enemy_home - home;
     let distance = to_enemy_home.length();
@@ -631,6 +693,7 @@ const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
             | DrivingTarget::DefendHomeBase(_)
             | DrivingTarget::EnemyFlag(_)
             | DrivingTarget::EscortFlagCarrier(_)
+            | DrivingTarget::StolenHomeFlagRouteGuard(_)
             | DrivingTarget::StolenHomeFlag(_)
             | DrivingTarget::UrgentDefendHomeBase(_)
     )
@@ -1814,6 +1877,71 @@ mod tests {
     }
 
     #[test]
+    fn spare_defender_screens_stolen_home_flag_route() {
+        let flag_hunter = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(-700.0, 0.0),
+            target: DrivingTarget::StolenHomeFlag(Vec2::new(-660.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let route_screen = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(-100.0, 0.0),
+            target: DrivingTarget::StolenHomeFlag(Vec2::new(-660.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let home_guard = CtfTargetCandidate {
+            entity: Entity::from_raw(3),
+            team: AiTeam::Red,
+            position: Vec2::new(450.0, 0.0),
+            target: DrivingTarget::StolenHomeFlag(Vec2::new(-660.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let assignments = assign_ctf_targets(
+            &[flag_hunter, route_screen, home_guard],
+            &[
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(-800.0, 0.0),
+                    holder: Some(Entity::from_raw(42)),
+                },
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-500.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::StolenHomeFlag(Vec2::new(-660.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::StolenHomeFlagRouteGuard(Vec2::new(
+                        -150.0, 0.0
+                    )))
+                ),
+                (
+                    Entity::from_raw(3),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(280.0, 0.0)))
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn defender_intercepts_current_carrier_for_held_home_flag() {
         let mut app = app_with_system();
         let ai = spawn_ai(&mut app, vec![Vec2::new(0.0, 1000.0)]);
@@ -1882,8 +2010,8 @@ mod tests {
             first_transform.translation.x
         );
         assert!(
-            second_transform.translation.x > 0.0,
-            "second opponent should defend the red base instead, x={}",
+            second_transform.translation.x < 0.0,
+            "second opponent should screen the stolen-flag route, x={}",
             second_transform.translation.x
         );
     }
