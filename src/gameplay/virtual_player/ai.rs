@@ -416,14 +416,36 @@ fn best_pickup(
             let distance_sq = position.distance_squared(pickup.position);
             (distance_sq <= radius_sq).then_some((pickup, distance_sq))
         })
-        .min_by(|(a_pickup, a_dist), (b_pickup, b_dist)| {
-            b_pickup.priority.cmp(&a_pickup.priority).then_with(|| {
-                a_dist
-                    .partial_cmp(b_dist)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        })
+        .min_by(compare_pickups_by_priority_distance_and_position)
         .map(|(pickup, _)| pickup)
+}
+
+fn compare_pickups_by_priority_distance_and_position(
+    (a_pickup, a_dist): &(PickupTarget, f32),
+    (b_pickup, b_dist): &(PickupTarget, f32),
+) -> std::cmp::Ordering {
+    b_pickup
+        .priority
+        .cmp(&a_pickup.priority)
+        .then_with(|| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a_pickup
+                .position
+                .x
+                .partial_cmp(&b_pickup.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a_pickup
+                .position
+                .y
+                .partial_cmp(&b_pickup.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 /// Decide how a virtual player should drive to reach `target`.
@@ -656,6 +678,27 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(75.0, 0.0))));
+    }
+
+    #[test]
+    fn equal_value_and_distance_pickup_choice_is_stable() {
+        let waypoints = [Vec2::new(500.0, 0.0)];
+        let pickups = [
+            PickupTarget {
+                position: Vec2::new(0.0, 50.0),
+                priority: 100,
+            },
+            PickupTarget {
+                position: Vec2::new(0.0, -50.0),
+                priority: 100,
+            },
+        ];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(&waypoints, 0, None, &pickups, None, 0.0),
+        );
+
+        assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(0.0, -50.0))));
     }
 
     #[test]
