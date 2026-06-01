@@ -1,4 +1,4 @@
-use crate::gameplay::pickup::{OpponentScore, Score};
+use crate::gameplay::pickup::{NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
@@ -19,6 +19,7 @@ type CtfMatchResources<'w> = (
     ResMut<'w, FlagReturnScore>,
     ResMut<'w, Score>,
     ResMut<'w, OpponentScore>,
+    ResMut<'w, NitroBoosts>,
     ResMut<'w, CtfMatchResult>,
 );
 
@@ -332,7 +333,14 @@ pub fn capture_the_flag_system(
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
 ) {
-    let (mut score, mut returns, mut player_economy, mut opponent_economy, mut result) = resources;
+    let (
+        mut score,
+        mut returns,
+        mut player_economy,
+        mut opponent_economy,
+        mut nitro_boosts,
+        mut result,
+    ) = resources;
     let mut collectors = Vec::new();
     if let Ok((entity, transform)) = player_query.get_single() {
         collectors.push(CollectorState {
@@ -379,6 +387,7 @@ pub fn capture_the_flag_system(
         &mut player_economy,
         &mut opponent_economy,
     );
+    award_capture_momentum_boosts(previous_score, *score, &mut nitro_boosts);
     award_flag_return_bounties(
         previous_returns,
         *returns,
@@ -427,6 +436,19 @@ const fn award_flag_return_bounties(
     );
 }
 
+const fn award_capture_momentum_boosts(
+    previous: CaptureScore,
+    current: CaptureScore,
+    nitro_boosts: &mut NitroBoosts,
+) {
+    if current.player > previous.player {
+        nitro_boosts.trigger_player();
+    }
+    if current.opponents > previous.opponents {
+        nitro_boosts.trigger_opponent();
+    }
+}
+
 #[derive(Default)]
 pub struct CtfPlugin;
 
@@ -434,6 +456,7 @@ impl Plugin for CtfPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CaptureScore>()
             .init_resource::<FlagReturnScore>()
+            .init_resource::<NitroBoosts>()
             .init_resource::<CtfMatchResult>()
             .add_system_set(
                 SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
@@ -581,6 +604,52 @@ mod tests {
         assert_eq!(player_economy.returns, 1);
         assert_eq!(opponent_economy.cash, FLAG_RETURN_CASH_BOUNTY);
         assert_eq!(opponent_economy.returns, 1);
+    }
+
+    #[test]
+    fn player_capture_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_capture_momentum_boosts(
+            CaptureScore {
+                player: 0,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(
+            nitro_boosts.player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(nitro_boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn opponent_capture_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_capture_momentum_boosts(
+            CaptureScore {
+                player: 0,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(nitro_boosts.player_frames, 0);
+        assert_eq!(
+            nitro_boosts.opponent_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
     }
 
     #[test]
@@ -935,6 +1004,7 @@ mod tests {
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
@@ -971,6 +1041,11 @@ mod tests {
         );
         assert_eq!(app.world.resource::<Score>().cash, CAPTURE_CASH_BOUNTY);
         assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(app.world.resource::<NitroBoosts>().opponent_frames, 0);
     }
 
     #[test]
@@ -981,6 +1056,7 @@ mod tests {
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(capture_the_flag_system);
         app.world.spawn((
             test_player(),
@@ -1025,6 +1101,7 @@ mod tests {
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(capture_the_flag_system);
         let virtual_player = app
             .world
@@ -1079,6 +1156,7 @@ mod tests {
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(capture_the_flag_system);
         let virtual_player = app
             .world
@@ -1121,6 +1199,11 @@ mod tests {
         );
         assert_eq!(app.world.resource::<Score>().cash, CAPTURE_CASH_BOUNTY);
         assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(app.world.resource::<NitroBoosts>().opponent_frames, 0);
     }
 
     #[test]
@@ -1134,6 +1217,7 @@ mod tests {
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
