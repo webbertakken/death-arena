@@ -446,6 +446,7 @@ const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
             | DrivingTarget::EnemyFlag(_)
             | DrivingTarget::EscortFlagCarrier(_)
             | DrivingTarget::StolenHomeFlag(_)
+            | DrivingTarget::UrgentDefendHomeBase(_)
     )
 }
 

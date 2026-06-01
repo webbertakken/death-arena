@@ -21,6 +21,9 @@ pub const HOME_FLAG_THREAT_RADIUS: f32 = 500.0;
 /// Distance from the home flag where defenders try to meet an incoming thief.
 pub const HOME_FLAG_DEFENSE_DISTANCE: f32 = 140.0;
 
+/// Distance at which a home-flag threat is too close to ignore for pickups.
+pub const URGENT_HOME_FLAG_THREAT_RADIUS: f32 = 220.0;
+
 /// Maximum sideways distance from a CTF push where a pickup still counts as
 /// being on the flag lane.
 pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
@@ -64,6 +67,7 @@ pub enum DrivingTarget {
     Pickup(Vec2),
     Player(Vec2),
     StolenHomeFlag(Vec2),
+    UrgentDefendHomeBase(Vec2),
 }
 
 impl DrivingTarget {
@@ -78,7 +82,8 @@ impl DrivingTarget {
             | Self::PatrolWaypoint(position)
             | Self::Pickup(position)
             | Self::Player(position)
-            | Self::StolenHomeFlag(position) => position,
+            | Self::StolenHomeFlag(position)
+            | Self::UrgentDefendHomeBase(position) => position,
         }
     }
 }
@@ -164,10 +169,13 @@ pub fn choose_capture_the_flag_target(
     }
 
     if let Some(threat) = closest_home_flag_threat(team, own_flag, threats) {
-        return Some(DrivingTarget::DefendHomeBase(defensive_intercept_point(
-            own_flag.position,
-            threat.position,
-        )));
+        let target = defensive_intercept_point(own_flag.position, threat.position);
+        if threat.position.distance_squared(own_flag.position)
+            <= URGENT_HOME_FLAG_THREAT_RADIUS * URGENT_HOME_FLAG_THREAT_RADIUS
+        {
+            return Some(DrivingTarget::UrgentDefendHomeBase(target));
+        }
+        return Some(DrivingTarget::DefendHomeBase(target));
     }
 
     enemy_flag
@@ -990,6 +998,31 @@ mod tests {
     }
 
     #[test]
+    fn urgent_home_defender_ignores_pickup_detours() {
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let pickups = [PickupTarget {
+            position: Vec2::new(80.0, 0.0),
+            priority: 150,
+        }];
+        let target = choose_driving_target(
+            Vec2::ZERO,
+            choices(
+                &waypoints,
+                0,
+                Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(300.0, 0.0))),
+                &pickups,
+                None,
+                0.0,
+            ),
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(300.0, 0.0)))
+        );
+    }
+
+    #[test]
     fn carrier_returns_enemy_flag_to_home_base() {
         let ai = Entity::from_raw(7);
         let target = choose_capture_the_flag_target(
@@ -1212,7 +1245,38 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::DefendHomeBase(Vec2::new(360.0, 0.0)))
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(360.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn close_home_flag_threat_triggers_urgent_defence() {
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-450.0, 20.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(360.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(360.0, 0.0)))
         );
     }
 
@@ -1249,7 +1313,7 @@ mod tests {
 
         assert_eq!(
             target,
-            Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 90.0)))
+            Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(500.0, 90.0)))
         );
     }
 
