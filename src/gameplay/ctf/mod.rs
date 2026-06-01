@@ -394,6 +394,7 @@ pub fn capture_the_flag_system(
         &mut player_economy,
         &mut opponent_economy,
     );
+    award_flag_return_momentum_boosts(previous_returns, *returns, &mut nitro_boosts);
 
     for (entity, mut flag, mut transform) in &mut flag_query {
         if let Some(updated) = flags.iter().find(|updated| updated.entity == entity) {
@@ -439,6 +440,19 @@ const fn award_flag_return_bounties(
 const fn award_capture_momentum_boosts(
     previous: CaptureScore,
     current: CaptureScore,
+    nitro_boosts: &mut NitroBoosts,
+) {
+    if current.player > previous.player {
+        nitro_boosts.trigger_player();
+    }
+    if current.opponents > previous.opponents {
+        nitro_boosts.trigger_opponent();
+    }
+}
+
+const fn award_flag_return_momentum_boosts(
+    previous: FlagReturnScore,
+    current: FlagReturnScore,
     nitro_boosts: &mut NitroBoosts,
 ) {
     if current.player > previous.player {
@@ -639,6 +653,52 @@ mod tests {
                 opponents: 0,
             },
             CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(nitro_boosts.player_frames, 0);
+        assert_eq!(
+            nitro_boosts.opponent_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+    }
+
+    #[test]
+    fn player_flag_return_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_flag_return_momentum_boosts(
+            FlagReturnScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagReturnScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut nitro_boosts,
+        );
+
+        assert_eq!(
+            nitro_boosts.player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(nitro_boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn opponent_flag_return_triggers_team_nitro_momentum() {
+        let mut nitro_boosts = NitroBoosts::default();
+
+        award_flag_return_momentum_boosts(
+            FlagReturnScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagReturnScore {
                 player: 0,
                 opponents: 1,
             },
@@ -1091,6 +1151,11 @@ mod tests {
         assert_eq!(app.world.resource::<Score>().cash, FLAG_RETURN_CASH_BOUNTY);
         assert_eq!(app.world.resource::<Score>().returns, 1);
         assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+        assert_eq!(
+            app.world.resource::<NitroBoosts>().player_frames,
+            crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+        assert_eq!(app.world.resource::<NitroBoosts>().opponent_frames, 0);
     }
 
     #[test]
