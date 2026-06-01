@@ -134,15 +134,12 @@ fn advance_capture_the_flag(
 
         try_return_stolen_own_flag(flags, collector);
 
-        if try_score_carried_flag(flags, collector, score, result) {
-            continue;
-        }
-
-        if let Some(flag_index) = nearest_touchable_enemy_flag(flags, collector) {
-            flags[flag_index].holder = Some(collector.entity);
-        }
+        try_score_carried_flag(flags, collector, score, result);
     }
 
+    if result.winner.is_none() {
+        claim_touchable_enemy_flags(flags, collectors);
+    }
     sync_carried_flags_to_holders(flags, collectors);
 }
 
@@ -231,16 +228,46 @@ fn try_score_carried_flag(
     true
 }
 
-fn nearest_touchable_enemy_flag(flags: &[FlagState], collector: &CollectorState) -> Option<usize> {
-    flags
+fn claim_touchable_enemy_flags(flags: &mut [FlagState], collectors: &[CollectorState]) {
+    let mut claimed_collectors = Vec::new();
+
+    for flag_index in 0..flags.len() {
+        if flags[flag_index].holder.is_some() {
+            continue;
+        }
+
+        let Some((collector_index, _)) = nearest_enemy_collector_for_flag(
+            &flags[flag_index],
+            flags,
+            collectors,
+            &claimed_collectors,
+        ) else {
+            continue;
+        };
+
+        let collector = collectors[collector_index];
+        flags[flag_index].holder = Some(collector.entity);
+        claimed_collectors.push(collector.entity);
+    }
+}
+
+fn nearest_enemy_collector_for_flag(
+    flag: &FlagState,
+    flags: &[FlagState],
+    collectors: &[CollectorState],
+    claimed_collectors: &[Entity],
+) -> Option<(usize, f32)> {
+    collectors
         .iter()
         .enumerate()
-        .filter_map(|(index, flag)| {
+        .filter(|(_, collector)| {
+            collector.team == flag.team.enemy()
+                && !claimed_collectors.contains(&collector.entity)
+                && !collector_is_carrying_flag(collector.entity, flag.team, flags)
+        })
+        .filter_map(|(index, collector)| {
             let distance_sq = collector.position.distance_squared(flag.position);
-            (flag.team == collector.team.enemy()
-                && flag.holder.is_none()
-                && distance_sq <= FLAG_TOUCH_RADIUS * FLAG_TOUCH_RADIUS)
-                .then_some((index, distance_sq))
+            (distance_sq <= FLAG_TOUCH_RADIUS * FLAG_TOUCH_RADIUS).then_some((index, distance_sq))
         })
         .min_by(|(a_index, a_dist), (b_index, b_dist)| {
             a_dist
@@ -248,7 +275,16 @@ fn nearest_touchable_enemy_flag(flags: &[FlagState], collector: &CollectorState)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a_index.cmp(b_index))
         })
-        .map(|(index, _)| index)
+}
+
+fn collector_is_carrying_flag(
+    collector_entity: Entity,
+    current_flag_team: FlagTeam,
+    flags: &[FlagState],
+) -> bool {
+    flags
+        .iter()
+        .any(|flag| flag.team != current_flag_team && flag.holder == Some(collector_entity))
 }
 
 pub fn capture_the_flag_system(
@@ -365,6 +401,15 @@ mod tests {
         }
     }
 
+    fn blue_teammate(position: Vec2) -> CollectorState {
+        CollectorState {
+            entity: entity(3),
+            team: FlagTeam::Blue,
+            kind: CollectorKind::Player,
+            position,
+        }
+    }
+
     fn flag(entity_id: u32, team: FlagTeam, home: Vec2) -> FlagState {
         FlagState {
             entity: entity(entity_id),
@@ -475,6 +520,23 @@ mod tests {
 
         assert_eq!(flags[1].holder, Some(collector.entity));
         assert_eq!(flags[1].position, collector.position);
+        assert_eq!(score, CaptureScore::default());
+    }
+
+    #[test]
+    fn nearest_teammate_claims_contested_enemy_flag() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::new(-500.0, 0.0)),
+            flag(11, FlagTeam::Red, Vec2::ZERO),
+        ];
+        let far_collector = blue_collector(Vec2::new(90.0, 0.0));
+        let near_collector = blue_teammate(Vec2::new(10.0, 0.0));
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[far_collector, near_collector], &mut score);
+
+        assert_eq!(flags[1].holder, Some(near_collector.entity));
+        assert_eq!(flags[1].position, near_collector.position);
         assert_eq!(score, CaptureScore::default());
     }
 
