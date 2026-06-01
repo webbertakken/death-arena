@@ -16,6 +16,8 @@ pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
     let y = BOUNDS.y / 2.0 - 300.0;
     vec![
         (PickupKind::Cash, Vec2::new(0.0, 0.0)),
+        (PickupKind::Cash, Vec2::new(x * 0.45, 0.0)),
+        (PickupKind::Cash, Vec2::new(-x * 0.45, 0.0)),
         (PickupKind::Cash, Vec2::new(x, y)),
         (PickupKind::Cash, Vec2::new(-x, -y)),
         (PickupKind::Repair, Vec2::new(-x, y)),
@@ -93,5 +95,20 @@ mod tests {
                 "duplicate pickup position at {position}"
             );
         }
+    }
+
+    #[test]
+    fn layout_places_pickups_on_capture_lane() {
+        let lane_pickups = pickup_layout()
+            .into_iter()
+            .filter(|(_, position)| {
+                position.x.abs() > f32::EPSILON && position.y.abs() <= f32::EPSILON
+            })
+            .count();
+
+        assert!(
+            lane_pickups >= 2,
+            "expected mirrored pickups on the central capture lane"
+        );
     }
 }
