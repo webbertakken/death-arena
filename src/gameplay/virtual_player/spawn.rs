@@ -24,7 +24,7 @@ struct VirtualPlayerSpawn {
     translation: Vec3,
 }
 
-const fn spawn_roster() -> [VirtualPlayerSpawn; 5] {
+const fn spawn_roster() -> [VirtualPlayerSpawn; 7] {
     [
         VirtualPlayerSpawn {
             name: "Teammate 1",
@@ -37,6 +37,12 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 5] {
             team: AiTeam::Blue,
             start_waypoint: 2,
             translation: Vec3::new(0.0, -380.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Teammate 3",
+            team: AiTeam::Blue,
+            start_waypoint: 0,
+            translation: Vec3::new(-430.0, -200.0, 4.0),
         },
         VirtualPlayerSpawn {
             name: "Opponent 1",
@@ -54,7 +60,13 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 5] {
             name: "Opponent 3",
             team: AiTeam::Red,
             start_waypoint: 2,
-            translation: Vec3::new(-430.0, -200.0, 4.0),
+            translation: Vec3::new(430.0, -200.0, 4.0),
+        },
+        VirtualPlayerSpawn {
+            name: "Opponent 4",
+            team: AiTeam::Red,
+            start_waypoint: 3,
+            translation: Vec3::new(160.0, 380.0, 4.0),
         },
     ]
 }
@@ -127,6 +139,21 @@ mod tests {
             .count();
 
         assert_eq!(blue_teammates + 1, red_opponents);
+    }
+
+    #[test]
+    fn roster_spawns_each_virtual_player_in_a_unique_position() {
+        let roster = spawn_roster();
+        for (index, spawn) in roster.iter().enumerate() {
+            assert!(
+                roster
+                    .iter()
+                    .skip(index + 1)
+                    .all(|other| spawn.translation != other.translation),
+                "{} shares a spawn position",
+                spawn.name
+            );
+        }
     }
 
     #[test]

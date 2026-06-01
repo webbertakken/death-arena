@@ -444,6 +444,10 @@ fn fallback_ctf_target(
         return midfield_interceptor_target(candidate.team, flags);
     }
 
+    if is_best_fallback_enemy_flag_flanker(candidate, candidates, flags) {
+        return enemy_flag_flank_target(candidate.team, flags);
+    }
+
     None
 }
 
@@ -594,6 +598,54 @@ fn compare_fallback_midfield_interceptors(
         })
 }
 
+fn is_best_fallback_enemy_flag_flanker(
+    candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
+    flags: &[FlagTarget],
+) -> bool {
+    let Some(DrivingTarget::EnemyFlagFlank(target)) =
+        enemy_flag_flank_target(candidate.team, flags)
+    else {
+        return false;
+    };
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|other| {
+            other.team == candidate.team
+                && !other.carries_enemy_flag
+                && !is_best_candidate_for_target(*other, candidates)
+                && !is_best_fallback_home_defender(*other, candidates)
+                && !is_best_fallback_midfield_interceptor(*other, candidates, flags)
+        })
+        .min_by(|a, b| compare_fallback_enemy_flag_flankers(a, b, target))
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn compare_fallback_enemy_flag_flankers(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+    target: Vec2,
+) -> std::cmp::Ordering {
+    a.position
+        .distance_squared(target)
+        .partial_cmp(&b.position.distance_squared(target))
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            a.position
+                .x
+                .partial_cmp(&b.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
 fn compare_ctf_target_candidates(
     a: &CtfTargetCandidate,
     b: &CtfTargetCandidate,
@@ -654,6 +706,15 @@ fn midfield_interceptor_target(team: AiTeam, flags: &[FlagTarget]) -> Option<Dri
     Some(DrivingTarget::MidfieldInterceptor(target))
 }
 
+fn enemy_flag_flank_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
+    let own_flag = flags.iter().find(|flag| flag.team == team)?;
+    let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
+    Some(DrivingTarget::EnemyFlagFlank(enemy_flag_flank_point(
+        own_flag.home,
+        enemy_flag.position,
+    )))
+}
+
 fn stolen_flag_route_guard_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
     let own_flag = flags.iter().find(|flag| flag.team == team)?;
     if own_flag.holder.is_none()
@@ -664,6 +725,15 @@ fn stolen_flag_route_guard_target(team: AiTeam, flags: &[FlagTarget]) -> Option<
 
     let target = own_flag.position + (own_flag.home - own_flag.position) * 0.5;
     Some(DrivingTarget::StolenHomeFlagRouteGuard(target))
+}
+
+fn enemy_flag_flank_point(home: Vec2, enemy_flag_position: Vec2) -> Vec2 {
+    let to_enemy_flag = enemy_flag_position - home;
+    let Some(direction) = to_enemy_flag.try_normalize() else {
+        return enemy_flag_position;
+    };
+    let flank = Vec2::new(-direction.y, direction.x);
+    enemy_flag_position + flank * HOME_LANE_GUARD_DISTANCE
 }
 
 fn home_lane_guard_point(home: Vec2, enemy_home: Vec2) -> Vec2 {
@@ -692,6 +762,7 @@ const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
         DrivingTarget::BlockFlagCarrierPursuer(_)
             | DrivingTarget::DefendHomeBase(_)
             | DrivingTarget::EnemyFlag(_)
+            | DrivingTarget::EnemyFlagFlank(_)
             | DrivingTarget::EscortFlagCarrier(_)
             | DrivingTarget::StolenHomeFlagRouteGuard(_)
             | DrivingTarget::StolenHomeFlag(_)
@@ -2154,6 +2225,81 @@ mod tests {
                 (
                     Entity::from_raw(3),
                     Some(DrivingTarget::MidfieldInterceptor(Vec2::ZERO))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn fourth_spare_virtual_player_flanks_enemy_flag() {
+        let attacker = CtfTargetCandidate {
+            entity: Entity::from_raw(1),
+            team: AiTeam::Red,
+            position: Vec2::new(-360.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let close_home_guard = CtfTargetCandidate {
+            entity: Entity::from_raw(2),
+            team: AiTeam::Red,
+            position: Vec2::new(450.0, 0.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let midfield_guard = CtfTargetCandidate {
+            entity: Entity::from_raw(3),
+            team: AiTeam::Red,
+            position: Vec2::ZERO,
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let flanker = CtfTargetCandidate {
+            entity: Entity::from_raw(4),
+            team: AiTeam::Red,
+            position: Vec2::new(-400.0, -160.0),
+            target: DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)),
+            home_base: Vec2::new(500.0, 0.0),
+            carries_enemy_flag: false,
+        };
+        let assignments = assign_ctf_targets(
+            &[attacker, close_home_guard, midfield_guard, flanker],
+            &[
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-400.0, 0.0),
+                    holder: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    Entity::from_raw(1),
+                    Some(DrivingTarget::EnemyFlag(Vec2::new(-400.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(2),
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(280.0, 0.0)))
+                ),
+                (
+                    Entity::from_raw(3),
+                    Some(DrivingTarget::MidfieldInterceptor(Vec2::ZERO))
+                ),
+                (
+                    Entity::from_raw(4),
+                    Some(DrivingTarget::EnemyFlagFlank(Vec2::new(-400.0, -220.0)))
                 ),
             ]
         );
