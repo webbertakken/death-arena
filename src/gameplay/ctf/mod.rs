@@ -134,7 +134,7 @@ fn advance_capture_the_flag(
 
         try_return_stolen_own_flag(flags, collector);
 
-        try_score_carried_flag(flags, collector, score, result);
+        try_score_carried_flag(flags, collectors, collector, score, result);
     }
 
     if result.winner.is_none() {
@@ -188,6 +188,7 @@ fn try_return_stolen_own_flag(flags: &mut [FlagState], collector: &CollectorStat
 
 fn try_score_carried_flag(
     flags: &mut [FlagState],
+    collectors: &[CollectorState],
     collector: &CollectorState,
     score: &mut CaptureScore,
     result: &mut CtfMatchResult,
@@ -208,6 +209,7 @@ fn try_score_carried_flag(
     if !own_flag_is_home
         || collector.position.distance_squared(own_flag.home)
             > BASE_CAPTURE_RADIUS * BASE_CAPTURE_RADIUS
+        || home_base_is_contested(own_flag.home, collector.team, collectors)
     {
         return false;
     }
@@ -226,6 +228,14 @@ fn try_score_carried_flag(
     carried_flag.holder = None;
     carried_flag.position = carried_flag.home;
     true
+}
+
+fn home_base_is_contested(home: Vec2, home_team: FlagTeam, collectors: &[CollectorState]) -> bool {
+    collectors.iter().any(|collector| {
+        collector.team == home_team.enemy()
+            && collector.position.distance_squared(home)
+                <= BASE_CAPTURE_RADIUS * BASE_CAPTURE_RADIUS
+    })
 }
 
 fn claim_touchable_enemy_flags(flags: &mut [FlagState], collectors: &[CollectorState]) {
@@ -617,14 +627,14 @@ mod tests {
             },
         ];
         let blue = blue_collector(Vec2::new(-500.0, 0.0));
-        let red = red_collector(Vec2::new(-500.0, 0.0));
+        let teammate = blue_teammate(Vec2::new(500.0, 0.0));
         let mut score = CaptureScore {
             player: CAPTURES_TO_WIN - 1,
             opponents: CAPTURES_TO_WIN - 1,
         };
         let mut result = CtfMatchResult::default();
 
-        advance_capture_the_flag(&mut flags, &[blue, red], &mut score, &mut result);
+        advance_capture_the_flag(&mut flags, &[blue, teammate], &mut score, &mut result);
 
         assert_eq!(
             score,
@@ -634,8 +644,8 @@ mod tests {
             }
         );
         assert_eq!(result.winner, Some(CtfMatchWinner::Player));
-        assert_eq!(flags[0].holder, None);
-        assert_eq!(flags[0].position, flags[0].home);
+        assert_eq!(flags[1].holder, None);
+        assert_eq!(flags[1].position, flags[1].home);
     }
 
     #[test]
@@ -712,6 +722,26 @@ mod tests {
 
         assert_eq!(score, CaptureScore::default());
         assert_eq!(flags[1].holder, Some(collector.entity));
+    }
+
+    #[test]
+    fn cannot_score_while_home_base_is_contested() {
+        let mut flags = vec![
+            flag(10, FlagTeam::Blue, Vec2::ZERO),
+            FlagState {
+                holder: Some(entity(1)),
+                ..flag(11, FlagTeam::Red, Vec2::new(500.0, 0.0))
+            },
+        ];
+        let blue = blue_collector(Vec2::new(10.0, 0.0));
+        let red = red_collector(Vec2::new(150.0, 0.0));
+        let mut score = CaptureScore::default();
+
+        advance_flags(&mut flags, &[blue, red], &mut score);
+
+        assert_eq!(score, CaptureScore::default());
+        assert_eq!(flags[1].holder, Some(blue.entity));
+        assert_eq!(flags[1].position, blue.position);
     }
 
     #[test]
