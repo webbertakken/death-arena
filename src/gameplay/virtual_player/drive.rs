@@ -16,6 +16,7 @@ const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
+const MIDFIELD_LANE_GUARD_FACTOR: f32 = 0.5;
 
 type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
 
@@ -246,9 +247,15 @@ fn fallback_ctf_target(
         return Some(DrivingTarget::HomeBase(candidate.home_base));
     }
 
-    is_best_fallback_home_defender(candidate, candidates)
-        .then(|| defend_home_target(candidate.team, flags))
-        .flatten()
+    if is_best_fallback_home_defender(candidate, candidates) {
+        return defend_home_target(candidate.team, flags);
+    }
+
+    if is_best_fallback_midfield_interceptor(candidate, candidates, flags) {
+        return midfield_interceptor_target(candidate.team, flags);
+    }
+
+    None
 }
 
 fn is_best_candidate_for_target(
@@ -290,6 +297,53 @@ fn compare_fallback_home_defenders(
     a.position
         .distance_squared(a.home_base)
         .partial_cmp(&b.position.distance_squared(b.home_base))
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            a.position
+                .x
+                .partial_cmp(&b.position.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            a.position
+                .y
+                .partial_cmp(&b.position.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn is_best_fallback_midfield_interceptor(
+    candidate: CtfTargetCandidate,
+    candidates: &[CtfTargetCandidate],
+    flags: &[FlagTarget],
+) -> bool {
+    let Some(DrivingTarget::MidfieldInterceptor(target)) =
+        midfield_interceptor_target(candidate.team, flags)
+    else {
+        return false;
+    };
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|other| {
+            other.team == candidate.team
+                && !other.carries_enemy_flag
+                && !is_best_candidate_for_target(*other, candidates)
+                && !is_best_fallback_home_defender(*other, candidates)
+        })
+        .min_by(|a, b| compare_fallback_midfield_interceptors(a, b, target))
+        .is_some_and(|best| best.entity == candidate.entity)
+}
+
+fn compare_fallback_midfield_interceptors(
+    a: &CtfTargetCandidate,
+    b: &CtfTargetCandidate,
+    target: Vec2,
+) -> std::cmp::Ordering {
+    a.position
+        .distance_squared(target)
+        .partial_cmp(&b.position.distance_squared(target))
         .unwrap_or(std::cmp::Ordering::Equal)
         .then_with(|| {
             a.position
@@ -356,6 +410,13 @@ fn defend_home_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarge
             home_lane_guard_point(own_flag.home, enemy_flag.home)
         });
     Some(DrivingTarget::DefendHomeBase(target))
+}
+
+fn midfield_interceptor_target(team: AiTeam, flags: &[FlagTarget]) -> Option<DrivingTarget> {
+    let own_flag = flags.iter().find(|flag| flag.team == team)?;
+    let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
+    let target = own_flag.home + (enemy_flag.home - own_flag.home) * MIDFIELD_LANE_GUARD_FACTOR;
+    Some(DrivingTarget::MidfieldInterceptor(target))
 }
 
 fn home_lane_guard_point(home: Vec2, enemy_home: Vec2) -> Vec2 {
@@ -1404,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn only_one_spare_virtual_player_defends_home_base() {
+    fn extra_spare_virtual_player_blocks_midfield_lane() {
         let attacker = CtfTargetCandidate {
             entity: Entity::from_raw(1),
             team: AiTeam::Red,
@@ -1431,12 +1492,20 @@ mod tests {
         };
         let assignments = assign_ctf_targets(
             &[attacker, close_spare, far_spare],
-            &[FlagTarget {
-                team: AiTeam::Red,
-                home: Vec2::new(500.0, 0.0),
-                position: Vec2::new(500.0, 0.0),
-                holder: None,
-            }],
+            &[
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(-400.0, 0.0),
+                    holder: None,
+                },
+            ],
         );
 
         assert_eq!(
@@ -1448,9 +1517,12 @@ mod tests {
                 ),
                 (
                     Entity::from_raw(2),
-                    Some(DrivingTarget::DefendHomeBase(Vec2::new(500.0, 0.0)))
+                    Some(DrivingTarget::DefendHomeBase(Vec2::new(280.0, 0.0)))
                 ),
-                (Entity::from_raw(3), None),
+                (
+                    Entity::from_raw(3),
+                    Some(DrivingTarget::MidfieldInterceptor(Vec2::ZERO))
+                ),
             ]
         );
     }

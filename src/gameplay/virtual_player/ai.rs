@@ -59,6 +59,7 @@ pub enum DrivingTarget {
     HomeBase(Vec2),
     EnemyFlag(Vec2),
     EscortFlagCarrier(Vec2),
+    MidfieldInterceptor(Vec2),
     PatrolWaypoint(Vec2),
     Pickup(Vec2),
     Player(Vec2),
@@ -73,6 +74,7 @@ impl DrivingTarget {
             | Self::HomeBase(position)
             | Self::EnemyFlag(position)
             | Self::EscortFlagCarrier(position)
+            | Self::MidfieldInterceptor(position)
             | Self::PatrolWaypoint(position)
             | Self::Pickup(position)
             | Self::Player(position)
