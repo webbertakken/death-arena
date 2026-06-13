@@ -1,6 +1,8 @@
 # General
 /.idea
 .DS_Store
+/tmp
+outdated_report.json
 
 # Credentials
 .env
