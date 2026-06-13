@@ -198,6 +198,44 @@ impl WreckEvents {
     pub const fn any(self) -> bool {
         self.player || self.opponent
     }
+
+    /// Whether the given team was among those wrecked this frame.
+    #[must_use]
+    pub const fn includes(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.player,
+            AiTeam::Red => self.opponent,
+        }
+    }
+}
+
+/// A flag currently being hauled by a car, tagged with the carrying team.
+///
+/// Bridges the per-team [`WreckEvents`] to the per-flag CTF state so a wreck can
+/// strip the flag from whichever car was carrying it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedFlag {
+    /// The flag entity being hauled.
+    pub flag: Entity,
+    /// The team of the car hauling it.
+    pub carrier_team: AiTeam,
+}
+
+/// Flags a freshly wrecked team must drop this frame.
+///
+/// The classic capture-the-flag turnover: when a team's integrity is ground to
+/// zero its cars spin out, and a spun-out wreck cannot keep its grip on a stolen
+/// flag. Every flag carried by a member of a newly wrecked team is dropped where
+/// it lies, handing the wrecking team a real shot at recovering it and closing
+/// the loop the ramming systems open (steal -> slowed + fragile -> rammed ->
+/// wrecked -> drop the flag). Symmetric: both teams' carriers are equally fragile.
+#[must_use]
+pub fn flags_dropped_by_wrecks(carried: &[CarriedFlag], wrecks: WreckEvents) -> Vec<Entity> {
+    carried
+        .iter()
+        .filter(|held| wrecks.includes(held.carrier_team))
+        .map(|held| held.flag)
+        .collect()
 }
 
 /// Consecutive wrecks each team has dealt without being wrecked itself.
@@ -570,7 +608,7 @@ pub fn ram_damage_system(
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), Without<Player>>,
-    flag_query: Query<&CtfFlag>,
+    mut flag_query: Query<(Entity, &mut CtfFlag)>,
 ) {
     if match_result
         .as_ref()
@@ -579,10 +617,15 @@ pub fn ram_damage_system(
         return;
     }
 
-    let carriers: Vec<Entity> = flag_query.iter().filter_map(|flag| flag.holder).collect();
+    let carriers: Vec<Entity> = flag_query
+        .iter()
+        .filter_map(|(_, flag)| flag.holder)
+        .collect();
     let is_carrying = |entity: Entity| carriers.contains(&entity);
 
     let mut cars: Vec<RamCar> = Vec::new();
+    // Maps each car's entity to its team so a wreck can find the flags it drops.
+    let mut car_teams: Vec<(Entity, AiTeam)> = Vec::new();
     if let Ok((entity, transform)) = player_query.get_single() {
         cars.push(RamCar {
             team: AiTeam::Blue,
@@ -590,17 +633,17 @@ pub fn ram_damage_system(
             forward: (transform.rotation * Vec3::Y).xy(),
             carrying_flag: is_carrying(entity),
         });
+        car_teams.push((entity, AiTeam::Blue));
     }
-    cars.extend(
-        virtual_player_query
-            .iter()
-            .map(|(entity, virtual_player, transform)| RamCar {
-                team: virtual_player.team,
-                position: transform.translation.xy(),
-                forward: (transform.rotation * Vec3::Y).xy(),
-                carrying_flag: is_carrying(entity),
-            }),
-    );
+    for (entity, virtual_player, transform) in &virtual_player_query {
+        cars.push(RamCar {
+            team: virtual_player.team,
+            position: transform.translation.xy(),
+            forward: (transform.rotation * Vec3::Y).xy(),
+            carrying_flag: is_carrying(entity),
+        });
+        car_teams.push((entity, virtual_player.team));
+    }
 
     let boost = nitro_boosts
         .as_deref()
@@ -619,6 +662,33 @@ pub fn ram_damage_system(
     // the wrecking team gets a real opening to capitalise.
     if let Some(stuns) = wreck_stuns.as_deref_mut() {
         stuns.apply_wrecks(wrecks);
+    }
+
+    // A spun-out wreck cannot keep its grip on a stolen flag: drop every flag a
+    // freshly wrecked team was hauling so the wrecking team can scramble to
+    // recover it.
+    if wrecks.any() {
+        let team_of = |holder: Entity| {
+            car_teams
+                .iter()
+                .find(|(entity, _)| *entity == holder)
+                .map(|(_, team)| *team)
+        };
+        let carried: Vec<CarriedFlag> = flag_query
+            .iter()
+            .filter_map(|(flag_entity, flag)| {
+                Some(CarriedFlag {
+                    flag: flag_entity,
+                    carrier_team: team_of(flag.holder?)?,
+                })
+            })
+            .collect();
+        let dropped = flags_dropped_by_wrecks(&carried, wrecks);
+        for (flag_entity, mut flag) in &mut flag_query {
+            if dropped.contains(&flag_entity) {
+                flag.holder = None;
+            }
+        }
     }
 
     let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
@@ -937,6 +1007,84 @@ mod tests {
             opponent: true,
         }
         .any());
+    }
+
+    #[test]
+    fn wreck_events_report_per_team_membership() {
+        let player_only = WreckEvents {
+            player: true,
+            opponent: false,
+        };
+        assert!(player_only.includes(AiTeam::Blue));
+        assert!(!player_only.includes(AiTeam::Red));
+
+        let opponent_only = WreckEvents {
+            player: false,
+            opponent: true,
+        };
+        assert!(!opponent_only.includes(AiTeam::Blue));
+        assert!(opponent_only.includes(AiTeam::Red));
+    }
+
+    #[test]
+    fn a_quiet_frame_drops_no_carried_flags() {
+        let carried = [CarriedFlag {
+            flag: Entity::from_raw(5),
+            carrier_team: AiTeam::Blue,
+        }];
+        assert!(flags_dropped_by_wrecks(&carried, WreckEvents::default()).is_empty());
+    }
+
+    #[test]
+    fn a_wrecked_team_drops_only_the_flag_it_was_hauling() {
+        let blue_flag = Entity::from_raw(5);
+        let red_flag = Entity::from_raw(6);
+        let carried = [
+            CarriedFlag {
+                flag: blue_flag,
+                carrier_team: AiTeam::Blue,
+            },
+            CarriedFlag {
+                flag: red_flag,
+                carrier_team: AiTeam::Red,
+            },
+        ];
+
+        let dropped = flags_dropped_by_wrecks(
+            &carried,
+            WreckEvents {
+                player: true,
+                opponent: false,
+            },
+        );
+
+        assert_eq!(dropped, vec![blue_flag]);
+    }
+
+    #[test]
+    fn both_wrecked_teams_drop_their_flags() {
+        let blue_flag = Entity::from_raw(5);
+        let red_flag = Entity::from_raw(6);
+        let carried = [
+            CarriedFlag {
+                flag: blue_flag,
+                carrier_team: AiTeam::Blue,
+            },
+            CarriedFlag {
+                flag: red_flag,
+                carrier_team: AiTeam::Red,
+            },
+        ];
+
+        let dropped = flags_dropped_by_wrecks(
+            &carried,
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+        );
+
+        assert_eq!(dropped, vec![blue_flag, red_flag]);
     }
 
     #[test]
@@ -1336,6 +1484,81 @@ mod tests {
             MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - FLAG_CARRIER_RAM_DAMAGE_PER_FRAME,
         );
         assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_drops_the_flag_when_a_carrier_team_is_wrecked() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            // One frame of the base scrape (0.25) plus the carrier tax (0.5)
+            // grinds the player team to a wreck.
+            player: 0.2,
+            opponent: MAX_INTEGRITY,
+        });
+        app.add_system(ram_damage_system);
+        let carrier = app
+            .world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)))
+            .id();
+        // The blue carrier hauls the red flag, held by the human player.
+        let flag = app
+            .world
+            .spawn((
+                CtfFlag {
+                    team: crate::gameplay::ctf::FlagTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    holder: Some(carrier),
+                },
+                Transform::from_translation(Vec3::ZERO),
+            ))
+            .id();
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().player, 0.0);
+        assert_eq!(
+            app.world.get::<CtfFlag>(flag).unwrap().holder,
+            None,
+            "a wrecked carrier must drop the flag it was hauling"
+        );
+    }
+
+    #[test]
+    fn system_keeps_the_flag_with_an_operational_carrier() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        let carrier = app
+            .world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)))
+            .id();
+        let flag = app
+            .world
+            .spawn((
+                CtfFlag {
+                    team: crate::gameplay::ctf::FlagTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    holder: Some(carrier),
+                },
+                Transform::from_translation(Vec3::ZERO),
+            ))
+            .id();
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.get::<CtfFlag>(flag).unwrap().holder,
+            Some(carrier),
+            "an operational carrier must keep its grip on the flag"
+        );
     }
 
     #[test]
