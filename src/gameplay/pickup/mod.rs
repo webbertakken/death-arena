@@ -109,6 +109,8 @@ pub struct Score {
     pub steals: u32,
     /// Number of home flag returns rewarded to the player team.
     pub returns: u32,
+    /// Number of enemy cars the player team wrecked by ramming.
+    pub wrecks: u32,
 }
 
 impl Score {
@@ -135,6 +137,12 @@ impl Score {
         self.cash += returns * bounty;
         self.returns += returns;
     }
+
+    /// Bank a wreck bounty for grinding an enemy car down to a full wreck.
+    pub const fn bank_wreck_bounty(&mut self, bounty: u32) {
+        self.cash += bounty;
+        self.wrecks += 1;
+    }
 }
 
 /// Running tally of pickups stolen by virtual opponents.
@@ -150,6 +158,8 @@ pub struct OpponentScore {
     pub steals: u32,
     /// Number of home flag returns rewarded to virtual opponents.
     pub returns: u32,
+    /// Number of player-team cars the opponents wrecked by ramming.
+    pub wrecks: u32,
 }
 
 impl OpponentScore {
@@ -175,6 +185,12 @@ impl OpponentScore {
     pub const fn bank_flag_return_bonus(&mut self, returns: u32, bounty: u32) {
         self.cash += returns * bounty;
         self.returns += returns;
+    }
+
+    /// Bank a wreck bounty for grinding a player-team car down to a full wreck.
+    pub const fn bank_wreck_bounty(&mut self, bounty: u32) {
+        self.cash += bounty;
+        self.wrecks += 1;
     }
 }
 
@@ -227,6 +243,7 @@ mod tests {
                 captures: 0,
                 steals: 0,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -243,6 +260,7 @@ mod tests {
                 captures: 2,
                 steals: 0,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -259,6 +277,7 @@ mod tests {
                 captures: 0,
                 steals: 2,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -275,6 +294,25 @@ mod tests {
                 captures: 0,
                 steals: 0,
                 returns: 2,
+                wrecks: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn wreck_bounty_accumulates_cash_and_wreck_count() {
+        let mut score = Score::default();
+        score.bank_wreck_bounty(150);
+        score.bank_wreck_bounty(150);
+        assert_eq!(
+            score,
+            Score {
+                cash: 300,
+                collected: 0,
+                captures: 0,
+                steals: 0,
+                returns: 0,
+                wrecks: 2,
             }
         );
     }
@@ -292,6 +330,7 @@ mod tests {
                 captures: 0,
                 steals: 0,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -308,6 +347,7 @@ mod tests {
                 captures: 1,
                 steals: 0,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -324,6 +364,7 @@ mod tests {
                 captures: 0,
                 steals: 1,
                 returns: 0,
+                wrecks: 0,
             }
         );
     }
@@ -340,6 +381,24 @@ mod tests {
                 captures: 0,
                 steals: 0,
                 returns: 1,
+                wrecks: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn opponent_wreck_bounty_accumulates_cash_and_wreck_count() {
+        let mut score = OpponentScore::default();
+        score.bank_wreck_bounty(150);
+        assert_eq!(
+            score,
+            OpponentScore {
+                cash: 150,
+                collected: 0,
+                captures: 0,
+                steals: 0,
+                returns: 0,
+                wrecks: 1,
             }
         );
     }
@@ -402,6 +461,7 @@ mod tests {
             captures: 1,
             steals: 1,
             returns: 1,
+            wrecks: 1,
         });
         app.insert_resource(OpponentScore {
             cash: 300,
@@ -409,6 +469,7 @@ mod tests {
             captures: 1,
             steals: 1,
             returns: 1,
+            wrecks: 1,
         });
         app.insert_resource(NitroBoosts {
             player_frames: 12,

@@ -1,5 +1,5 @@
 use crate::gameplay::ctf::{CtfFlag, CtfMatchResult};
-use crate::gameplay::pickup::NitroBoosts;
+use crate::gameplay::pickup::{NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
@@ -28,6 +28,16 @@ pub const MIN_INTEGRITY_SPEED_MULTIPLIER: f32 = 0.65;
 /// Rally "boost into them to wreck them" play. It also closes the combat loop:
 /// nitro ram -> battered enemy -> enemy breaks off for a repair.
 pub const NITRO_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
+/// Cash a team banks for grinding an enemy car down to a full wreck.
+///
+/// The classic Death Rally payday: ramming an opponent until their integrity
+/// hits zero is worth real money, closing the combat loop the ramming systems
+/// open. Priced between a flag steal (50) and a capture (250) so wrecking is a
+/// meaningful earner without eclipsing the CTF objective, and it bankrolls the
+/// upgrades a battered driver needs to stay in the fight. The bounty pays once
+/// per wreck, on the frame integrity crosses to zero, so a team only cashes in
+/// again after its victim limps to a repair and is wrecked anew.
+pub const WRECK_CASH_BOUNTY: u32 = 150;
 /// Extra durability a flag-carrying car's team loses each frame it is trading
 /// paint with an enemy.
 ///
@@ -103,6 +113,42 @@ impl VehicleIntegrity {
     pub fn apply_damage(&mut self, damage: TeamDamage) {
         self.player = (self.player - damage.player).max(0.0);
         self.opponent = (self.opponent - damage.opponent).max(0.0);
+    }
+
+    /// Teams this frame's wear drove from operational (`> 0`) to a full wreck
+    /// (`0`), given the durability `before` the damage was applied.
+    ///
+    /// The crossing is the trigger: a team already flat-lined when `before` was
+    /// taken does not re-fire, so each wreck is reported exactly once until a
+    /// repair lifts the team back above zero and it can be wrecked anew. This is
+    /// what makes [`WRECK_CASH_BOUNTY`] pay per wreck rather than per frame.
+    #[must_use]
+    pub fn newly_wrecked(self, before: Self) -> WreckEvents {
+        WreckEvents {
+            player: before.player > 0.0 && self.player <= 0.0,
+            opponent: before.opponent > 0.0 && self.opponent <= 0.0,
+        }
+    }
+}
+
+/// Which teams crossed into a full wreck (zero integrity) this frame.
+///
+/// A wreck pays the wrecking team a [`WRECK_CASH_BOUNTY`]: a wrecked player team
+/// banks the bounty for the opponents, a wrecked opponent team banks it for the
+/// player team.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WreckEvents {
+    /// The player team (human + blue virtual players) was wrecked this frame.
+    pub player: bool,
+    /// The opponent team (red virtual players) was wrecked this frame.
+    pub opponent: bool,
+}
+
+impl WreckEvents {
+    /// Whether either team was wrecked this frame.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.player || self.opponent
     }
 }
 
@@ -266,11 +312,15 @@ pub fn carrier_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
-/// Wears down both teams whenever their cars are trading paint.
+/// Wears down both teams whenever their cars are trading paint, and pays a
+/// wreck bounty to whichever team grinds an enemy down to zero this frame.
+#[allow(clippy::too_many_arguments)]
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
+    mut score: Option<ResMut<Score>>,
+    mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), Without<Player>>,
     flag_query: Query<&CtfFlag>,
@@ -310,7 +360,30 @@ pub fn ram_damage_system(
     let damage = ram_damage(&cars)
         .combined(nitro_ram_damage(&cars, boost))
         .combined(carrier_ram_damage(&cars));
+
+    let before = *integrity;
     integrity.apply_damage(damage);
+    let wrecks = integrity.newly_wrecked(before);
+
+    if wrecks.any() {
+        info!(
+            "Wreck! player_down={} opponent_down={}; banking {WRECK_CASH_BOUNTY} for the wrecker",
+            wrecks.player, wrecks.opponent
+        );
+    }
+
+    // The wrecking team banks the bounty: a wrecked opponent pays the player
+    // team, a wrecked player team pays the opponents.
+    if wrecks.opponent {
+        if let Some(score) = score.as_deref_mut() {
+            score.bank_wreck_bounty(WRECK_CASH_BOUNTY);
+        }
+    }
+    if wrecks.player {
+        if let Some(opponent_score) = opponent_score.as_deref_mut() {
+            opponent_score.bank_wreck_bounty(WRECK_CASH_BOUNTY);
+        }
+    }
 }
 
 fn reset_vehicle_integrity(mut integrity: ResMut<VehicleIntegrity>) {
@@ -481,6 +554,78 @@ mod tests {
         });
         assert_near(integrity.player, 6.0);
         assert_near(integrity.opponent, 0.0);
+    }
+
+    #[test]
+    fn newly_wrecked_flags_each_team_that_crosses_to_zero() {
+        let before = VehicleIntegrity {
+            player: 5.0,
+            opponent: 5.0,
+        };
+
+        let player_only = VehicleIntegrity {
+            player: 0.0,
+            opponent: 5.0,
+        }
+        .newly_wrecked(before);
+        assert_eq!(
+            player_only,
+            WreckEvents {
+                player: true,
+                opponent: false,
+            }
+        );
+
+        let both = VehicleIntegrity {
+            player: 0.0,
+            opponent: 0.0,
+        }
+        .newly_wrecked(before);
+        assert_eq!(
+            both,
+            WreckEvents {
+                player: true,
+                opponent: true,
+            }
+        );
+    }
+
+    #[test]
+    fn newly_wrecked_ignores_a_team_already_flatlined() {
+        // The opponent was already wrecked when `before` was taken, so holding
+        // at zero this frame must not re-fire the bounty.
+        let before = VehicleIntegrity {
+            player: 5.0,
+            opponent: 0.0,
+        };
+        let after = VehicleIntegrity {
+            player: 5.0,
+            opponent: 0.0,
+        };
+        assert_eq!(after.newly_wrecked(before), WreckEvents::default());
+    }
+
+    #[test]
+    fn newly_wrecked_ignores_a_team_still_operational() {
+        let before = VehicleIntegrity {
+            player: 5.0,
+            opponent: 5.0,
+        };
+        let after = VehicleIntegrity {
+            player: 4.0,
+            opponent: 0.5,
+        };
+        assert_eq!(after.newly_wrecked(before), WreckEvents::default());
+    }
+
+    #[test]
+    fn wreck_events_report_whether_any_team_fell() {
+        assert!(!WreckEvents::default().any());
+        assert!(WreckEvents {
+            player: false,
+            opponent: true,
+        }
+        .any());
     }
 
     #[test]
@@ -777,6 +922,108 @@ mod tests {
         let integrity = app.world.resource::<VehicleIntegrity>();
         assert_near(integrity.player, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
         assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_pays_the_player_team_a_bounty_for_wrecking_an_opponent() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().opponent, 0.0);
+        let score = app.world.resource::<Score>();
+        assert_eq!(score.cash, WRECK_CASH_BOUNTY);
+        assert_eq!(score.wrecks, 1);
+        // The wrecking team earns nothing for the enemy: opponents stay empty.
+        assert_eq!(app.world.resource::<OpponentScore>().wrecks, 0);
+    }
+
+    #[test]
+    fn system_pays_the_opponents_a_bounty_for_wrecking_the_player_team() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 0.2,
+            opponent: MAX_INTEGRITY,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().player, 0.0);
+        let opponent_score = app.world.resource::<OpponentScore>();
+        assert_eq!(opponent_score.cash, WRECK_CASH_BOUNTY);
+        assert_eq!(opponent_score.wrecks, 1);
+        assert_eq!(app.world.resource::<Score>().wrecks, 0);
+    }
+
+    #[test]
+    fn system_pays_no_bounty_while_both_teams_stay_operational() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(app.world.resource::<Score>().wrecks, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().wrecks, 0);
+    }
+
+    #[test]
+    fn system_pays_a_wreck_bounty_only_once_until_the_team_recovers() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        // First frame wrecks the opponent and pays the bounty once.
+        app.update();
+        // Second frame: the opponent is still flat-lined and in contact, so the
+        // bounty must not pay again until a repair lifts them off zero.
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(score.cash, WRECK_CASH_BOUNTY);
+        assert_eq!(score.wrecks, 1);
     }
 
     #[test]
