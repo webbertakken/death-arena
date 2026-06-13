@@ -1,4 +1,4 @@
-use crate::gameplay::ctf::CtfMatchResult;
+use crate::gameplay::ctf::{CtfFlag, CtfMatchResult};
 use crate::gameplay::pickup::NitroBoosts;
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -28,6 +28,15 @@ pub const MIN_INTEGRITY_SPEED_MULTIPLIER: f32 = 0.65;
 /// Rally "boost into them to wreck them" play. It also closes the combat loop:
 /// nitro ram -> battered enemy -> enemy breaks off for a repair.
 pub const NITRO_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
+/// Extra durability a flag-carrying car's team loses each frame it is trading
+/// paint with an enemy.
+///
+/// A car hauling the enemy flag is not just slow, it is fragile: defenders who
+/// ram the carrier wear its team down twice as fast as the base scrape. This
+/// deepens the capture-the-flag gauntlet, the run home becomes a real risk, not
+/// a victory lap, and pairs with the flag-carrier slowdown so a battered
+/// carrier crawls back into reach of its pursuers.
+pub const FLAG_CARRIER_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
 
 /// Per-team vehicle durability, mirroring [`crate::gameplay::pickup::NitroBoosts`].
 ///
@@ -108,6 +117,9 @@ fn integrity_speed_multiplier(integrity: f32) -> f32 {
 pub struct RamCar {
     pub team: AiTeam,
     pub position: Vec2,
+    /// Whether this car is currently hauling the enemy flag, making it a
+    /// fragile target for [`carrier_ram_damage`].
+    pub carrying_flag: bool,
 }
 
 /// Durability each team loses from ramming in a single frame.
@@ -219,13 +231,49 @@ pub fn nitro_ram_damage(cars: &[RamCar], boost: RamBoost) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage flag carriers bleed while trading paint.
+///
+/// For every car carrying the enemy flag that is in contact with an opposing
+/// car, the carrier's *own* team bleeds [`FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`] on
+/// top of the base [`ram_damage`] scrape. The hit lands on the carrier's team,
+/// so hauling the flag through a scrum is what makes it bite.
+#[must_use]
+pub fn carrier_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, car) in cars.iter().enumerate() {
+        if !car.carrying_flag {
+            continue;
+        }
+
+        let in_contact = cars.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other.team != car.team
+                && other.position.distance_squared(car.position) <= radius_sq
+        });
+        if in_contact {
+            match car.team {
+                AiTeam::Blue => damage.player += FLAG_CARRIER_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += FLAG_CARRIER_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Wears down both teams whenever their cars are trading paint.
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
-    player_query: Query<&Transform, With<Player>>,
-    virtual_player_query: Query<(&VirtualPlayer, &Transform), Without<Player>>,
+    player_query: Query<(Entity, &Transform), With<Player>>,
+    virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), Without<Player>>,
+    flag_query: Query<&CtfFlag>,
 ) {
     if match_result
         .as_ref()
@@ -234,19 +282,24 @@ pub fn ram_damage_system(
         return;
     }
 
+    let carriers: Vec<Entity> = flag_query.iter().filter_map(|flag| flag.holder).collect();
+    let is_carrying = |entity: Entity| carriers.contains(&entity);
+
     let mut cars: Vec<RamCar> = Vec::new();
-    if let Ok(transform) = player_query.get_single() {
+    if let Ok((entity, transform)) = player_query.get_single() {
         cars.push(RamCar {
             team: AiTeam::Blue,
             position: transform.translation.xy(),
+            carrying_flag: is_carrying(entity),
         });
     }
     cars.extend(
         virtual_player_query
             .iter()
-            .map(|(virtual_player, transform)| RamCar {
+            .map(|(entity, virtual_player, transform)| RamCar {
                 team: virtual_player.team,
                 position: transform.translation.xy(),
+                carrying_flag: is_carrying(entity),
             }),
     );
 
@@ -254,7 +307,9 @@ pub fn ram_damage_system(
         .as_deref()
         .map(RamBoost::from_nitro)
         .unwrap_or_default();
-    let damage = ram_damage(&cars).combined(nitro_ram_damage(&cars, boost));
+    let damage = ram_damage(&cars)
+        .combined(nitro_ram_damage(&cars, boost))
+        .combined(carrier_ram_damage(&cars));
     integrity.apply_damage(damage);
 }
 
@@ -290,6 +345,7 @@ mod tests {
         RamCar {
             team: AiTeam::Blue,
             position,
+            carrying_flag: false,
         }
     }
 
@@ -297,6 +353,21 @@ mod tests {
         RamCar {
             team: AiTeam::Red,
             position,
+            carrying_flag: false,
+        }
+    }
+
+    fn blue_carrier(position: Vec2) -> RamCar {
+        RamCar {
+            carrying_flag: true,
+            ..blue(position)
+        }
+    }
+
+    fn red_carrier(position: Vec2) -> RamCar {
+        RamCar {
+            carrying_flag: true,
+            ..red(position)
         }
     }
 
@@ -559,6 +630,107 @@ mod tests {
         );
         assert_near(damage.player, 2.0 * NITRO_RAM_DAMAGE_PER_FRAME);
         assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn an_empty_handed_car_bleeds_no_carrier_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rammed_blue_carrier_wears_the_player_team() {
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS - 10.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rammed_red_carrier_wears_the_opponent_team() {
+        let cars = [
+            red_carrier(Vec2::ZERO),
+            blue(Vec2::new(RAM_RADIUS - 10.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_carrier_out_of_contact_bleeds_no_carrier_bonus() {
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS + 1.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_carrier_touched_only_by_a_teammate_bleeds_no_carrier_bonus() {
+        // A blue carrier escorted by a blue teammate is not being defended
+        // against, so the carrier tax must not fire.
+        let cars = [blue_carrier(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn carrier_bonus_scales_per_defender_in_contact() {
+        // Two reds bracket the lone blue carrier; the carrier eats the tax once
+        // per frame regardless of how many defenders crowd it, because the tax
+        // is charged to the carrier, not summed per defender.
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn system_adds_carrier_ram_bonus_when_a_carrier_collides() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        let carrier = app
+            .world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)))
+            .id();
+        // The blue carrier hauls the red flag, held by the human player.
+        app.world.spawn((
+            CtfFlag {
+                team: crate::gameplay::ctf::FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: Some(carrier),
+            },
+            Transform::from_translation(Vec3::ZERO),
+        ));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; the blue carrier also bleeds the
+        // carrier tax on top because the red defender is trading paint with it.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - FLAG_CARRIER_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
     }
 
     #[test]

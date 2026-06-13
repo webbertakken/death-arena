@@ -27,7 +27,7 @@ pub struct PickupCollectionParams<'w, 's> {
 /// Collects the pickup the player is currently driving over.
 ///
 /// Only the nearest in-range pickup is banked per frame (deterministic via
-/// [`nearest_collectible`]); at 60 FPS a tight cluster is still cleared almost
+/// [`nearest_claimed_pickup`]); at 60 FPS a tight cluster is still cleared almost
 /// instantly while the behaviour stays predictable and testable.
 pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollectionParams) {
     if params
