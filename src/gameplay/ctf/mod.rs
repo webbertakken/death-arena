@@ -13,6 +13,23 @@ pub const CAPTURES_TO_WIN: u32 = 3;
 pub const CAPTURE_CASH_BOUNTY: u32 = 250;
 pub const FLAG_STEAL_CASH_BOUNTY: u32 = 50;
 pub const FLAG_RETURN_CASH_BOUNTY: u32 = 75;
+/// Cash the winning team banks the instant a match resolves in its favour.
+///
+/// The Death Rally payday that closes the round: every in-match bounty grinds
+/// out the cash that funds upgrades, but taking the match is the marquee
+/// earner. Priced as the single biggest line item, comfortably above the
+/// `3 * CAPTURE_CASH_BOUNTY` a clean three-capture win already banks, so the
+/// scoreboard always rewards closing the round over farming it. Banked once,
+/// on the frame the winner is decided.
+pub const VICTORY_CASH_PURSE: u32 = 1_000;
+/// Cash each team banks when a match resolves as a level draw.
+///
+/// A drawn match earns both sides a participation purse for fighting to a
+/// standstill, kept well below [`VICTORY_CASH_PURSE`] so a win is always worth
+/// far more than a deadlock.
+pub const DRAW_CASH_PURSE: u32 = 250;
+/// A win must always out-pay a draw, enforced at compile time.
+const _: () = assert!(DRAW_CASH_PURSE < VICTORY_CASH_PURSE);
 /// Fixed update frames a CTF round runs before it resolves on time.
 ///
 /// Caps stalemates so a match always ends even if neither team reaches
@@ -133,6 +150,16 @@ pub enum CtfMatchWinner {
 pub struct CtfMatchResult {
     pub winner: Option<CtfMatchWinner>,
 }
+
+/// Tracks whether the end-of-match purse has been banked for the current round.
+///
+/// The winner can be settled by a capture, a sudden-death golden goal, or the
+/// clock expiring, so the purse is paid by its own system reading this flag
+/// rather than diffed at each award site. The flag flips the frame the purse is
+/// banked and resets when a fresh match begins, guaranteeing exactly one payout
+/// per round however the result is reached.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchPursePaid(pub bool);
 
 /// Which stage of the round the clock is timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -603,6 +630,50 @@ const fn award_golden_goal(
     }
 }
 
+/// Banks the end-of-match purse to whichever side the result favours.
+///
+/// A win pays the victor [`VICTORY_CASH_PURSE`]; a draw pays both teams the
+/// smaller [`DRAW_CASH_PURSE`] for fighting to a standstill. Pure cash, banked
+/// on top of every in-match bounty.
+const fn award_match_purse(
+    winner: CtfMatchWinner,
+    player_economy: &mut Score,
+    opponent_economy: &mut OpponentScore,
+) {
+    match winner {
+        CtfMatchWinner::Player => player_economy.bank_match_purse(VICTORY_CASH_PURSE),
+        CtfMatchWinner::Opponents => opponent_economy.bank_match_purse(VICTORY_CASH_PURSE),
+        CtfMatchWinner::Draw => {
+            player_economy.bank_match_purse(DRAW_CASH_PURSE);
+            opponent_economy.bank_match_purse(DRAW_CASH_PURSE);
+        }
+    }
+}
+
+/// Banks the match purse exactly once the round resolves, however it is decided.
+///
+/// Runs after [`expire_match_on_time_limit`] so a winner settled by a capture,
+/// a golden goal, or the clock has all landed before the purse is paid. The
+/// [`MatchPursePaid`] latch keeps the payout to a single frame even though the
+/// result lingers for the rest of the frozen round.
+fn award_match_purse_on_resolution(
+    result: Res<CtfMatchResult>,
+    mut paid: ResMut<MatchPursePaid>,
+    mut player_economy: ResMut<Score>,
+    mut opponent_economy: ResMut<OpponentScore>,
+) {
+    if paid.0 {
+        return;
+    }
+    let Some(winner) = result.winner else {
+        return;
+    };
+
+    award_match_purse(winner, &mut player_economy, &mut opponent_economy);
+    paid.0 = true;
+    info!("Match purse banked for {winner:?}");
+}
+
 const fn award_capture_bounties(
     previous: CaptureScore,
     current: CaptureScore,
@@ -700,6 +771,7 @@ impl Plugin for CtfPlugin {
             .init_resource::<FlagReturnScore>()
             .init_resource::<NitroBoosts>()
             .init_resource::<CtfMatchResult>()
+            .init_resource::<MatchPursePaid>()
             .init_resource::<MatchClock>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame).with_system(reset_ctf_match_resources),
@@ -707,7 +779,8 @@ impl Plugin for CtfPlugin {
             .add_system_set(
                 SystemSet::on_update(AppState::InGame)
                     .with_system(capture_the_flag_system)
-                    .with_system(expire_match_on_time_limit.after(capture_the_flag_system)),
+                    .with_system(expire_match_on_time_limit.after(capture_the_flag_system))
+                    .with_system(award_match_purse_on_resolution.after(expire_match_on_time_limit)),
             );
     }
 }
@@ -717,12 +790,14 @@ fn reset_ctf_match_resources(
     mut steals: ResMut<FlagStealScore>,
     mut returns: ResMut<FlagReturnScore>,
     mut result: ResMut<CtfMatchResult>,
+    mut purse_paid: ResMut<MatchPursePaid>,
     mut clock: ResMut<MatchClock>,
 ) {
     *captures = CaptureScore::default();
     *steals = FlagStealScore::default();
     *returns = FlagReturnScore::default();
     *result = CtfMatchResult::default();
+    *purse_paid = MatchPursePaid::default();
     *clock = MatchClock::default();
 }
 
@@ -780,6 +855,7 @@ mod tests {
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Opponents),
         });
+        app.insert_resource(MatchPursePaid(true));
         app.insert_resource(MatchClock {
             frames_remaining: 7,
             phase: MatchPhase::SuddenDeath,
@@ -803,6 +879,11 @@ mod tests {
         assert_eq!(
             *app.world.resource::<CtfMatchResult>(),
             CtfMatchResult::default()
+        );
+        assert_eq!(
+            *app.world.resource::<MatchPursePaid>(),
+            MatchPursePaid::default(),
+            "a fresh match must clear the purse latch so the next win pays out"
         );
         assert_eq!(*app.world.resource::<MatchClock>(), MatchClock::default());
     }
@@ -2179,6 +2260,106 @@ mod tests {
             app.world.resource::<CtfMatchResult>().winner,
             Some(CtfMatchWinner::Player),
             "the first overtime capture wins outright"
+        );
+    }
+
+    #[test]
+    fn player_win_banks_the_victory_purse_for_the_player_economy() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_match_purse(
+            CtfMatchWinner::Player,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, VICTORY_CASH_PURSE);
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn opponents_win_banks_the_victory_purse_for_the_opponent_economy() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_match_purse(
+            CtfMatchWinner::Opponents,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(opponent_economy.cash, VICTORY_CASH_PURSE);
+        assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_draw_splits_a_smaller_purse_to_both_teams() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_match_purse(
+            CtfMatchWinner::Draw,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, DRAW_CASH_PURSE);
+        assert_eq!(opponent_economy.cash, DRAW_CASH_PURSE);
+    }
+
+    fn purse_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<MatchPursePaid>();
+        app.add_system(award_match_purse_on_resolution);
+        app
+    }
+
+    #[test]
+    fn unresolved_match_banks_no_purse() {
+        let mut app = purse_app();
+
+        app.update();
+
+        assert_eq!(app.world.resource::<Score>().cash, 0);
+        assert_eq!(app.world.resource::<OpponentScore>().cash, 0);
+        assert!(!app.world.resource::<MatchPursePaid>().0);
+    }
+
+    #[test]
+    fn resolved_match_banks_the_purse_and_latches_it() {
+        let mut app = purse_app();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+
+        app.update();
+
+        assert_eq!(app.world.resource::<Score>().cash, VICTORY_CASH_PURSE);
+        assert!(
+            app.world.resource::<MatchPursePaid>().0,
+            "banking the purse must latch the flag"
+        );
+    }
+
+    #[test]
+    fn a_resolved_match_pays_the_purse_only_once() {
+        let mut app = purse_app();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Opponents),
+        });
+
+        app.update();
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            VICTORY_CASH_PURSE,
+            "the frozen post-match frames must not keep re-banking the purse"
         );
     }
 }

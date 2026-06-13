@@ -143,6 +143,13 @@ impl Score {
         self.cash += bounty;
         self.wrecks += 1;
     }
+
+    /// Bank an end-of-match purse: the Death Rally race winnings a team pockets
+    /// for taking the round. Pure cash, banked on top of every in-match bounty,
+    /// so it leaves the play tallies untouched.
+    pub const fn bank_match_purse(&mut self, purse: u32) {
+        self.cash += purse;
+    }
 }
 
 /// Running tally of pickups stolen by virtual opponents.
@@ -191,6 +198,12 @@ impl OpponentScore {
     pub const fn bank_wreck_bounty(&mut self, bounty: u32) {
         self.cash += bounty;
         self.wrecks += 1;
+    }
+
+    /// Bank an end-of-match purse: the race winnings the opponents pocket for
+    /// taking the round. Pure cash, leaving the play tallies untouched.
+    pub const fn bank_match_purse(&mut self, purse: u32) {
+        self.cash += purse;
     }
 }
 
@@ -318,6 +331,31 @@ mod tests {
     }
 
     #[test]
+    fn match_purse_banks_pure_cash_without_touching_tallies() {
+        let mut score = Score {
+            cash: 200,
+            collected: 3,
+            captures: 1,
+            steals: 2,
+            returns: 1,
+            wrecks: 4,
+        };
+        score.bank_match_purse(1000);
+        assert_eq!(
+            score,
+            Score {
+                cash: 1200,
+                collected: 3,
+                captures: 1,
+                steals: 2,
+                returns: 1,
+                wrecks: 4,
+            },
+            "a victory purse should add cash only, leaving every play tally untouched"
+        );
+    }
+
+    #[test]
     fn opponent_collecting_accumulates_cash_and_count() {
         let mut score = OpponentScore::default();
         score.collect(PickupKind::Nitro);
@@ -400,6 +438,31 @@ mod tests {
                 returns: 0,
                 wrecks: 1,
             }
+        );
+    }
+
+    #[test]
+    fn opponent_match_purse_banks_pure_cash_without_touching_tallies() {
+        let mut score = OpponentScore {
+            cash: 75,
+            collected: 1,
+            captures: 0,
+            steals: 1,
+            returns: 0,
+            wrecks: 2,
+        };
+        score.bank_match_purse(1000);
+        assert_eq!(
+            score,
+            OpponentScore {
+                cash: 1075,
+                collected: 1,
+                captures: 0,
+                steals: 1,
+                returns: 0,
+                wrecks: 2,
+            },
+            "an opponent victory purse should add cash only, leaving every tally untouched"
         );
     }
 
