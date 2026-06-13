@@ -51,6 +51,24 @@ pub const WRECK_STREAK_BONUS: u32 = 75;
 /// reach; wrecks beyond this point still pay, just at the capped top rate. With
 /// the base bounty this tops a rampage out at `150 + 3 * 75 = 375` per wreck.
 pub const WRECK_STREAK_BONUS_CAP: u32 = 3;
+/// Fixed update frames a freshly wrecked team spins out before it recovers.
+///
+/// The wreck's punch: the instant a team's integrity is ground to zero its cars
+/// spin out, barely creeping for a brief window before they drive again. This
+/// is what turns the [`WRECK_CASH_BOUNTY`] from a quiet payout into a real swing
+/// of the round, the wrecking team gets a clear opening to push the flag home or
+/// break away while the wreck flounders. At the game's 60 FPS convention this is
+/// 1.5 seconds, long enough to feel and capitalise on, short enough that a wreck
+/// is a setback rather than a death sentence. Fires once on the frame integrity
+/// crosses to zero, so a team only spins out anew after a repair lifts it back
+/// above zero and it is wrecked again.
+pub const WRECK_STUN_FRAMES: u32 = 90;
+/// Speed multiplier a team's cars suffer while spinning out from a fresh wreck.
+///
+/// Stacks on top of the integrity speed penalty, so a wrecked-and-spinning car
+/// barely crawls. Harsh enough that the spin-out reads as a real stagger, yet
+/// above a dead stop so a stunned car keeps inching and never feels frozen.
+pub const WRECK_STUN_SPEED_MULTIPLIER: f32 = 0.35;
 /// Extra durability a flag-carrying car's team loses each frame it is trading
 /// paint with an enemy.
 ///
@@ -257,6 +275,78 @@ pub const fn resolve_wreck_streaks(before: WreckStreaks, wrecks: WreckEvents) ->
         streaks,
         player_bounty,
         opponent_bounty,
+    }
+}
+
+/// Brief spin-out each team suffers the instant its cars are wrecked.
+///
+/// Mirrors [`crate::gameplay::pickup::NitroBoosts`]: a per-team frame timer that
+/// translates into a speed multiplier while it burns down. Triggered by
+/// [`ram_damage_system`] on the frame a team is newly wrecked, wound down each
+/// frame by [`wreck_stun_decay_system`], and read by the movement systems to
+/// stagger a freshly wrecked team's cars.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WreckStuns {
+    /// Frames the player team's cars keep spinning out.
+    pub player_frames: u32,
+    /// Frames the opponent team's cars keep spinning out.
+    pub opponent_frames: u32,
+}
+
+impl WreckStuns {
+    /// Speed multiplier the player team suffers while spinning out.
+    #[must_use]
+    pub const fn player_multiplier(self) -> f32 {
+        if self.player_frames > 0 {
+            WRECK_STUN_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Speed multiplier the opponent team suffers while spinning out.
+    #[must_use]
+    pub const fn opponent_multiplier(self) -> f32 {
+        if self.opponent_frames > 0 {
+            WRECK_STUN_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Speed multiplier for the given team's current spin-out.
+    #[must_use]
+    pub const fn multiplier_for_team(self, team: AiTeam) -> f32 {
+        match team {
+            AiTeam::Blue => self.player_multiplier(),
+            AiTeam::Red => self.opponent_multiplier(),
+        }
+    }
+
+    /// Spins out the player team for a fresh [`WRECK_STUN_FRAMES`] window.
+    pub const fn trigger_player(&mut self) {
+        self.player_frames = WRECK_STUN_FRAMES;
+    }
+
+    /// Spins out the opponent team for a fresh [`WRECK_STUN_FRAMES`] window.
+    pub const fn trigger_opponent(&mut self) {
+        self.opponent_frames = WRECK_STUN_FRAMES;
+    }
+
+    /// Spins out whichever teams crossed into a full wreck this frame.
+    pub const fn apply_wrecks(&mut self, wrecks: WreckEvents) {
+        if wrecks.player {
+            self.trigger_player();
+        }
+        if wrecks.opponent {
+            self.trigger_opponent();
+        }
+    }
+
+    /// Winds every team's spin-out down by one frame.
+    pub const fn tick(&mut self) {
+        self.player_frames = self.player_frames.saturating_sub(1);
+        self.opponent_frames = self.opponent_frames.saturating_sub(1);
     }
 }
 
@@ -475,6 +565,7 @@ pub fn ram_damage_system(
     nitro_boosts: Option<Res<NitroBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
     mut wreck_streaks: Option<ResMut<WreckStreaks>>,
+    mut wreck_stuns: Option<ResMut<WreckStuns>>,
     mut score: Option<ResMut<Score>>,
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
@@ -524,6 +615,12 @@ pub fn ram_damage_system(
     integrity.apply_damage(damage);
     let wrecks = integrity.newly_wrecked(before);
 
+    // A freshly wrecked team spins out: stagger its cars for a brief window so
+    // the wrecking team gets a real opening to capitalise.
+    if let Some(stuns) = wreck_stuns.as_deref_mut() {
+        stuns.apply_wrecks(wrecks);
+    }
+
     let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
     let payout = resolve_wreck_streaks(before_streaks, wrecks);
     if let Some(streaks) = wreck_streaks.as_deref_mut() {
@@ -566,6 +663,18 @@ fn reset_wreck_streaks(mut streaks: ResMut<WreckStreaks>) {
     *streaks = WreckStreaks::default();
 }
 
+fn reset_wreck_stuns(mut stuns: ResMut<WreckStuns>) {
+    *stuns = WreckStuns::default();
+}
+
+/// Winds every team's wreck spin-out down by one frame.
+///
+/// Runs before [`ram_damage_system`] each frame so a spin-out triggered this
+/// frame keeps its full [`WRECK_STUN_FRAMES`] window before the next tick.
+fn wreck_stun_decay_system(mut stuns: ResMut<WreckStuns>) {
+    stuns.tick();
+}
+
 #[derive(Default)]
 pub struct CombatPlugin;
 
@@ -573,11 +682,14 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VehicleIntegrity>()
             .init_resource::<WreckStreaks>()
+            .init_resource::<WreckStuns>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
                     .with_system(reset_vehicle_integrity)
-                    .with_system(reset_wreck_streaks),
+                    .with_system(reset_wreck_streaks)
+                    .with_system(reset_wreck_stuns),
             )
+            .add_system(wreck_stun_decay_system.before(ram_damage_system))
             .add_system(ram_damage_system);
     }
 }
@@ -1569,6 +1681,153 @@ mod tests {
             *app.world.resource::<WreckStreaks>(),
             WreckStreaks::default()
         );
+    }
+
+    #[test]
+    fn wreck_stuns_default_to_inactive_for_both_teams() {
+        let stuns = WreckStuns::default();
+        assert_eq!(stuns.player_frames, 0);
+        assert_eq!(stuns.opponent_frames, 0);
+        assert_near(stuns.player_multiplier(), 1.0);
+        assert_near(stuns.opponent_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn triggering_a_stun_spins_out_only_that_team() {
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_opponent();
+        assert_eq!(stuns.opponent_frames, WRECK_STUN_FRAMES);
+        assert_near(stuns.opponent_multiplier(), WRECK_STUN_SPEED_MULTIPLIER);
+        // The wrecking team keeps full speed; only the wreck spins out.
+        assert_eq!(stuns.player_frames, 0);
+        assert_near(stuns.player_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn a_spin_out_expires_after_its_window() {
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_player();
+        for _ in 0..WRECK_STUN_FRAMES {
+            assert_near(stuns.player_multiplier(), WRECK_STUN_SPEED_MULTIPLIER);
+            stuns.tick();
+        }
+        assert_near(stuns.player_multiplier(), 1.0);
+        // Ticking a spent timer never underflows.
+        stuns.tick();
+        assert_eq!(stuns.player_frames, 0);
+    }
+
+    #[test]
+    fn stun_multiplier_for_team_routes_to_the_right_pool() {
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_player();
+        assert_near(
+            stuns.multiplier_for_team(AiTeam::Blue),
+            WRECK_STUN_SPEED_MULTIPLIER,
+        );
+        assert_near(stuns.multiplier_for_team(AiTeam::Red), 1.0);
+    }
+
+    #[test]
+    fn apply_wrecks_spins_out_each_wrecked_team() {
+        let mut player_only = WreckStuns::default();
+        player_only.apply_wrecks(WreckEvents {
+            player: true,
+            opponent: false,
+        });
+        assert_eq!(player_only.player_frames, WRECK_STUN_FRAMES);
+        assert_eq!(player_only.opponent_frames, 0);
+
+        let mut both = WreckStuns::default();
+        both.apply_wrecks(WreckEvents {
+            player: true,
+            opponent: true,
+        });
+        assert_eq!(both.player_frames, WRECK_STUN_FRAMES);
+        assert_eq!(both.opponent_frames, WRECK_STUN_FRAMES);
+
+        let mut quiet = WreckStuns::default();
+        quiet.apply_wrecks(WreckEvents::default());
+        assert_eq!(quiet, WreckStuns::default());
+    }
+
+    #[test]
+    fn system_spins_out_a_team_it_grinds_to_a_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<WreckStuns>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let stuns = app.world.resource::<WreckStuns>();
+        // The wrecked opponent spins out; the wrecking player team does not.
+        assert_eq!(stuns.opponent_frames, WRECK_STUN_FRAMES);
+        assert_eq!(stuns.player_frames, 0);
+    }
+
+    #[test]
+    fn system_leaves_operational_teams_unstunned() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.init_resource::<WreckStuns>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(*app.world.resource::<WreckStuns>(), WreckStuns::default());
+    }
+
+    #[test]
+    fn wreck_stun_decay_system_winds_down_each_team() {
+        let mut app = App::new();
+        app.insert_resource(WreckStuns {
+            player_frames: 2,
+            opponent_frames: 1,
+        });
+        app.add_system(wreck_stun_decay_system);
+
+        app.update();
+        assert_eq!(
+            *app.world.resource::<WreckStuns>(),
+            WreckStuns {
+                player_frames: 1,
+                opponent_frames: 0,
+            }
+        );
+
+        app.update();
+        assert_eq!(*app.world.resource::<WreckStuns>(), WreckStuns::default());
+    }
+
+    #[test]
+    fn entering_match_resets_wreck_stuns() {
+        let mut app = App::new();
+        app.insert_resource(WreckStuns {
+            player_frames: 12,
+            opponent_frames: 34,
+        });
+        app.add_system(reset_wreck_stuns);
+
+        app.update();
+
+        assert_eq!(*app.world.resource::<WreckStuns>(), WreckStuns::default());
     }
 
     fn player_stub() -> Player {

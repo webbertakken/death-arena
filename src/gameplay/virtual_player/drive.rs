@@ -1,4 +1,4 @@
-use crate::gameplay::combat::VehicleIntegrity;
+use crate::gameplay::combat::{VehicleIntegrity, WreckStuns};
 use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
@@ -22,6 +22,16 @@ const TEAMMATE_SPACING_RADIUS: f32 = 90.0;
 
 type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
 
+/// Optional per-match resources the drive system reads, bundled into one system
+/// parameter to keep the signature under clippy's argument limit (mirrors the
+/// player movement system's [`crate::gameplay::player`] context tuple).
+type VirtualPlayerDriveContext<'w> = (
+    Option<Res<'w, NitroBoosts>>,
+    Option<Res<'w, VehicleIntegrity>>,
+    Option<Res<'w, WreckStuns>>,
+    Option<Res<'w, CtfMatchResult>>,
+);
+
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
 pub fn virtual_player_drive_system(
@@ -29,10 +39,9 @@ pub fn virtual_player_drive_system(
     player_query: Query<(Entity, &Transform), HumanPlayerTransform>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
-    nitro_boosts: Option<Res<NitroBoosts>>,
-    integrity: Option<Res<VehicleIntegrity>>,
-    match_result: Option<Res<CtfMatchResult>>,
+    context: VirtualPlayerDriveContext,
 ) {
+    let (nitro_boosts, integrity, wreck_stuns, match_result) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -111,12 +120,16 @@ pub fn virtual_player_drive_system(
         let integrity_multiplier = integrity
             .as_ref()
             .map_or(1.0, |integrity| integrity.multiplier_for_team(ai.team));
+        let stun_multiplier = wreck_stuns
+            .as_ref()
+            .map_or(1.0, |stuns| stuns.multiplier_for_team(ai.team));
         let carry_multiplier =
             flag_carrier_speed_multiplier(carries_enemy_flag(entity, ai.team, &flags));
         let movement_distance = intent.throttle
             * ai.movement_speed
             * nitro_multiplier
             * integrity_multiplier
+            * stun_multiplier
             * carry_multiplier
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
@@ -2465,6 +2478,42 @@ mod tests {
         assert!(
             wrecked_y > 0.0 && wrecked_y < healthy_y,
             "healthy={healthy_y}, wrecked={wrecked_y}"
+        );
+    }
+
+    fn one_frame_ai_y_with_stun(team: AiTeam, stuns: WreckStuns) -> f32 {
+        let mut app = app_with_system();
+        app.insert_resource(stuns);
+        let ai = spawn_ai_on_team(&mut app, team, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        app.world.get::<Transform>(ai).unwrap().translation.y
+    }
+
+    #[test]
+    fn a_wreck_spin_out_reduces_opponent_distance() {
+        let healthy_y = one_frame_ai_y(AiTeam::Red, None);
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_opponent();
+        let stunned_y = one_frame_ai_y_with_stun(AiTeam::Red, stuns);
+
+        assert!(
+            stunned_y > 0.0 && stunned_y < healthy_y,
+            "a spun-out opponent should crawl forward: healthy={healthy_y}, stunned={stunned_y}"
+        );
+    }
+
+    #[test]
+    fn an_opponent_spin_out_does_not_slow_blue_virtual_players() {
+        let healthy_y = one_frame_ai_y(AiTeam::Blue, None);
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_opponent();
+        let blue_y = one_frame_ai_y_with_stun(AiTeam::Blue, stuns);
+
+        assert!(
+            (blue_y - healthy_y).abs() < 1e-4,
+            "the opponents' spin-out must not slow blue cars: healthy={healthy_y}, blue={blue_y}"
         );
     }
 

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::gameplay::combat::VehicleIntegrity;
+    use crate::gameplay::combat::{VehicleIntegrity, WreckStuns};
     use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, CtfMatchWinner, FlagTeam};
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::NitroBoosts;
@@ -196,6 +196,82 @@ mod tests {
         assert!(
             wrecked_y > 0.0 && wrecked_y < healthy_y,
             "healthy={healthy_y}, wrecked={wrecked_y}"
+        );
+    }
+
+    #[test]
+    fn a_wreck_spin_out_reduces_forward_distance() {
+        let mut healthy_app = setup_test_app();
+        let healthy_player = spawn_player(&mut healthy_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut healthy_app, healthy_player);
+        healthy_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        healthy_app.update();
+        let healthy_y = healthy_app
+            .world
+            .get::<Transform>(healthy_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut stunned_app = setup_test_app();
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_player();
+        stunned_app.insert_resource(stuns);
+        let stunned_player = spawn_player(&mut stunned_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut stunned_app, stunned_player);
+        stunned_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        stunned_app.update();
+        let stunned_y = stunned_app
+            .world
+            .get::<Transform>(stunned_player)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            stunned_y > 0.0 && stunned_y < healthy_y,
+            "a spun-out player should crawl forward: healthy={healthy_y}, stunned={stunned_y}"
+        );
+    }
+
+    #[test]
+    fn an_opponent_spin_out_does_not_slow_the_player() {
+        let mut healthy_app = setup_test_app();
+        let healthy_player = spawn_player(&mut healthy_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut healthy_app, healthy_player);
+        healthy_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        healthy_app.update();
+        let healthy_y = healthy_app
+            .world
+            .get::<Transform>(healthy_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut app = setup_test_app();
+        let mut stuns = WreckStuns::default();
+        stuns.trigger_opponent();
+        app.insert_resource(stuns);
+        let player = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut app, player);
+        app.world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        app.update();
+        let player_y = app.world.get::<Transform>(player).unwrap().translation.y;
+
+        assert!(
+            (player_y - healthy_y).abs() < 1e-4,
+            "the opponents' spin-out must not slow the player: healthy={healthy_y}, player={player_y}"
         );
     }
 

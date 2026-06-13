@@ -1,4 +1,4 @@
-use crate::gameplay::combat::VehicleIntegrity;
+use crate::gameplay::combat::{VehicleIntegrity, WreckStuns};
 use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::NitroBoosts;
@@ -14,6 +14,7 @@ type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 type PlayerMovementContext<'w> = (
     Option<Res<'w, NitroBoosts>>,
     Option<Res<'w, VehicleIntegrity>>,
+    Option<Res<'w, WreckStuns>>,
     Option<Res<'w, CtfMatchResult>>,
 );
 
@@ -26,7 +27,7 @@ pub fn car_movement_system(
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
-    let (nitro_boosts, integrity, match_result) = context;
+    let (nitro_boosts, integrity, wreck_stuns, match_result) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -55,6 +56,9 @@ pub fn car_movement_system(
     let integrity_multiplier = integrity
         .as_ref()
         .map_or(1.0, |integrity| integrity.player_multiplier());
+    let stun_multiplier = wreck_stuns
+        .as_ref()
+        .map_or(1.0, |stuns| stuns.player_multiplier());
     let carrying_flag = flag_query
         .iter()
         .any(|flag| flag.holder == Some(player_entity));
@@ -62,6 +66,7 @@ pub fn car_movement_system(
     let speed_multiplier = player.engine_max_speed_multiplier
         * nitro_multiplier
         * integrity_multiplier
+        * stun_multiplier
         * carry_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
