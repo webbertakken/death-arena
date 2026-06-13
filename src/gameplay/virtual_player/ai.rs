@@ -231,6 +231,47 @@ fn own_flag_is_dropped(own_flag: &FlagTarget) -> bool {
     own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
 }
 
+/// Nearest enemy threat to `anchor` within `radius`.
+///
+/// Shared by every CTF threat lookup so they agree on the same tie-breaking:
+/// closest first, then by `x`, then by `y` for a deterministic pick.
+fn closest_enemy_threat_within(
+    team: AiTeam,
+    anchor: Vec2,
+    radius: f32,
+    threats: &[ThreatTarget],
+) -> Option<ThreatTarget> {
+    let radius_sq = radius * radius;
+    threats
+        .iter()
+        .copied()
+        .filter_map(|threat| {
+            let distance_sq = threat.position.distance_squared(anchor);
+            (threat.team == team.enemy() && distance_sq <= radius_sq)
+                .then_some((threat, distance_sq))
+        })
+        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
+            a_dist
+                .partial_cmp(b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .x
+                        .partial_cmp(&b_threat.position.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    a_threat
+                        .position
+                        .y
+                        .partial_cmp(&b_threat.position.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+        .map(|(threat, _)| threat)
+}
+
 fn closest_home_flag_threat(
     team: AiTeam,
     own_flag: &FlagTarget,
@@ -240,35 +281,7 @@ fn closest_home_flag_threat(
         return None;
     }
 
-    let radius_sq = HOME_FLAG_THREAT_RADIUS * HOME_FLAG_THREAT_RADIUS;
-    threats
-        .iter()
-        .copied()
-        .filter_map(|threat| {
-            let distance_sq = threat.position.distance_squared(own_flag.position);
-            (threat.team == team.enemy() && distance_sq <= radius_sq)
-                .then_some((threat, distance_sq))
-        })
-        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
-            a_dist
-                .partial_cmp(b_dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .x
-                        .partial_cmp(&b_threat.position.x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .y
-                        .partial_cmp(&b_threat.position.y)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        })
-        .map(|(threat, _)| threat)
+    closest_enemy_threat_within(team, own_flag.position, HOME_FLAG_THREAT_RADIUS, threats)
 }
 
 fn closest_home_base_contester(
@@ -276,35 +289,7 @@ fn closest_home_base_contester(
     home_base: Vec2,
     threats: &[ThreatTarget],
 ) -> Option<ThreatTarget> {
-    let radius_sq = HOME_BASE_CONTEST_RADIUS * HOME_BASE_CONTEST_RADIUS;
-    threats
-        .iter()
-        .copied()
-        .filter_map(|threat| {
-            let distance_sq = threat.position.distance_squared(home_base);
-            (threat.team == team.enemy() && distance_sq <= radius_sq)
-                .then_some((threat, distance_sq))
-        })
-        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
-            a_dist
-                .partial_cmp(b_dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .x
-                        .partial_cmp(&b_threat.position.x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .y
-                        .partial_cmp(&b_threat.position.y)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        })
-        .map(|(threat, _)| threat)
+    closest_enemy_threat_within(team, home_base, HOME_BASE_CONTEST_RADIUS, threats)
 }
 
 fn closest_flag_carrier_pursuer(
@@ -312,35 +297,7 @@ fn closest_flag_carrier_pursuer(
     carrier_position: Vec2,
     threats: &[ThreatTarget],
 ) -> Option<ThreatTarget> {
-    let radius_sq = FLAG_CARRIER_PURSUER_RADIUS * FLAG_CARRIER_PURSUER_RADIUS;
-    threats
-        .iter()
-        .copied()
-        .filter_map(|threat| {
-            let distance_sq = threat.position.distance_squared(carrier_position);
-            (threat.team == team.enemy() && distance_sq <= radius_sq)
-                .then_some((threat, distance_sq))
-        })
-        .min_by(|(a_threat, a_dist), (b_threat, b_dist)| {
-            a_dist
-                .partial_cmp(b_dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .x
-                        .partial_cmp(&b_threat.position.x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .y
-                        .partial_cmp(&b_threat.position.y)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        })
-        .map(|(threat, _)| threat)
+    closest_enemy_threat_within(team, carrier_position, FLAG_CARRIER_PURSUER_RADIUS, threats)
 }
 
 fn contested_home_base_staging_point(home_base: Vec2, threat_position: Vec2) -> Vec2 {
@@ -1752,6 +1709,66 @@ mod tests {
         assert_eq!(
             target,
             Some(DrivingTarget::UrgentDefendHomeBase(Vec2::new(500.0, 90.0)))
+        );
+    }
+
+    #[test]
+    fn closest_enemy_threat_within_picks_nearest_and_ignores_allies_and_range() {
+        let threats = [
+            ThreatTarget {
+                team: AiTeam::Red,
+                position: Vec2::new(40.0, 0.0),
+            },
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(60.0, 0.0),
+            },
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(10.0, 0.0),
+            },
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(5000.0, 0.0),
+            },
+        ];
+
+        let nearest = closest_enemy_threat_within(AiTeam::Red, Vec2::ZERO, 200.0, &threats);
+
+        assert_eq!(
+            nearest,
+            Some(ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(10.0, 0.0),
+            })
+        );
+    }
+
+    #[test]
+    fn closest_enemy_threat_within_breaks_ties_by_position() {
+        let threats = [
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(0.0, 50.0),
+            },
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(0.0, -50.0),
+            },
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-50.0, 0.0),
+            },
+        ];
+
+        let nearest = closest_enemy_threat_within(AiTeam::Red, Vec2::ZERO, 200.0, &threats);
+
+        assert_eq!(
+            nearest,
+            Some(ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-50.0, 0.0),
+            })
         );
     }
 

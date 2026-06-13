@@ -470,11 +470,14 @@ fn is_best_fallback_stolen_flag_route_guard(
                 && !other.carries_enemy_flag
                 && !is_best_candidate_for_target(*other, candidates)
         })
-        .min_by(|a, b| compare_fallback_stolen_flag_route_guards(a, b, target))
+        .min_by(|a, b| compare_candidates_by_distance_to(a, b, target))
         .is_some_and(|best| best.entity == candidate.entity)
 }
 
-fn compare_fallback_stolen_flag_route_guards(
+/// Orders fallback candidates by proximity to a shared `target`, using the
+/// car's `x` then `y` as a deterministic tie-breaker. Shared by every
+/// single-target fallback role so they pick the same nearest car.
+fn compare_candidates_by_distance_to(
     a: &CtfTargetCandidate,
     b: &CtfTargetCandidate,
     target: Vec2,
@@ -571,31 +574,8 @@ fn is_best_fallback_midfield_interceptor(
                 && !is_best_candidate_for_target(*other, candidates)
                 && !is_best_fallback_home_defender(*other, candidates)
         })
-        .min_by(|a, b| compare_fallback_midfield_interceptors(a, b, target))
+        .min_by(|a, b| compare_candidates_by_distance_to(a, b, target))
         .is_some_and(|best| best.entity == candidate.entity)
-}
-
-fn compare_fallback_midfield_interceptors(
-    a: &CtfTargetCandidate,
-    b: &CtfTargetCandidate,
-    target: Vec2,
-) -> std::cmp::Ordering {
-    a.position
-        .distance_squared(target)
-        .partial_cmp(&b.position.distance_squared(target))
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
 }
 
 fn is_best_fallback_enemy_flag_flanker(
@@ -619,31 +599,8 @@ fn is_best_fallback_enemy_flag_flanker(
                 && !is_best_fallback_home_defender(*other, candidates)
                 && !is_best_fallback_midfield_interceptor(*other, candidates, flags)
         })
-        .min_by(|a, b| compare_fallback_enemy_flag_flankers(a, b, target))
+        .min_by(|a, b| compare_candidates_by_distance_to(a, b, target))
         .is_some_and(|best| best.entity == candidate.entity)
-}
-
-fn compare_fallback_enemy_flag_flankers(
-    a: &CtfTargetCandidate,
-    b: &CtfTargetCandidate,
-    target: Vec2,
-) -> std::cmp::Ordering {
-    a.position
-        .distance_squared(target)
-        .partial_cmp(&b.position.distance_squared(target))
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
 }
 
 fn compare_ctf_target_candidates(
