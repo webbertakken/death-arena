@@ -38,6 +38,19 @@ pub const NITRO_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
 /// per wreck, on the frame integrity crosses to zero, so a team only cashes in
 /// again after its victim limps to a repair and is wrecked anew.
 pub const WRECK_CASH_BOUNTY: u32 = 150;
+/// Extra cash each consecutive wreck adds on top of [`WRECK_CASH_BOUNTY`].
+///
+/// A team that keeps grinding enemies down without being wrecked itself is on a
+/// rampage, and a rampage should pay. Each wreck in the streak banks this much
+/// more than the last, so chaining wrecks bankrolls upgrades faster than picking
+/// off the odd lone car.
+pub const WRECK_STREAK_BONUS: u32 = 75;
+/// Most consecutive wrecks that still raise the bounty.
+///
+/// Caps the rampage payday so a dominant team cannot snowball its economy out of
+/// reach; wrecks beyond this point still pay, just at the capped top rate. With
+/// the base bounty this tops a rampage out at `150 + 3 * 75 = 375` per wreck.
+pub const WRECK_STREAK_BONUS_CAP: u32 = 3;
 /// Extra durability a flag-carrying car's team loses each frame it is trading
 /// paint with an enemy.
 ///
@@ -149,6 +162,84 @@ impl WreckEvents {
     #[must_use]
     pub const fn any(self) -> bool {
         self.player || self.opponent
+    }
+}
+
+/// Consecutive wrecks each team has dealt without being wrecked itself.
+///
+/// A team's streak climbs each time it grinds an enemy car to a full wreck and
+/// resets the instant the team is wrecked in turn, so only a sustained rampage
+/// earns the escalating [`wreck_bounty_for_streak`] payday.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WreckStreaks {
+    /// Wrecks the player team has dealt in its current rampage.
+    pub player: u32,
+    /// Wrecks the opponent team has dealt in its current rampage.
+    pub opponent: u32,
+}
+
+/// The streaks and per-team bounties that result from a frame's wreck events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WreckStreakPayout {
+    /// The teams' rampage streaks after this frame is resolved.
+    pub streaks: WreckStreaks,
+    /// Cash banked for the player team this frame (`0` when it dealt no wreck).
+    pub player_bounty: u32,
+    /// Cash banked for the opponent team this frame.
+    pub opponent_bounty: u32,
+}
+
+/// Cash a team banks for the `streak`-th consecutive wreck in a rampage.
+///
+/// The first wreck pays the base [`WRECK_CASH_BOUNTY`]; each further wreck adds
+/// [`WRECK_STREAK_BONUS`], capped at [`WRECK_STREAK_BONUS_CAP`] steps so a
+/// runaway team cannot snowball its economy forever.
+#[must_use]
+pub const fn wreck_bounty_for_streak(streak: u32) -> u32 {
+    let steps = streak.saturating_sub(1);
+    let capped = if steps > WRECK_STREAK_BONUS_CAP {
+        WRECK_STREAK_BONUS_CAP
+    } else {
+        steps
+    };
+    WRECK_CASH_BOUNTY + capped * WRECK_STREAK_BONUS
+}
+
+/// Advances each team's rampage streak for a frame's wreck events and prices the
+/// bounty each dealt wreck pays.
+///
+/// The player team deals a wreck when the opponents fall, and vice versa.
+/// Dealing a wreck extends the dealer's streak and banks
+/// [`wreck_bounty_for_streak`]; being wrecked breaks the victim's streak first.
+/// When both teams fall in the same frame each mutually breaks the other's
+/// rampage, so both restart at a single wreck and bank the base bounty.
+#[must_use]
+pub const fn resolve_wreck_streaks(before: WreckStreaks, wrecks: WreckEvents) -> WreckStreakPayout {
+    let mut streaks = before;
+    let mut player_bounty = 0;
+    let mut opponent_bounty = 0;
+
+    // Being wrecked breaks your own rampage before this frame's wreck counts.
+    if wrecks.player {
+        streaks.player = 0;
+    }
+    if wrecks.opponent {
+        streaks.opponent = 0;
+    }
+    // The player team deals a wreck when the opponents are the ones wrecked.
+    if wrecks.opponent {
+        streaks.player += 1;
+        player_bounty = wreck_bounty_for_streak(streaks.player);
+    }
+    if wrecks.player {
+        streaks.opponent += 1;
+        opponent_bounty = wreck_bounty_for_streak(streaks.opponent);
+    }
+
+    WreckStreakPayout {
+        streaks,
+        player_bounty,
+        opponent_bounty,
     }
 }
 
@@ -319,6 +410,7 @@ pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
+    mut wreck_streaks: Option<ResMut<WreckStreaks>>,
     mut score: Option<ResMut<Score>>,
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
@@ -365,23 +457,36 @@ pub fn ram_damage_system(
     integrity.apply_damage(damage);
     let wrecks = integrity.newly_wrecked(before);
 
+    let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
+    let payout = resolve_wreck_streaks(before_streaks, wrecks);
+    if let Some(streaks) = wreck_streaks.as_deref_mut() {
+        *streaks = payout.streaks;
+    }
+
     if wrecks.any() {
         info!(
-            "Wreck! player_down={} opponent_down={}; banking {WRECK_CASH_BOUNTY} for the wrecker",
-            wrecks.player, wrecks.opponent
+            "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
+             banking player_bounty={} opponent_bounty={}",
+            wrecks.player,
+            wrecks.opponent,
+            payout.streaks.player,
+            payout.streaks.opponent,
+            payout.player_bounty,
+            payout.opponent_bounty,
         );
     }
 
     // The wrecking team banks the bounty: a wrecked opponent pays the player
-    // team, a wrecked player team pays the opponents.
-    if wrecks.opponent {
+    // team, a wrecked player team pays the opponents. Each consecutive wreck in
+    // a rampage pays more, up to the streak cap.
+    if payout.player_bounty > 0 {
         if let Some(score) = score.as_deref_mut() {
-            score.bank_wreck_bounty(WRECK_CASH_BOUNTY);
+            score.bank_wreck_bounty(payout.player_bounty);
         }
     }
-    if wrecks.player {
+    if payout.opponent_bounty > 0 {
         if let Some(opponent_score) = opponent_score.as_deref_mut() {
-            opponent_score.bank_wreck_bounty(WRECK_CASH_BOUNTY);
+            opponent_score.bank_wreck_bounty(payout.opponent_bounty);
         }
     }
 }
@@ -390,14 +495,21 @@ fn reset_vehicle_integrity(mut integrity: ResMut<VehicleIntegrity>) {
     *integrity = VehicleIntegrity::default();
 }
 
+fn reset_wreck_streaks(mut streaks: ResMut<WreckStreaks>) {
+    *streaks = WreckStreaks::default();
+}
+
 #[derive(Default)]
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VehicleIntegrity>()
+            .init_resource::<WreckStreaks>()
             .add_system_set(
-                SystemSet::on_enter(AppState::InGame).with_system(reset_vehicle_integrity),
+                SystemSet::on_enter(AppState::InGame)
+                    .with_system(reset_vehicle_integrity)
+                    .with_system(reset_wreck_streaks),
             )
             .add_system(ram_damage_system);
     }
@@ -1063,6 +1175,163 @@ mod tests {
         assert_eq!(
             *app.world.resource::<VehicleIntegrity>(),
             VehicleIntegrity::default()
+        );
+    }
+
+    #[test]
+    fn a_lone_wreck_pays_the_base_bounty() {
+        assert_eq!(wreck_bounty_for_streak(0), WRECK_CASH_BOUNTY);
+        assert_eq!(wreck_bounty_for_streak(1), WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn each_consecutive_wreck_raises_the_bounty() {
+        let bounties: Vec<u32> = (1..=WRECK_STREAK_BONUS_CAP + 1)
+            .map(wreck_bounty_for_streak)
+            .collect();
+        for pair in bounties.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "a longer rampage must pay more: {bounties:?}"
+            );
+        }
+        assert_eq!(
+            wreck_bounty_for_streak(2),
+            WRECK_CASH_BOUNTY + WRECK_STREAK_BONUS
+        );
+    }
+
+    #[test]
+    fn the_rampage_bounty_is_capped() {
+        let capped = WRECK_CASH_BOUNTY + WRECK_STREAK_BONUS_CAP * WRECK_STREAK_BONUS;
+        assert_eq!(wreck_bounty_for_streak(WRECK_STREAK_BONUS_CAP + 1), capped);
+        assert_eq!(wreck_bounty_for_streak(99), capped);
+    }
+
+    #[test]
+    fn a_quiet_frame_leaves_streaks_and_pays_nothing() {
+        let before = WreckStreaks {
+            player: 2,
+            opponent: 1,
+        };
+        let payout = resolve_wreck_streaks(before, WreckEvents::default());
+        assert_eq!(payout.streaks, before);
+        assert_eq!(payout.player_bounty, 0);
+        assert_eq!(payout.opponent_bounty, 0);
+    }
+
+    #[test]
+    fn dealing_a_wreck_extends_the_dealer_and_resets_the_victim() {
+        let before = WreckStreaks {
+            player: 1,
+            opponent: 2,
+        };
+        // The opponent team is wrecked, so the player team dealt the wreck.
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_eq!(payout.streaks.player, 2);
+        assert_eq!(
+            payout.streaks.opponent, 0,
+            "a wrecked team loses its rampage"
+        );
+        assert_eq!(payout.player_bounty, wreck_bounty_for_streak(2));
+        assert_eq!(payout.opponent_bounty, 0);
+    }
+
+    #[test]
+    fn an_opponent_rampage_extends_them_and_resets_the_player() {
+        let before = WreckStreaks {
+            player: 3,
+            opponent: 1,
+        };
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_eq!(payout.streaks.opponent, 2);
+        assert_eq!(payout.streaks.player, 0);
+        assert_eq!(payout.opponent_bounty, wreck_bounty_for_streak(2));
+        assert_eq!(payout.player_bounty, 0);
+    }
+
+    #[test]
+    fn mutual_wrecks_restart_both_streaks_at_the_base_bounty() {
+        let before = WreckStreaks {
+            player: 3,
+            opponent: 3,
+        };
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_eq!(payout.streaks.player, 1);
+        assert_eq!(payout.streaks.opponent, 1);
+        assert_eq!(payout.player_bounty, WRECK_CASH_BOUNTY);
+        assert_eq!(payout.opponent_bounty, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn system_escalates_the_wreck_bounty_across_a_rampage() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<WreckStreaks>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        // First wreck pays the base bounty and opens the rampage.
+        app.update();
+        assert_eq!(app.world.resource::<WreckStreaks>().player, 1);
+        assert_eq!(app.world.resource::<Score>().cash, WRECK_CASH_BOUNTY);
+
+        // The opponent limps back from a repair and is wrecked anew: the second
+        // wreck in the rampage pays more than the first.
+        app.world.resource_mut::<VehicleIntegrity>().opponent = 0.2;
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(app.world.resource::<WreckStreaks>().player, 2);
+        assert_eq!(
+            score.cash,
+            wreck_bounty_for_streak(1) + wreck_bounty_for_streak(2)
+        );
+        assert_eq!(score.wrecks, 2);
+    }
+
+    #[test]
+    fn entering_match_resets_wreck_streaks() {
+        let mut app = App::new();
+        app.insert_resource(WreckStreaks {
+            player: 3,
+            opponent: 2,
+        });
+        app.add_system(reset_wreck_streaks);
+
+        app.update();
+
+        assert_eq!(
+            *app.world.resource::<WreckStreaks>(),
+            WreckStreaks::default()
         );
     }
 
