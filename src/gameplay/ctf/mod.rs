@@ -5,6 +5,7 @@ use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::{App, AppState, Plugin};
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
+use std::cmp::Ordering;
 
 pub const FLAG_TOUCH_RADIUS: f32 = 120.0;
 pub const BASE_CAPTURE_RADIUS: f32 = 160.0;
@@ -12,6 +13,11 @@ pub const CAPTURES_TO_WIN: u32 = 3;
 pub const CAPTURE_CASH_BOUNTY: u32 = 250;
 pub const FLAG_STEAL_CASH_BOUNTY: u32 = 50;
 pub const FLAG_RETURN_CASH_BOUNTY: u32 = 75;
+/// Fixed update frames a CTF round runs before it resolves on time.
+///
+/// Caps stalemates so a match always ends even if neither team reaches
+/// [`CAPTURES_TO_WIN`]. At the game's 60 FPS convention this is three minutes.
+pub const MATCH_TIME_LIMIT_FRAMES: u32 = 10_800;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -105,11 +111,57 @@ impl FlagReturnScore {
 pub enum CtfMatchWinner {
     Player,
     Opponents,
+    /// Neither team led when the match clock expired.
+    Draw,
 }
 
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CtfMatchResult {
     pub winner: Option<CtfMatchWinner>,
+}
+
+/// Counts down the current CTF round so a stalemated match always ends.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchClock {
+    pub frames_remaining: u32,
+}
+
+impl Default for MatchClock {
+    fn default() -> Self {
+        Self {
+            frames_remaining: MATCH_TIME_LIMIT_FRAMES,
+        }
+    }
+}
+
+impl MatchClock {
+    /// Advances the clock by one fixed frame, saturating at zero.
+    pub const fn tick(&mut self) {
+        self.frames_remaining = self.frames_remaining.saturating_sub(1);
+    }
+
+    /// Whether the round time limit has been reached.
+    pub const fn is_expired(self) -> bool {
+        self.frames_remaining == 0
+    }
+}
+
+/// Resolves a timed-out match by captures, then steals, then returns.
+///
+/// A perfectly level scoreline across all three is a [`CtfMatchWinner::Draw`].
+#[must_use]
+fn time_limit_winner(
+    captures: CaptureScore,
+    steals: FlagStealScore,
+    returns: FlagReturnScore,
+) -> CtfMatchWinner {
+    let player = (captures.player, steals.player, returns.player);
+    let opponents = (captures.opponents, steals.opponents, returns.opponents);
+    match player.cmp(&opponents) {
+        Ordering::Greater => CtfMatchWinner::Player,
+        Ordering::Less => CtfMatchWinner::Opponents,
+        Ordering::Equal => CtfMatchWinner::Draw,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,6 +490,29 @@ pub fn capture_the_flag_system(
     }
 }
 
+/// Ends the match when the round clock runs out, resolving the leader on score.
+///
+/// Runs after [`capture_the_flag_system`] so a capture landed on the final frame
+/// still counts before the time limit decides the result.
+fn expire_match_on_time_limit(
+    mut clock: ResMut<MatchClock>,
+    mut result: ResMut<CtfMatchResult>,
+    captures: Res<CaptureScore>,
+    steals: Res<FlagStealScore>,
+    returns: Res<FlagReturnScore>,
+) {
+    if result.winner.is_some() {
+        return;
+    }
+
+    clock.tick();
+    if clock.is_expired() {
+        let winner = time_limit_winner(*captures, *steals, *returns);
+        info!("CTF match time limit reached; resolved as {winner:?}");
+        result.winner = Some(winner);
+    }
+}
+
 const fn award_capture_bounties(
     previous: CaptureScore,
     current: CaptureScore,
@@ -535,11 +610,14 @@ impl Plugin for CtfPlugin {
             .init_resource::<FlagReturnScore>()
             .init_resource::<NitroBoosts>()
             .init_resource::<CtfMatchResult>()
+            .init_resource::<MatchClock>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame).with_system(reset_ctf_match_resources),
             )
             .add_system_set(
-                SystemSet::on_update(AppState::InGame).with_system(capture_the_flag_system),
+                SystemSet::on_update(AppState::InGame)
+                    .with_system(capture_the_flag_system)
+                    .with_system(expire_match_on_time_limit.after(capture_the_flag_system)),
             );
     }
 }
@@ -549,11 +627,13 @@ fn reset_ctf_match_resources(
     mut steals: ResMut<FlagStealScore>,
     mut returns: ResMut<FlagReturnScore>,
     mut result: ResMut<CtfMatchResult>,
+    mut clock: ResMut<MatchClock>,
 ) {
     *captures = CaptureScore::default();
     *steals = FlagStealScore::default();
     *returns = FlagReturnScore::default();
     *result = CtfMatchResult::default();
+    *clock = MatchClock::default();
 }
 
 #[cfg(test)]
@@ -583,6 +663,9 @@ mod tests {
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Opponents),
         });
+        app.insert_resource(MatchClock {
+            frames_remaining: 7,
+        });
         app.add_system(reset_ctf_match_resources);
 
         app.update();
@@ -602,6 +685,174 @@ mod tests {
         assert_eq!(
             *app.world.resource::<CtfMatchResult>(),
             CtfMatchResult::default()
+        );
+        assert_eq!(*app.world.resource::<MatchClock>(), MatchClock::default());
+    }
+
+    #[test]
+    fn match_clock_defaults_to_the_round_time_limit() {
+        assert_eq!(
+            MatchClock::default().frames_remaining,
+            MATCH_TIME_LIMIT_FRAMES
+        );
+    }
+
+    #[test]
+    fn match_clock_ticks_down_and_saturates_at_zero() {
+        let mut clock = MatchClock {
+            frames_remaining: 2,
+        };
+
+        clock.tick();
+        assert_eq!(clock.frames_remaining, 1);
+        assert!(!clock.is_expired());
+
+        clock.tick();
+        assert_eq!(clock.frames_remaining, 0);
+        assert!(clock.is_expired());
+
+        clock.tick();
+        assert_eq!(clock.frames_remaining, 0, "tick must not underflow");
+    }
+
+    #[test]
+    fn time_limit_winner_is_the_capture_leader() {
+        let winner = time_limit_winner(
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+            FlagStealScore::default(),
+            FlagReturnScore::default(),
+        );
+
+        assert_eq!(winner, CtfMatchWinner::Player);
+    }
+
+    #[test]
+    fn time_limit_winner_breaks_capture_ties_on_steals_then_returns() {
+        let steal_leader = time_limit_winner(
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            FlagStealScore {
+                player: 0,
+                opponents: 3,
+            },
+            FlagReturnScore::default(),
+        );
+        assert_eq!(steal_leader, CtfMatchWinner::Opponents);
+
+        let return_leader = time_limit_winner(
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            FlagStealScore {
+                player: 2,
+                opponents: 2,
+            },
+            FlagReturnScore {
+                player: 4,
+                opponents: 1,
+            },
+        );
+        assert_eq!(return_leader, CtfMatchWinner::Player);
+    }
+
+    #[test]
+    fn time_limit_winner_is_a_draw_when_every_tally_is_level() {
+        let winner = time_limit_winner(
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            FlagStealScore {
+                player: 2,
+                opponents: 2,
+            },
+            FlagReturnScore {
+                player: 3,
+                opponents: 3,
+            },
+        );
+
+        assert_eq!(winner, CtfMatchWinner::Draw);
+    }
+
+    fn app_with_clock(frames_remaining: u32) -> App {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagStealScore>();
+        app.init_resource::<FlagReturnScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.insert_resource(MatchClock { frames_remaining });
+        app.add_system(expire_match_on_time_limit);
+        app
+    }
+
+    #[test]
+    fn expiring_clock_ends_match_for_the_capture_leader() {
+        let mut app = app_with_clock(1);
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 0,
+        });
+
+        app.update();
+
+        assert!(app.world.resource::<MatchClock>().is_expired());
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player)
+        );
+    }
+
+    #[test]
+    fn expiring_clock_with_level_scores_ends_in_a_draw() {
+        let mut app = app_with_clock(1);
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Draw)
+        );
+    }
+
+    #[test]
+    fn running_clock_keeps_the_match_open() {
+        let mut app = app_with_clock(5);
+
+        app.update();
+
+        assert_eq!(app.world.resource::<MatchClock>().frames_remaining, 4);
+        assert_eq!(app.world.resource::<CtfMatchResult>().winner, None);
+    }
+
+    #[test]
+    fn expired_clock_never_overrides_a_decided_winner() {
+        let mut app = app_with_clock(1);
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.insert_resource(CaptureScore {
+            player: 0,
+            opponents: 3,
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player),
+            "a clinched win must not be rewritten by the timer"
+        );
+        assert_eq!(
+            app.world.resource::<MatchClock>().frames_remaining,
+            1,
+            "a finished match must not keep burning clock"
         );
     }
 
