@@ -1,3 +1,4 @@
+use crate::gameplay::combat::VehicleIntegrity;
 use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
@@ -29,6 +30,7 @@ pub fn virtual_player_drive_system(
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
+    integrity: Option<Res<VehicleIntegrity>>,
     match_result: Option<Res<CtfMatchResult>>,
 ) {
     if match_result
@@ -103,7 +105,14 @@ pub fn virtual_player_drive_system(
         let nitro_multiplier = nitro_boosts
             .as_ref()
             .map_or(1.0, |boosts| nitro_multiplier_for_team(boosts, ai.team));
-        let movement_distance = intent.throttle * ai.movement_speed * nitro_multiplier * TIME_STEP;
+        let integrity_multiplier = integrity
+            .as_ref()
+            .map_or(1.0, |integrity| integrity.multiplier_for_team(ai.team));
+        let movement_distance = intent.throttle
+            * ai.movement_speed
+            * nitro_multiplier
+            * integrity_multiplier
+            * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
         // Keep opponents inside the arena, just like the player.
@@ -2368,6 +2377,50 @@ mod tests {
         assert!(
             (opponent_boosted_y - normal_y).abs() < 1e-4,
             "normal={normal_y}, opponent_boosted={opponent_boosted_y}"
+        );
+    }
+
+    fn one_frame_ai_y_with_integrity(team: AiTeam, integrity: VehicleIntegrity) -> f32 {
+        let mut app = app_with_system();
+        app.insert_resource(integrity);
+        let ai = spawn_ai_on_team(&mut app, team, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        app.world.get::<Transform>(ai).unwrap().translation.y
+    }
+
+    #[test]
+    fn battered_integrity_reduces_opponent_distance() {
+        let healthy_y = one_frame_ai_y(AiTeam::Red, None);
+        let wrecked_y = one_frame_ai_y_with_integrity(
+            AiTeam::Red,
+            VehicleIntegrity {
+                player: 100.0,
+                opponent: 0.0,
+            },
+        );
+
+        assert!(
+            wrecked_y > 0.0 && wrecked_y < healthy_y,
+            "healthy={healthy_y}, wrecked={wrecked_y}"
+        );
+    }
+
+    #[test]
+    fn opponent_wear_does_not_slow_blue_virtual_players() {
+        let healthy_y = one_frame_ai_y(AiTeam::Blue, None);
+        let opponent_wrecked_y = one_frame_ai_y_with_integrity(
+            AiTeam::Blue,
+            VehicleIntegrity {
+                player: 100.0,
+                opponent: 0.0,
+            },
+        );
+
+        assert!(
+            (opponent_wrecked_y - healthy_y).abs() < 1e-4,
+            "healthy={healthy_y}, opponent_wrecked={opponent_wrecked_y}"
         );
     }
 }

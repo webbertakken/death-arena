@@ -1,3 +1,4 @@
+use crate::gameplay::combat::VehicleIntegrity;
 use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::NitroBoosts;
@@ -12,6 +13,7 @@ type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
+    integrity: Option<Res<VehicleIntegrity>>,
     match_result: Option<Res<CtfMatchResult>>,
     mut query: Query<(&Player, &mut Transform)>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
@@ -42,10 +44,13 @@ pub fn car_movement_system(
     let nitro_multiplier = nitro_boosts
         .as_ref()
         .map_or(1.0, |boosts| boosts.player_multiplier());
-    let forward_max_speed =
-        player.forward_max_speed_base * player.engine_max_speed_multiplier * nitro_multiplier;
-    let backward_max_speed =
-        player.backward_max_speed_base * player.engine_max_speed_multiplier * nitro_multiplier;
+    let integrity_multiplier = integrity
+        .as_ref()
+        .map_or(1.0, |integrity| integrity.player_multiplier());
+    let speed_multiplier =
+        player.engine_max_speed_multiplier * nitro_multiplier * integrity_multiplier;
+    let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
+    let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
     // Turning
     let forward_turning_speed = forward_max_speed * player.wheels_turning_multiplier;

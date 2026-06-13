@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::gameplay::combat::VehicleIntegrity;
     use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::NitroBoosts;
@@ -153,6 +154,48 @@ mod tests {
         assert!(
             boosted_y > normal_y,
             "normal={normal_y}, boosted={boosted_y}"
+        );
+    }
+
+    #[test]
+    fn battered_integrity_reduces_forward_distance() {
+        let mut healthy_app = setup_test_app();
+        let healthy_player = spawn_player(&mut healthy_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut healthy_app, healthy_player);
+        healthy_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        healthy_app.update();
+        let healthy_y = healthy_app
+            .world
+            .get::<Transform>(healthy_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut wrecked_app = setup_test_app();
+        wrecked_app.insert_resource(VehicleIntegrity {
+            player: 0.0,
+            opponent: 100.0,
+        });
+        let wrecked_player = spawn_player(&mut wrecked_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut wrecked_app, wrecked_player);
+        wrecked_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        wrecked_app.update();
+        let wrecked_y = wrecked_app
+            .world
+            .get::<Transform>(wrecked_player)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            wrecked_y > 0.0 && wrecked_y < healthy_y,
+            "healthy={healthy_y}, wrecked={wrecked_y}"
         );
     }
 

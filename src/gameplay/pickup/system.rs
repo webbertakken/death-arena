@@ -1,3 +1,4 @@
+use crate::gameplay::combat::VehicleIntegrity;
 use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::pickup::{
     NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
@@ -14,6 +15,7 @@ pub struct PickupCollectionParams<'w, 's> {
     match_result: Option<Res<'w, CtfMatchResult>>,
     respawns: ResMut<'w, PickupRespawns>,
     nitro_boosts: ResMut<'w, NitroBoosts>,
+    integrity: Option<ResMut<'w, VehicleIntegrity>>,
     score: ResMut<'w, Score>,
     opponent_score: ResMut<'w, OpponentScore>,
     player_query: Query<'w, 's, &'static Transform, With<Player>>,
@@ -54,6 +56,7 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
                 &mut params.score,
                 &mut params.opponent_score,
                 &mut params.nitro_boosts,
+                params.integrity.as_deref_mut(),
             );
             params.respawns.queue(kind, position);
             commands.entity(entity).despawn_recursive();
@@ -149,6 +152,7 @@ fn collect_for_team(
     score: &mut Score,
     opponent_score: &mut OpponentScore,
     nitro_boosts: &mut NitroBoosts,
+    integrity: Option<&mut VehicleIntegrity>,
 ) {
     match team {
         AiTeam::Blue => {
@@ -162,6 +166,12 @@ fn collect_for_team(
             if kind == PickupKind::Nitro {
                 nitro_boosts.trigger_opponent();
             }
+        }
+    }
+
+    if kind == PickupKind::Repair {
+        if let Some(integrity) = integrity {
+            integrity.repair(team);
         }
     }
 }
@@ -412,6 +422,60 @@ mod tests {
             crate::gameplay::pickup::NITRO_BOOST_FRAMES
         );
         assert_eq!(boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn repair_pickup_restores_player_integrity() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        app.insert_resource(VehicleIntegrity {
+            player: 50.0,
+            opponent: 50.0,
+        });
+        spawn_pickup(&mut app, PickupKind::Repair, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert!(
+            (integrity.player - (50.0 + crate::gameplay::combat::REPAIR_INTEGRITY)).abs() < 1e-4,
+            "player integrity not repaired: {}",
+            integrity.player
+        );
+        assert!(
+            (integrity.opponent - 50.0).abs() < 1e-4,
+            "opponent integrity should be untouched: {}",
+            integrity.opponent
+        );
+    }
+
+    #[test]
+    fn repair_pickup_restores_opponent_integrity() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.insert_resource(VehicleIntegrity {
+            player: 50.0,
+            opponent: 50.0,
+        });
+        app.add_system(pickup_collection_system);
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Repair, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert!(
+            (integrity.opponent - (50.0 + crate::gameplay::combat::REPAIR_INTEGRITY)).abs() < 1e-4,
+            "opponent integrity not repaired: {}",
+            integrity.opponent
+        );
+        assert!(
+            (integrity.player - 50.0).abs() < 1e-4,
+            "player integrity should be untouched: {}",
+            integrity.player
+        );
     }
 
     #[test]
