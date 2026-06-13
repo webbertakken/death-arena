@@ -254,20 +254,7 @@ fn closest_enemy_threat_within(
             a_dist
                 .partial_cmp(b_dist)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .x
-                        .partial_cmp(&b_threat.position.x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    a_threat
-                        .position
-                        .y
-                        .partial_cmp(&b_threat.position.y)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .then_with(|| compare_positions(a_threat.position, b_threat.position))
         })
         .map(|(threat, _)| threat)
 }
@@ -488,20 +475,19 @@ fn compare_pickups_by_priority_distance_and_position(
                 .partial_cmp(b_dist)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .then_with(|| {
-            a_pickup
-                .position
-                .x
-                .partial_cmp(&b_pickup.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a_pickup
-                .position
-                .y
-                .partial_cmp(&b_pickup.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .then_with(|| compare_positions(a_pickup.position, b_pickup.position))
+}
+
+/// Deterministic tie-breaker that orders two world positions by `x`, then `y`.
+///
+/// Shared by every "nearest" lookup in the virtual-player brain so they all
+/// settle ties the same way, keeping target selection stable frame to frame.
+/// `NaN` coordinates compare as equal so a degenerate position never panics.
+#[must_use]
+pub fn compare_positions(a: Vec2, b: Vec2) -> std::cmp::Ordering {
+    a.x.partial_cmp(&b.x)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
 }
 
 /// Decide how a virtual player should drive to reach `target`.
@@ -606,6 +592,41 @@ mod tests {
         assert!(
             actual.distance(expected) <= EPSILON,
             "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn compare_positions_orders_by_x_then_y() {
+        use std::cmp::Ordering;
+
+        assert_eq!(
+            compare_positions(Vec2::new(0.0, 9.0), Vec2::new(1.0, -9.0)),
+            Ordering::Less,
+            "smaller x sorts first regardless of y"
+        );
+        assert_eq!(
+            compare_positions(Vec2::new(2.0, -50.0), Vec2::new(1.0, 50.0)),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_positions(Vec2::new(3.0, -1.0), Vec2::new(3.0, 4.0)),
+            Ordering::Less,
+            "equal x falls back to y"
+        );
+        assert_eq!(
+            compare_positions(Vec2::new(3.0, 4.0), Vec2::new(3.0, 4.0)),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn compare_positions_treats_nan_coordinates_as_equal() {
+        use std::cmp::Ordering;
+
+        assert_eq!(
+            compare_positions(Vec2::new(f32::NAN, 0.0), Vec2::new(1.0, 0.0)),
+            Ordering::Equal,
+            "a NaN coordinate must never panic the comparator"
         );
     }
 

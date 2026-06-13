@@ -3,8 +3,8 @@ use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
-    choose_capture_the_flag_target, choose_driving_target, compute_steering, next_waypoint, AiTeam,
-    DrivingChoices, DrivingTarget, FlagTarget, PickupTarget, ThreatTarget,
+    choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
+    next_waypoint, AiTeam, DrivingChoices, DrivingTarget, FlagTarget, PickupTarget, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -262,18 +262,7 @@ fn closest_eligible_pickup_claimant(
                 .distance_squared(pickup.position)
                 .partial_cmp(&b_position.distance_squared(pickup.position))
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a_position
-                        .x
-                        .partial_cmp(&b_position.x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    a_position
-                        .y
-                        .partial_cmp(&b_position.y)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .then_with(|| compare_positions(*a_position, *b_position))
         })
         .filter(|(_, team, position)| {
             !virtual_player_yields_player_pickup_claim(*team, player_position, pickup, *position)
@@ -285,18 +274,7 @@ fn closest_eligible_pickup_claimant(
 fn compare_pickup_claim_priority(a: &PickupTarget, b: &PickupTarget) -> std::cmp::Ordering {
     b.priority
         .cmp(&a.priority)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .then_with(|| compare_positions(a.position, b.position))
 }
 
 fn player_has_better_pickup_claim(
@@ -486,18 +464,7 @@ fn compare_candidates_by_distance_to(
         .distance_squared(target)
         .partial_cmp(&b.position.distance_squared(target))
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .then_with(|| compare_positions(a.position, b.position))
 }
 
 fn is_best_candidate_for_target(
@@ -540,18 +507,7 @@ fn compare_fallback_home_defenders(
         .distance_squared(a.home_base)
         .partial_cmp(&b.position.distance_squared(b.home_base))
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .then_with(|| compare_positions(a.position, b.position))
 }
 
 fn is_best_fallback_midfield_interceptor(
@@ -625,18 +581,7 @@ fn compare_ctf_target_distance(
         .distance_squared(a.target.position())
         .partial_cmp(&b.position.distance_squared(b.target.position()))
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.position
-                .x
-                .partial_cmp(&b.position.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            a.position
-                .y
-                .partial_cmp(&b.position.y)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .then_with(|| compare_positions(a.position, b.position))
 }
 
 fn carries_enemy_flag(entity: Entity, team: AiTeam, flags: &[FlagTarget]) -> bool {
