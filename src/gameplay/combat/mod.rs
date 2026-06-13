@@ -60,6 +60,23 @@ pub const WRECK_STREAK_BONUS_CAP: u32 = 3;
 /// a victory lap, and pairs with the flag-carrier slowdown so a battered
 /// carrier crawls back into reach of its pursuers.
 pub const FLAG_CARRIER_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
+/// Heading alignment a car needs with an opponent to count as charging it.
+///
+/// Measured as the dot product between the car's facing direction and the
+/// direction to the opponent, so `1.0` is a dead-on charge and `0.0` a
+/// side-swipe. At `0.5` the opponent must sit within a 60-degree cone ahead of
+/// the car, the spread of a committed ram rather than an incidental scrape.
+pub const AGGRESSOR_RAM_ALIGNMENT: f32 = 0.5;
+/// Extra durability the target of a car charging head-first into it loses each
+/// frame the two are trading paint.
+///
+/// The heart of the Death Rally ram: pointing your car at an opponent and
+/// driving through them wears the target down faster than merely grinding
+/// alongside. It stacks on top of the base [`ram_damage`] scrape and rewards
+/// aim over accident, so a driver who lines up a hit comes out ahead. Priced
+/// below the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted charge still
+/// bites hardest, yet above the base scrape so committing to a ram always pays.
+pub const AGGRESSOR_RAM_DAMAGE_PER_FRAME: f32 = 0.35;
 
 /// Per-team vehicle durability, mirroring [`crate::gameplay::pickup::NitroBoosts`].
 ///
@@ -254,6 +271,9 @@ fn integrity_speed_multiplier(integrity: f32) -> f32 {
 pub struct RamCar {
     pub team: AiTeam,
     pub position: Vec2,
+    /// The car's facing direction, used by [`aggressor_ram_damage`] to tell a
+    /// committed head-first charge from an incidental side-scrape.
+    pub forward: Vec2,
     /// Whether this car is currently hauling the enemy flag, making it a
     /// fragile target for [`carrier_ram_damage`].
     pub carrying_flag: bool,
@@ -403,6 +423,50 @@ pub fn carrier_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage cars charging head-first into an enemy deal.
+///
+/// A car is "charging" when an opposing car sits within [`RAM_RADIUS`] and
+/// inside the forward cone set by [`AGGRESSOR_RAM_ALIGNMENT`]. For every such
+/// car the *enemy* team bleeds [`AGGRESSOR_RAM_DAMAGE_PER_FRAME`] on top of the
+/// base [`ram_damage`] scrape, so lining up a ram beats stumbling into one. A
+/// head-on collision charges both cars, wearing both teams down at once.
+#[must_use]
+pub fn aggressor_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, car) in cars.iter().enumerate() {
+        let Some(heading) = car.forward.try_normalize() else {
+            continue;
+        };
+
+        let is_charging = cars.iter().enumerate().any(|(other_index, other)| {
+            if other_index == index || other.team == car.team {
+                return false;
+            }
+            let offset = other.position - car.position;
+            if offset.length_squared() > radius_sq {
+                return false;
+            }
+            offset
+                .try_normalize()
+                .is_some_and(|direction| heading.dot(direction) >= AGGRESSOR_RAM_ALIGNMENT)
+        });
+        if is_charging {
+            // The enemy the charging car is aiming at eats the extra hit.
+            match car.team {
+                AiTeam::Blue => damage.opponent += AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.player += AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Wears down both teams whenever their cars are trading paint, and pays a
 /// wreck bounty to whichever team grinds an enemy down to zero this frame.
 #[allow(clippy::too_many_arguments)]
@@ -432,6 +496,7 @@ pub fn ram_damage_system(
         cars.push(RamCar {
             team: AiTeam::Blue,
             position: transform.translation.xy(),
+            forward: (transform.rotation * Vec3::Y).xy(),
             carrying_flag: is_carrying(entity),
         });
     }
@@ -441,6 +506,7 @@ pub fn ram_damage_system(
             .map(|(entity, virtual_player, transform)| RamCar {
                 team: virtual_player.team,
                 position: transform.translation.xy(),
+                forward: (transform.rotation * Vec3::Y).xy(),
                 carrying_flag: is_carrying(entity),
             }),
     );
@@ -451,7 +517,8 @@ pub fn ram_damage_system(
         .unwrap_or_default();
     let damage = ram_damage(&cars)
         .combined(nitro_ram_damage(&cars, boost))
-        .combined(carrier_ram_damage(&cars));
+        .combined(carrier_ram_damage(&cars))
+        .combined(aggressor_ram_damage(&cars));
 
     let before = *integrity;
     integrity.apply_damage(damage);
@@ -530,6 +597,9 @@ mod tests {
         RamCar {
             team: AiTeam::Blue,
             position,
+            // Facing +Y, perpendicular to the +X contact axis these helpers
+            // place cars on, so the base ram tests never trip the aggressor cone.
+            forward: Vec2::Y,
             carrying_flag: false,
         }
     }
@@ -538,7 +608,24 @@ mod tests {
         RamCar {
             team: AiTeam::Red,
             position,
+            forward: Vec2::Y,
             carrying_flag: false,
+        }
+    }
+
+    /// A blue car at `position` charging head-first towards `target`.
+    fn blue_facing(position: Vec2, target: Vec2) -> RamCar {
+        RamCar {
+            forward: (target - position).normalize_or_zero(),
+            ..blue(position)
+        }
+    }
+
+    /// A red car at `position` charging head-first towards `target`.
+    fn red_facing(position: Vec2, target: Vec2) -> RamCar {
+        RamCar {
+            forward: (target - position).normalize_or_zero(),
+            ..red(position)
         }
     }
 
@@ -953,6 +1040,155 @@ mod tests {
         let damage = carrier_ram_damage(&cars);
         assert_near(damage.player, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
         assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_scrape_inflicts_no_aggressor_bonus() {
+        // Both cars face +Y while touching along the X axis: neither is charging
+        // the other, so only the base scrape (handled elsewhere) applies.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_charging_blue_car_wears_the_opponent_it_aims_at() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, enemy), red(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_charging_red_car_wears_the_player_it_aims_at() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [red_facing(Vec2::ZERO, enemy), blue(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_collision_charges_both_teams() {
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_charge_at_a_distant_enemy_inflicts_no_aggressor_bonus() {
+        let enemy = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, enemy), red(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn charging_a_teammate_inflicts_no_aggressor_bonus() {
+        let mate = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, mate), blue(mate)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn facing_just_inside_the_cone_charges_but_just_outside_does_not() {
+        // Place the enemy on the X axis and aim the car at the cone's edge by
+        // rotating its heading until the dot product brackets the threshold.
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let inside_angle = AGGRESSOR_RAM_ALIGNMENT.acos() - 0.01;
+        let outside_angle = AGGRESSOR_RAM_ALIGNMENT.acos() + 0.01;
+
+        let inside = [
+            RamCar {
+                forward: Vec2::new(inside_angle.cos(), inside_angle.sin()),
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        assert_near(
+            aggressor_ram_damage(&inside).opponent,
+            AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+        );
+
+        let outside = [
+            RamCar {
+                forward: Vec2::new(outside_angle.cos(), outside_angle.sin()),
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        assert_near(aggressor_ram_damage(&outside).opponent, 0.0);
+    }
+
+    #[test]
+    fn aggressor_bonus_scales_per_charging_car_in_contact() {
+        // Two reds both charge a lone blue from either side: the player team
+        // eats one aggressor hit per charging car this frame.
+        let blue_pos = Vec2::ZERO;
+        let cars = [
+            blue(blue_pos),
+            red_facing(Vec2::new(50.0, 0.0), blue_pos),
+            red_facing(Vec2::new(-50.0, 0.0), blue_pos),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 2.0 * AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_aggressor_bonus() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn system_adds_aggressor_ram_bonus_when_a_car_charges() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        // The player charges head-first (+X) into the red car ahead of it.
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(Vec3::ZERO)
+                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+        ));
+        // The red car faces +Y by default, so it only takes the charge, it does
+        // not deal one back.
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; the charging player also wears the
+        // red team for the aggressor bonus on top.
+        assert_near(integrity.player, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+        assert_near(
+            integrity.opponent,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+        );
     }
 
     #[test]
