@@ -18,6 +18,12 @@ pub const FLAG_RETURN_CASH_BOUNTY: u32 = 75;
 /// Caps stalemates so a match always ends even if neither team reaches
 /// [`CAPTURES_TO_WIN`]. At the game's 60 FPS convention this is three minutes.
 pub const MATCH_TIME_LIMIT_FRAMES: u32 = 10_800;
+/// Fixed update frames a sudden-death overtime runs before it resolves.
+///
+/// Entered when regulation expires on a perfectly level scoreline so a tied
+/// match gets a dramatic decider instead of a tame draw, while still
+/// guaranteeing the round terminates. At 60 FPS this is one minute.
+pub const SUDDEN_DEATH_TIME_LIMIT_FRAMES: u32 = 3_600;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -120,16 +126,28 @@ pub struct CtfMatchResult {
     pub winner: Option<CtfMatchWinner>,
 }
 
+/// Which stage of the round the clock is timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchPhase {
+    /// The main timed round.
+    #[default]
+    Regulation,
+    /// Overtime decider entered after a level regulation scoreline.
+    SuddenDeath,
+}
+
 /// Counts down the current CTF round so a stalemated match always ends.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchClock {
     pub frames_remaining: u32,
+    pub phase: MatchPhase,
 }
 
 impl Default for MatchClock {
     fn default() -> Self {
         Self {
             frames_remaining: MATCH_TIME_LIMIT_FRAMES,
+            phase: MatchPhase::Regulation,
         }
     }
 }
@@ -143,6 +161,17 @@ impl MatchClock {
     /// Whether the round time limit has been reached.
     pub const fn is_expired(self) -> bool {
         self.frames_remaining == 0
+    }
+
+    /// Whether the clock is timing a sudden-death overtime.
+    pub const fn is_sudden_death(self) -> bool {
+        matches!(self.phase, MatchPhase::SuddenDeath)
+    }
+
+    /// Refills the overtime budget and switches the clock to sudden death.
+    pub const fn enter_sudden_death(&mut self) {
+        self.frames_remaining = SUDDEN_DEATH_TIME_LIMIT_FRAMES;
+        self.phase = MatchPhase::SuddenDeath;
     }
 }
 
@@ -404,6 +433,7 @@ fn collector_is_carrying_flag(
 
 pub fn capture_the_flag_system(
     resources: CtfMatchResources,
+    clock: Res<MatchClock>,
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
@@ -459,6 +489,7 @@ pub fn capture_the_flag_system(
         &mut returns,
         &mut result,
     );
+    award_golden_goal(clock.is_sudden_death(), previous_score, *score, &mut result);
     award_capture_bounties(
         previous_score,
         *score,
@@ -493,7 +524,9 @@ pub fn capture_the_flag_system(
 /// Ends the match when the round clock runs out, resolving the leader on score.
 ///
 /// Runs after [`capture_the_flag_system`] so a capture landed on the final frame
-/// still counts before the time limit decides the result.
+/// still counts before the time limit decides the result. A level regulation
+/// scoreline opens a sudden-death overtime instead of a draw; only an equally
+/// level overtime falls back to [`CtfMatchWinner::Draw`].
 fn expire_match_on_time_limit(
     mut clock: ResMut<MatchClock>,
     mut result: ResMut<CtfMatchResult>,
@@ -506,10 +539,45 @@ fn expire_match_on_time_limit(
     }
 
     clock.tick();
-    if clock.is_expired() {
-        let winner = time_limit_winner(*captures, *steals, *returns);
-        info!("CTF match time limit reached; resolved as {winner:?}");
-        result.winner = Some(winner);
+    if !clock.is_expired() {
+        return;
+    }
+
+    let leader = time_limit_winner(*captures, *steals, *returns);
+    match clock.phase {
+        MatchPhase::Regulation if matches!(leader, CtfMatchWinner::Draw) => {
+            clock.enter_sudden_death();
+            info!("CTF regulation level; entering sudden death");
+        }
+        MatchPhase::Regulation => {
+            info!("CTF match time limit reached; resolved as {leader:?}");
+            result.winner = Some(leader);
+        }
+        MatchPhase::SuddenDeath => {
+            info!("CTF sudden death expired; resolved as {leader:?}");
+            result.winner = Some(leader);
+        }
+    }
+}
+
+/// Ends a sudden-death overtime the instant either team lands a capture.
+///
+/// In regulation a lone capture is harmless; in overtime it is the golden goal
+/// that decides the match, so the team whose capture tally just rose wins
+/// outright regardless of [`CAPTURES_TO_WIN`].
+const fn award_golden_goal(
+    sudden_death: bool,
+    previous: CaptureScore,
+    current: CaptureScore,
+    result: &mut CtfMatchResult,
+) {
+    if !sudden_death || result.winner.is_some() {
+        return;
+    }
+    if current.player > previous.player {
+        result.winner = Some(CtfMatchWinner::Player);
+    } else if current.opponents > previous.opponents {
+        result.winner = Some(CtfMatchWinner::Opponents);
     }
 }
 
@@ -665,6 +733,7 @@ mod tests {
         });
         app.insert_resource(MatchClock {
             frames_remaining: 7,
+            phase: MatchPhase::SuddenDeath,
         });
         app.add_system(reset_ctf_match_resources);
 
@@ -701,6 +770,7 @@ mod tests {
     fn match_clock_ticks_down_and_saturates_at_zero() {
         let mut clock = MatchClock {
             frames_remaining: 2,
+            phase: MatchPhase::Regulation,
         };
 
         clock.tick();
@@ -713,6 +783,28 @@ mod tests {
 
         clock.tick();
         assert_eq!(clock.frames_remaining, 0, "tick must not underflow");
+    }
+
+    #[test]
+    fn match_clock_starts_in_regulation() {
+        let clock = MatchClock::default();
+
+        assert_eq!(clock.phase, MatchPhase::Regulation);
+        assert!(!clock.is_sudden_death());
+    }
+
+    #[test]
+    fn entering_sudden_death_refills_the_overtime_budget() {
+        let mut clock = MatchClock {
+            frames_remaining: 0,
+            phase: MatchPhase::Regulation,
+        };
+
+        clock.enter_sudden_death();
+
+        assert!(clock.is_sudden_death());
+        assert_eq!(clock.frames_remaining, SUDDEN_DEATH_TIME_LIMIT_FRAMES);
+        assert!(!clock.is_expired());
     }
 
     #[test]
@@ -782,12 +874,19 @@ mod tests {
     }
 
     fn app_with_clock(frames_remaining: u32) -> App {
+        app_with_phased_clock(frames_remaining, MatchPhase::Regulation)
+    }
+
+    fn app_with_phased_clock(frames_remaining: u32, phase: MatchPhase) -> App {
         let mut app = App::new();
         app.init_resource::<CaptureScore>();
         app.init_resource::<FlagStealScore>();
         app.init_resource::<FlagReturnScore>();
         app.init_resource::<CtfMatchResult>();
-        app.insert_resource(MatchClock { frames_remaining });
+        app.insert_resource(MatchClock {
+            frames_remaining,
+            phase,
+        });
         app.add_system(expire_match_on_time_limit);
         app
     }
@@ -810,14 +909,50 @@ mod tests {
     }
 
     #[test]
-    fn expiring_clock_with_level_scores_ends_in_a_draw() {
+    fn expiring_regulation_clock_with_level_scores_enters_sudden_death() {
         let mut app = app_with_clock(1);
+
+        app.update();
+
+        let clock = *app.world.resource::<MatchClock>();
+        assert!(clock.is_sudden_death(), "a level round must go to overtime");
+        assert_eq!(clock.frames_remaining, SUDDEN_DEATH_TIME_LIMIT_FRAMES);
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            None,
+            "overtime must not resolve immediately"
+        );
+    }
+
+    #[test]
+    fn sudden_death_does_not_re_enter_itself() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+
+        app.update();
+
+        let clock = *app.world.resource::<MatchClock>();
+        assert!(clock.is_expired(), "overtime must run down, not refill");
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Draw),
+            "a level overtime is the final fallback to a draw"
+        );
+    }
+
+    #[test]
+    fn expiring_sudden_death_clock_resolves_on_running_tallies() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+        app.insert_resource(FlagStealScore {
+            player: 0,
+            opponents: 1,
+        });
 
         app.update();
 
         assert_eq!(
             app.world.resource::<CtfMatchResult>().winner,
-            Some(CtfMatchWinner::Draw)
+            Some(CtfMatchWinner::Opponents),
+            "a steal earned in overtime breaks the tie"
         );
     }
 
@@ -1550,6 +1685,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
@@ -1603,6 +1739,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
         app.add_system(capture_the_flag_system);
         app.world.spawn((
             test_player(),
@@ -1654,6 +1791,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
         app.add_system(capture_the_flag_system);
         let virtual_player = app
             .world
@@ -1723,6 +1861,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
         app.add_system(capture_the_flag_system);
         let virtual_player = app
             .world
@@ -1785,6 +1924,7 @@ mod tests {
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
         app.add_system(capture_the_flag_system);
         let player = app
             .world
@@ -1815,6 +1955,181 @@ mod tests {
         assert_eq!(
             app.world.resource::<CtfMatchResult>().winner,
             Some(CtfMatchWinner::Player)
+        );
+    }
+
+    #[test]
+    fn golden_goal_ends_overtime_on_a_player_capture() {
+        let mut result = CtfMatchResult::default();
+
+        award_golden_goal(
+            true,
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+            &mut result,
+        );
+
+        assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+    }
+
+    #[test]
+    fn golden_goal_ends_overtime_on_an_opponent_capture() {
+        let mut result = CtfMatchResult::default();
+
+        award_golden_goal(
+            true,
+            CaptureScore::default(),
+            CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut result,
+        );
+
+        assert_eq!(result.winner, Some(CtfMatchWinner::Opponents));
+    }
+
+    #[test]
+    fn golden_goal_wins_below_the_regulation_capture_threshold() {
+        // A single overtime capture decides it though it is far from
+        // CAPTURES_TO_WIN, which a lone regulation capture never would be.
+        let mut result = CtfMatchResult::default();
+
+        award_golden_goal(
+            true,
+            CaptureScore::default(),
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut result,
+        );
+
+        assert_eq!(result.winner, Some(CtfMatchWinner::Player));
+    }
+
+    #[test]
+    fn golden_goal_is_inert_during_regulation() {
+        let mut result = CtfMatchResult::default();
+
+        award_golden_goal(
+            false,
+            CaptureScore::default(),
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut result,
+        );
+
+        assert_eq!(
+            result.winner, None,
+            "in regulation a lone capture only banks a point"
+        );
+    }
+
+    #[test]
+    fn golden_goal_ignores_frames_without_a_new_capture() {
+        let mut result = CtfMatchResult::default();
+
+        award_golden_goal(
+            true,
+            CaptureScore {
+                player: 2,
+                opponents: 2,
+            },
+            CaptureScore {
+                player: 2,
+                opponents: 2,
+            },
+            &mut result,
+        );
+
+        assert_eq!(result.winner, None);
+    }
+
+    #[test]
+    fn golden_goal_never_overrides_a_decided_winner() {
+        let mut result = CtfMatchResult {
+            winner: Some(CtfMatchWinner::Opponents),
+        };
+
+        award_golden_goal(
+            true,
+            CaptureScore::default(),
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut result,
+        );
+
+        assert_eq!(result.winner, Some(CtfMatchWinner::Opponents));
+    }
+
+    #[test]
+    fn system_awards_golden_goal_capture_in_sudden_death() {
+        let mut app = App::new();
+        app.insert_resource(CaptureScore {
+            player: 1,
+            opponents: 1,
+        });
+        app.init_resource::<FlagStealScore>();
+        app.init_resource::<FlagReturnScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
+        app.insert_resource(MatchClock {
+            frames_remaining: SUDDEN_DEATH_TIME_LIMIT_FRAMES,
+            phase: MatchPhase::SuddenDeath,
+        });
+        app.add_system(capture_the_flag_system);
+        let player = app
+            .world
+            .spawn((
+                test_player(),
+                Transform::from_translation(Vec3::new(10.0, 0.0, 5.0)),
+            ))
+            .id();
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::ZERO,
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(0.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: Some(player),
+            },
+            Transform::from_translation(Vec3::new(10.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CaptureScore>().player,
+            2,
+            "the overtime capture still tallies"
+        );
+        assert!(
+            app.world.resource::<CaptureScore>().player < CAPTURES_TO_WIN,
+            "the golden goal wins short of a regulation clinch"
+        );
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player),
+            "the first overtime capture wins outright"
         );
     }
 }
