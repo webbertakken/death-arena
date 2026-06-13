@@ -24,6 +24,14 @@ pub const MATCH_TIME_LIMIT_FRAMES: u32 = 10_800;
 /// match gets a dramatic decider instead of a tame draw, while still
 /// guaranteeing the round terminates. At 60 FPS this is one minute.
 pub const SUDDEN_DEATH_TIME_LIMIT_FRAMES: u32 = 3_600;
+/// Speed multiplier a car suffers while hauling the enemy flag home.
+///
+/// The classic capture-the-flag tax: the heavy flag drags on the car, so the
+/// run back to base becomes a tense gauntlet instead of a victory lap. Slow
+/// enough that defenders and rammers get a real shot at the carrier, fast
+/// enough that a clean break still rewards a daring grab. Pairs with ram
+/// damage and integrity wear, so a battered carrier crawls home.
+pub const FLAG_CARRIER_SPEED_MULTIPLIER: f32 = 0.8;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -190,6 +198,20 @@ fn time_limit_winner(
         Ordering::Greater => CtfMatchWinner::Player,
         Ordering::Less => CtfMatchWinner::Opponents,
         Ordering::Equal => CtfMatchWinner::Draw,
+    }
+}
+
+/// Speed multiplier for a car given whether it is carrying the enemy flag.
+///
+/// A car hauling a flag drives at [`FLAG_CARRIER_SPEED_MULTIPLIER`]; an
+/// empty-handed car is unaffected. Composed alongside the nitro and integrity
+/// multipliers in both the player and virtual-player movement systems.
+#[must_use]
+pub const fn flag_carrier_speed_multiplier(is_carrying_flag: bool) -> f32 {
+    if is_carrying_flag {
+        FLAG_CARRIER_SPEED_MULTIPLIER
+    } else {
+        1.0
     }
 }
 
@@ -711,6 +733,33 @@ mod tests {
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw(id)
+    }
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= f32::EPSILON,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn empty_handed_car_keeps_full_speed() {
+        assert_near(flag_carrier_speed_multiplier(false), 1.0);
+    }
+
+    #[test]
+    fn flag_carrier_is_slowed_by_the_heavy_flag() {
+        let carrying = flag_carrier_speed_multiplier(true);
+        let empty_handed = flag_carrier_speed_multiplier(false);
+        assert_near(carrying, FLAG_CARRIER_SPEED_MULTIPLIER);
+        assert!(
+            carrying < empty_handed,
+            "carrying the flag must cost speed: carrying={carrying}, empty_handed={empty_handed}"
+        );
+        assert!(
+            carrying > 0.0,
+            "a carrier must still be able to move, multiplier={carrying}"
+        );
     }
 
     #[test]

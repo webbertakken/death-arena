@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gameplay::combat::VehicleIntegrity;
-    use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
+    use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, CtfMatchWinner, FlagTeam};
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::NitroBoosts;
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -196,6 +196,60 @@ mod tests {
         assert!(
             wrecked_y > 0.0 && wrecked_y < healthy_y,
             "healthy={healthy_y}, wrecked={wrecked_y}"
+        );
+    }
+
+    #[test]
+    fn carrying_the_enemy_flag_reduces_forward_distance() {
+        use crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER;
+
+        let mut empty_handed_app = setup_test_app();
+        let empty_handed_player = spawn_player(&mut empty_handed_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut empty_handed_app, empty_handed_player);
+        empty_handed_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        empty_handed_app.update();
+        let empty_handed_y = empty_handed_app
+            .world
+            .get::<Transform>(empty_handed_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut carrier_app = setup_test_app();
+        let carrier = spawn_player(&mut carrier_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut carrier_app, carrier);
+        // The human plays the blue team, so it hauls the captured red flag home.
+        carrier_app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(0.0, 1000.0),
+                holder: Some(carrier),
+            },
+            Transform::from_translation(Vec3::ZERO),
+        ));
+        carrier_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        carrier_app.update();
+        let carrier_y = carrier_app
+            .world
+            .get::<Transform>(carrier)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            carrier_y > 0.0 && carrier_y < empty_handed_y,
+            "empty_handed={empty_handed_y}, carrier={carrier_y}"
+        );
+        assert!(
+            (carrier_y - empty_handed_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
+            "carrier should move at the flag-carrier multiplier: \
+             empty_handed={empty_handed_y}, carrier={carrier_y}"
         );
     }
 

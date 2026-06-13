@@ -1,5 +1,5 @@
 use crate::gameplay::combat::VehicleIntegrity;
-use crate::gameplay::ctf::CtfMatchResult;
+use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::NitroBoosts;
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -9,16 +9,24 @@ use bevy::prelude::*;
 type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
 type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
 
+/// Optional per-match resources the player movement system reads, bundled into
+/// one system parameter to keep the signature legible (mirrors the CTF systems).
+type PlayerMovementContext<'w> = (
+    Option<Res<'w, NitroBoosts>>,
+    Option<Res<'w, VehicleIntegrity>>,
+    Option<Res<'w, CtfMatchResult>>,
+);
+
 /// Demonstrates applying rotation and movement based on keyboard input.
 pub fn car_movement_system(
     keyboard_input: Res<Input<KeyCode>>,
-    nitro_boosts: Option<Res<NitroBoosts>>,
-    integrity: Option<Res<VehicleIntegrity>>,
-    match_result: Option<Res<CtfMatchResult>>,
-    mut query: Query<(&Player, &mut Transform)>,
+    context: PlayerMovementContext,
+    mut query: Query<(Entity, &Player, &mut Transform)>,
+    flag_query: Query<&CtfFlag>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
+    let (nitro_boosts, integrity, match_result) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -26,7 +34,7 @@ pub fn car_movement_system(
         return;
     }
 
-    let Ok((player, mut transform)) = query.get_single_mut() else {
+    let Ok((player_entity, player, mut transform)) = query.get_single_mut() else {
         return;
     };
     let Ok((front_left_wheel, mut front_left_wheel_transform)) =
@@ -47,8 +55,14 @@ pub fn car_movement_system(
     let integrity_multiplier = integrity
         .as_ref()
         .map_or(1.0, |integrity| integrity.player_multiplier());
-    let speed_multiplier =
-        player.engine_max_speed_multiplier * nitro_multiplier * integrity_multiplier;
+    let carrying_flag = flag_query
+        .iter()
+        .any(|flag| flag.holder == Some(player_entity));
+    let carry_multiplier = flag_carrier_speed_multiplier(carrying_flag);
+    let speed_multiplier = player.engine_max_speed_multiplier
+        * nitro_multiplier
+        * integrity_multiplier
+        * carry_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 

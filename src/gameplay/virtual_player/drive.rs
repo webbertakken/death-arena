@@ -1,5 +1,5 @@
 use crate::gameplay::combat::VehicleIntegrity;
-use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, FlagTeam};
+use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
 use crate::gameplay::player::Player;
@@ -111,10 +111,13 @@ pub fn virtual_player_drive_system(
         let integrity_multiplier = integrity
             .as_ref()
             .map_or(1.0, |integrity| integrity.multiplier_for_team(ai.team));
+        let carry_multiplier =
+            flag_carrier_speed_multiplier(carries_enemy_flag(entity, ai.team, &flags));
         let movement_distance = intent.throttle
             * ai.movement_speed
             * nitro_multiplier
             * integrity_multiplier
+            * carry_multiplier
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
@@ -795,6 +798,58 @@ mod tests {
             transform.translation.y > 0.0,
             "expected forward movement, y={}",
             transform.translation.y
+        );
+    }
+
+    #[test]
+    fn carrying_the_enemy_flag_slows_a_virtual_player() {
+        use crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER;
+
+        // Control: an empty-handed red patroller driving straight at a waypoint.
+        let mut free_app = app_with_system();
+        let free_ai = spawn_ai_on_team(&mut free_app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        free_app.update();
+        let free_y = free_app
+            .world
+            .get::<Transform>(free_ai)
+            .unwrap()
+            .translation
+            .y;
+
+        // Carrier: a red car hauling the blue flag runs home to its red base,
+        // which sits straight ahead so the heading (and throttle) match the
+        // control exactly. Only the flag-carry tax differs.
+        let mut carrier_app = app_with_system();
+        let carrier = spawn_ai_on_team(&mut carrier_app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut carrier_app,
+            FlagTeam::Red,
+            Vec2::new(0.0, 1000.0),
+            Vec3::new(0.0, 1000.0, 4.0),
+            None,
+        );
+        spawn_flag(
+            &mut carrier_app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, -1000.0),
+            Vec3::new(0.0, -1000.0, 4.0),
+            Some(carrier),
+        );
+        carrier_app.update();
+        let carrier_y = carrier_app
+            .world
+            .get::<Transform>(carrier)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            carrier_y > 0.0 && carrier_y < free_y,
+            "free={free_y}, carrier={carrier_y}"
+        );
+        assert!(
+            (carrier_y - free_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
+            "carrier should drive at the flag-carrier multiplier: free={free_y}, carrier={carrier_y}"
         );
     }
 
