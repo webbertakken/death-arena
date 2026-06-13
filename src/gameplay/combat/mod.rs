@@ -1,4 +1,5 @@
 use crate::gameplay::ctf::CtfMatchResult;
+use crate::gameplay::pickup::NitroBoosts;
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
@@ -19,6 +20,14 @@ pub const RAM_RADIUS: f32 = 140.0;
 pub const RAM_DAMAGE_PER_FRAME: f32 = 0.25;
 /// Speed multiplier applied to a fully wrecked (zero integrity) team.
 pub const MIN_INTEGRITY_SPEED_MULTIPLIER: f32 = 0.65;
+/// Extra durability the enemy of a nitro-boosted car loses each frame the two
+/// are trading paint.
+///
+/// A boosted car is charging, so slamming it into an opponent while nitro burns
+/// wears the enemy down twice as fast as the base scrape, the classic Death
+/// Rally "boost into them to wreck them" play. It also closes the combat loop:
+/// nitro ram -> battered enemy -> enemy breaks off for a repair.
+pub const NITRO_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
 
 /// Per-team vehicle durability, mirroring [`crate::gameplay::pickup::NitroBoosts`].
 ///
@@ -108,6 +117,42 @@ pub struct TeamDamage {
     pub opponent: f32,
 }
 
+impl TeamDamage {
+    /// Sums two frames' worth of damage, e.g. the base scrape plus a nitro ram.
+    #[must_use]
+    pub fn combined(self, other: Self) -> Self {
+        Self {
+            player: self.player + other.player,
+            opponent: self.opponent + other.opponent,
+        }
+    }
+}
+
+/// Which teams are burning nitro this frame, for offensive ram bonuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RamBoost {
+    pub player: bool,
+    pub opponent: bool,
+}
+
+impl RamBoost {
+    /// Reads the live nitro timers into the teams that are currently boosting.
+    #[must_use]
+    pub const fn from_nitro(boosts: &NitroBoosts) -> Self {
+        Self {
+            player: boosts.is_player_active(),
+            opponent: boosts.is_opponent_active(),
+        }
+    }
+
+    const fn is_team_boosting(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.player,
+            AiTeam::Red => self.opponent,
+        }
+    }
+}
+
 /// Computes the ram damage each team takes from the current car positions.
 ///
 /// A car is "ramming" when an opposing car sits within [`RAM_RADIUS`]. Every
@@ -138,9 +183,46 @@ pub fn ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage nitro-boosted cars inflict on the enemy.
+///
+/// For every boosted car in contact with an opposing car, the *enemy* team
+/// bleeds [`NITRO_RAM_DAMAGE_PER_FRAME`] on top of the base [`ram_damage`]
+/// scrape. The hit lands on whoever the boosted car is charging, so the
+/// aggressor's nitro window is what makes ramming bite.
+#[must_use]
+pub fn nitro_ram_damage(cars: &[RamCar], boost: RamBoost) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, car) in cars.iter().enumerate() {
+        if !boost.is_team_boosting(car.team) {
+            continue;
+        }
+
+        let in_contact = cars.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other.team != car.team
+                && other.position.distance_squared(car.position) <= radius_sq
+        });
+        if in_contact {
+            // The enemy of the boosted car eats the charge.
+            match car.team {
+                AiTeam::Blue => damage.opponent += NITRO_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.player += NITRO_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Wears down both teams whenever their cars are trading paint.
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
+    nitro_boosts: Option<Res<NitroBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
     player_query: Query<&Transform, With<Player>>,
     virtual_player_query: Query<(&VirtualPlayer, &Transform), Without<Player>>,
@@ -168,7 +250,12 @@ pub fn ram_damage_system(
             }),
     );
 
-    integrity.apply_damage(ram_damage(&cars));
+    let boost = nitro_boosts
+        .as_deref()
+        .map(RamBoost::from_nitro)
+        .unwrap_or_default();
+    let damage = ram_damage(&cars).combined(nitro_ram_damage(&cars, boost));
+    integrity.apply_damage(damage);
 }
 
 fn reset_vehicle_integrity(mut integrity: ResMut<VehicleIntegrity>) {
@@ -360,6 +447,145 @@ mod tests {
         let damage = ram_damage(&cars);
         assert_near(damage.player, RAM_DAMAGE_PER_FRAME);
         assert_near(damage.opponent, 2.0 * RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn combined_sums_both_teams_damage() {
+        let total = TeamDamage {
+            player: 0.25,
+            opponent: 0.5,
+        }
+        .combined(TeamDamage {
+            player: 1.0,
+            opponent: 0.25,
+        });
+        assert_near(total.player, 1.25);
+        assert_near(total.opponent, 0.75);
+    }
+
+    #[test]
+    fn no_nitro_means_no_ram_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(&cars, RamBoost::default());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn boosted_player_ram_wears_the_opponent() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, NITRO_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn boosted_opponent_ram_wears_the_player() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn boosted_car_out_of_contact_deals_no_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS + 1.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn both_teams_boosting_each_wear_the_enemy() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, NITRO_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn same_team_contact_deals_no_nitro_bonus() {
+        let cars = [blue(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn nitro_bonus_scales_per_boosted_car_in_contact() {
+        // Two boosted reds bracket a single blue: both reds are charging the
+        // lone blue, so the player team eats two ram hits this frame.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 2.0 * NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn system_adds_nitro_ram_bonus_when_a_boosted_team_collides() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        let mut boosts = NitroBoosts::default();
+        boosts.trigger_opponent();
+        app.insert_resource(boosts);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; the boosted reds also ram the
+        // player team for the nitro bonus on top.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - NITRO_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
     }
 
     #[test]

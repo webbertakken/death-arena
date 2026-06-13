@@ -70,6 +70,16 @@ impl NitroBoosts {
         }
     }
 
+    /// Whether the player team's nitro boost is currently burning.
+    pub const fn is_player_active(&self) -> bool {
+        self.player_frames > 0
+    }
+
+    /// Whether the opponent team's nitro boost is currently burning.
+    pub const fn is_opponent_active(&self) -> bool {
+        self.opponent_frames > 0
+    }
+
     pub const fn trigger_player(&mut self) {
         self.player_frames = NITRO_BOOST_FRAMES;
     }
@@ -361,6 +371,26 @@ mod tests {
         assert_multiplier_eq(boosts.opponent_multiplier(), 1.0);
         assert_eq!(boosts.player_frames, 0);
         assert_eq!(boosts.opponent_frames, 0);
+    }
+
+    #[test]
+    fn active_flags_track_whether_a_team_is_boosting() {
+        let mut boosts = NitroBoosts::default();
+        assert!(!boosts.is_player_active());
+        assert!(!boosts.is_opponent_active());
+
+        boosts.trigger_player();
+        assert!(boosts.is_player_active());
+        assert!(!boosts.is_opponent_active());
+
+        boosts.trigger_opponent();
+        assert!(boosts.is_opponent_active());
+
+        for _ in 0..NITRO_BOOST_FRAMES {
+            boosts.tick();
+        }
+        assert!(!boosts.is_player_active());
+        assert!(!boosts.is_opponent_active());
     }
 
     #[test]
