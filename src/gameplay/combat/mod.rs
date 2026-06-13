@@ -55,6 +55,15 @@ impl VehicleIntegrity {
         integrity_speed_multiplier(self.opponent)
     }
 
+    /// Durability fraction (`0.0`..=`1.0`) of whichever team is more battered.
+    ///
+    /// Virtual players use this to decide how hotly to contest repair pickups,
+    /// so a single worn-down team is enough to make a repair worth chasing.
+    #[must_use]
+    pub fn most_battered_fraction(self) -> f32 {
+        (self.player.min(self.opponent) / MAX_INTEGRITY).clamp(0.0, 1.0)
+    }
+
     /// Speed multiplier for the given team's current wear.
     #[must_use]
     pub fn multiplier_for_team(self, team: AiTeam) -> f32 {
@@ -243,6 +252,35 @@ mod tests {
         let expected =
             MIN_INTEGRITY_SPEED_MULTIPLIER + (1.0 - MIN_INTEGRITY_SPEED_MULTIPLIER) / 2.0;
         assert_near(integrity.player_multiplier(), expected);
+    }
+
+    #[test]
+    fn most_battered_fraction_tracks_the_worse_off_team() {
+        let integrity = VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: MAX_INTEGRITY / 4.0,
+        };
+        assert_near(integrity.most_battered_fraction(), 0.25);
+    }
+
+    #[test]
+    fn full_integrity_reports_a_pristine_fraction() {
+        assert_near(VehicleIntegrity::default().most_battered_fraction(), 1.0);
+    }
+
+    #[test]
+    fn most_battered_fraction_clamps_into_the_unit_range() {
+        let wrecked = VehicleIntegrity {
+            player: 0.0,
+            opponent: 0.0,
+        };
+        assert_near(wrecked.most_battered_fraction(), 0.0);
+
+        let overfilled = VehicleIntegrity {
+            player: MAX_INTEGRITY * 2.0,
+            opponent: MAX_INTEGRITY * 2.0,
+        };
+        assert_near(overfilled.most_battered_fraction(), 1.0);
     }
 
     #[test]

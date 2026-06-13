@@ -46,7 +46,10 @@ pub fn virtual_player_drive_system(
         .map(|(entity, transform)| (entity, transform.translation.xy()));
     let player_position = player.map(|(_, position)| position);
     let threats = threat_targets(&query, player_position);
-    let available_pickups = pickup_targets(&pickup_query);
+    let repair_fraction = integrity
+        .as_ref()
+        .map_or(1.0, |integrity| integrity.most_battered_fraction());
+    let available_pickups = pickup_targets(&pickup_query, repair_fraction);
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
@@ -196,12 +199,15 @@ fn threat_targets(
 
 fn pickup_targets(
     pickup_query: &Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
+    repair_fraction: f32,
 ) -> Vec<PickupTarget> {
     pickup_query
         .iter()
         .map(|(transform, pickup)| PickupTarget {
             position: transform.translation.xy(),
-            priority: pickup.kind.virtual_player_priority(),
+            priority: pickup
+                .kind
+                .virtual_player_priority_for_integrity(repair_fraction),
         })
         .collect()
 }
@@ -2421,6 +2427,62 @@ mod tests {
         assert!(
             (opponent_wrecked_y - healthy_y).abs() < 1e-4,
             "healthy={healthy_y}, opponent_wrecked={opponent_wrecked_y}"
+        );
+    }
+
+    fn attacker_x_after_frames(integrity: Option<VehicleIntegrity>, frames: u32) -> f32 {
+        let mut app = app_with_system();
+        if let Some(integrity) = integrity {
+            app.insert_resource(integrity);
+        }
+        // Red attacker facing +Y, enemy (blue) flag up the lane, own flag behind.
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(0.0, -600.0),
+            Vec3::new(0.0, -600.0, 1.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, 600.0),
+            Vec3::new(0.0, 600.0, 1.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Repair,
+            },
+            Transform::from_translation(Vec3::new(80.0, 150.0, 2.0)),
+        ));
+
+        for _ in 0..frames {
+            app.update();
+        }
+
+        app.world.get::<Transform>(ai).unwrap().translation.x
+    }
+
+    #[test]
+    fn battered_attacker_peels_off_for_a_repair_on_the_flag_lane() {
+        let healthy_x = attacker_x_after_frames(None, 15);
+        let wrecked_x = attacker_x_after_frames(
+            Some(VehicleIntegrity {
+                player: 100.0,
+                opponent: 0.0,
+            }),
+            15,
+        );
+
+        assert!(
+            healthy_x.abs() < 1.0,
+            "a pristine attacker should hold the flag lane, x={healthy_x}"
+        );
+        assert!(
+            wrecked_x > 5.0,
+            "a wrecked attacker should peel off toward the repair, healthy={healthy_x}, wrecked={wrecked_x}"
         );
     }
 }

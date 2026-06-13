@@ -995,6 +995,41 @@ mod tests {
     }
 
     #[test]
+    fn battered_attacker_detours_for_a_repair_a_healthy_one_ignores() {
+        use crate::gameplay::pickup::PickupKind;
+
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let repair = Vec2::new(0.0, 80.0);
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(0.0, 300.0));
+
+        let healthy = [PickupTarget {
+            position: repair,
+            priority: PickupKind::Repair.virtual_player_priority_for_integrity(1.0),
+        }];
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                choices(&waypoints, 0, Some(flag), &healthy, None, 0.0),
+            ),
+            Some(flag),
+            "a pristine attacker should stay on the flag run"
+        );
+
+        let battered = [PickupTarget {
+            position: repair,
+            priority: PickupKind::Repair.virtual_player_priority_for_integrity(0.0),
+        }];
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                choices(&waypoints, 0, Some(flag), &battered, None, 0.0),
+            ),
+            Some(DrivingTarget::Pickup(repair)),
+            "a wrecked attacker should break off to patch up"
+        );
+    }
+
+    #[test]
     fn attacker_ignores_pickup_behind_enemy_flag_push() {
         let waypoints = [Vec2::new(0.0, 500.0)];
         let pickups = [PickupTarget {
