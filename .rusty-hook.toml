@@ -1,5 +1,8 @@
 [hooks]
-pre-commit = "cargo check && cargo fmt -- --check && cargo clippy -- -D warnings && cargo test"
+# Mirror the CI gates (.github/workflows/ci.yml) exactly so the pre-commit hook
+# catches the same lints CI does, including those only reachable through
+# --all-targets (test/bench code) and --all-features (the `dev` feature).
+pre-commit = "cargo check --all-targets --all-features && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features"
 
 [logging]
 verbose = true

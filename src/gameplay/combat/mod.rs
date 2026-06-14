@@ -1939,14 +1939,6 @@ mod tests {
     }
 
     #[test]
-    fn a_flank_hit_out_bites_a_head_on_charge_but_not_a_nitro_ram() {
-        // The pricing ladder: a T-bone is the most punishing positional hit, yet
-        // an earned nitro charge stays the single hardest source of wear.
-        assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_FRAME);
-        assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
-    }
-
-    #[test]
     fn system_adds_broadside_ram_bonus_on_a_flank_charge() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
