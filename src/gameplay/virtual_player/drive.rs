@@ -1,4 +1,4 @@
-use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
+use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
 use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
@@ -15,6 +15,21 @@ use bevy::prelude::*;
 /// Distance (world units) at which a virtual player considers a waypoint
 /// reached and advances to the next one.
 const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
+/// Tighter arrive radius for a target a car means to *ram*: chasing the human
+/// player or hunting a reeling enemy down.
+///
+/// The wide [`WAYPOINT_ARRIVE_RADIUS`] sits outside true ram range
+/// ([`RAM_RADIUS`]), so a car that idles the instant it reaches it coasts to a
+/// halt short of contact and the chase stutters. Kept well inside ram range
+/// instead, so a hunter drives all the way through to a hard hit and shoves its
+/// victim, the aggressive Death Rally run-down rather than a polite stop.
+const PURSUIT_ARRIVE_RADIUS: f32 = 30.0;
+/// A ram run-down must commit deeper than a waypoint stop, enforced at compile
+/// time.
+const _: () = assert!(PURSUIT_ARRIVE_RADIUS < WAYPOINT_ARRIVE_RADIUS);
+/// A ram run-down must close well inside true ram range, enforced at compile
+/// time, so the car is genuinely trading paint before it ever idles.
+const _: () = assert!(PURSUIT_ARRIVE_RADIUS < RAM_RADIUS);
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
@@ -100,7 +115,12 @@ pub fn virtual_player_drive_system(
             .then(|| teammate_spacing_target(entity, ai.team, position, &teammate_positions))
             .flatten();
         let target_position = spacing_target.unwrap_or_else(|| target.position());
-        let intent = compute_steering(position, forward, target_position, WAYPOINT_ARRIVE_RADIUS);
+        let intent = compute_steering(
+            position,
+            forward,
+            target_position,
+            arrive_radius_for_target(target),
+        );
 
         if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
             if matches!(target, DrivingTarget::PatrolWaypoint(_)) {
@@ -852,6 +872,20 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
     }
 }
 
+/// Arrive radius a car uses to reach `target`.
+///
+/// Positional and patrol targets keep the wide [`WAYPOINT_ARRIVE_RADIUS`] so a
+/// car settles on them cleanly (and a waypoint advances). Targets that *are* an
+/// enemy car to ram, chasing the human player or finishing a reeling enemy off,
+/// take the tight [`PURSUIT_ARRIVE_RADIUS`] instead, so the car drives through
+/// to hard contact rather than idling just outside ram range.
+const fn arrive_radius_for_target(target: DrivingTarget) -> f32 {
+    match target {
+        DrivingTarget::Player(_) | DrivingTarget::FinishWreck(_) => PURSUIT_ARRIVE_RADIUS,
+        _ => WAYPOINT_ARRIVE_RADIUS,
+    }
+}
+
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
     matches!(
         target,
@@ -1205,6 +1239,78 @@ mod tests {
         assert!(
             y > 1.0,
             "a team that is no healthier than its enemy keeps playing the objective: {y}"
+        );
+    }
+
+    fn assert_arrive_radius_eq(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= f32::EPSILON,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn ram_targets_arrive_tighter_than_positional_ones() {
+        // Ramming an enemy car means driving through it, so chase targets close
+        // far tighter than the waypoint/positional boundary. The tighter < wider
+        // invariant itself is enforced at compile time on PURSUIT_ARRIVE_RADIUS.
+        assert_arrive_radius_eq(
+            arrive_radius_for_target(DrivingTarget::FinishWreck(Vec2::ZERO)),
+            PURSUIT_ARRIVE_RADIUS,
+        );
+        assert_arrive_radius_eq(
+            arrive_radius_for_target(DrivingTarget::Player(Vec2::ZERO)),
+            PURSUIT_ARRIVE_RADIUS,
+        );
+        assert_arrive_radius_eq(
+            arrive_radius_for_target(DrivingTarget::PatrolWaypoint(Vec2::ZERO)),
+            WAYPOINT_ARRIVE_RADIUS,
+        );
+        assert_arrive_radius_eq(
+            arrive_radius_for_target(DrivingTarget::EnemyFlag(Vec2::ZERO)),
+            WAYPOINT_ARRIVE_RADIUS,
+        );
+    }
+
+    #[test]
+    fn a_hunter_drives_through_to_ram_a_reeling_enemy_at_close_range() {
+        // A red hunter sits at the origin facing +Y with a patrol waypoint
+        // straight ahead; a reeling blue car sits just 60 units behind it, well
+        // inside the wide waypoint arrive radius yet outside true ram range. The
+        // hunter must keep driving back into the prey to land the wreck rather
+        // than coasting to an idle at the arrive boundary, short of contact.
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        let hunter = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        // A distant second red car keeps the team above the lone-car guard and
+        // sits far from the prey so the origin car is the chosen hunter.
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 1500.0, 4.0),
+        );
+        // The reeling blue prey, a close 60 units behind the red hunter: nearer
+        // than WAYPOINT_ARRIVE_RADIUS but further than PURSUIT_ARRIVE_RADIUS.
+        app.world.spawn((
+            VirtualPlayer {
+                team: AiTeam::Blue,
+                movement_speed: 500.0,
+                rotation_speed: f32::to_radians(360.0),
+                waypoints: vec![Vec2::new(0.0, -2000.0)],
+                current_waypoint: 0,
+            },
+            Transform::from_translation(Vec3::new(0.0, -60.0, 4.0)),
+        ));
+
+        app.update();
+
+        let y = app.world.get::<Transform>(hunter).unwrap().translation.y;
+        assert!(
+            y < -0.001,
+            "a hunter must drive through to ram a close reeling enemy, not idle short of it: {y}"
         );
     }
 
