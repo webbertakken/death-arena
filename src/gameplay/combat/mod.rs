@@ -1,4 +1,4 @@
-use crate::gameplay::ctf::{CtfFlag, CtfMatchResult};
+use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -132,6 +132,29 @@ const _: () = assert!(SHIELD_DAMAGE_MULTIPLIER < 1.0);
 /// A shield must not heal (negative damage) or fully negate it, enforced at
 /// compile time, so a shielded team can still be worn down with enough pressure.
 const _: () = assert!(SHIELD_DAMAGE_MULTIPLIER > 0.0);
+/// World-space radius around a team's own home base within which its cars
+/// slowly patch up: the home-turf pit zone.
+///
+/// Matched to [`crate::gameplay::ctf::BASE_CAPTURE_RADIUS`] so the recovery zone
+/// is exactly the base footprint a team already fights over, rather than a new
+/// area to learn.
+pub const BASE_REPAIR_RADIUS: f32 = crate::gameplay::ctf::BASE_CAPTURE_RADIUS;
+/// Durability a team regains each frame while one of its cars sits in its own
+/// base zone.
+///
+/// The classic pit-stop recovery and the wreck loop's missing reliable patch-up:
+/// a battered team can break off and crawl home to undo ram wear instead of
+/// hunting a contested repair pickup. Pitched below the lightest ram
+/// ([`RAM_DAMAGE_PER_FRAME`]) so a car still trading paint always nets damage,
+/// the heal only bites once a team genuinely disengages to home. Slow enough
+/// that a wreck still stings: recovering full durability costs a long stint off
+/// the objective, a real tempo price paid in the open while not contesting.
+pub const BASE_REPAIR_PER_FRAME: f32 = 0.15;
+/// The pit heal must never out-pace even the lightest ram, enforced at compile
+/// time, so parking in your base while under fire still loses integrity.
+const _: () = assert!(BASE_REPAIR_PER_FRAME < RAM_DAMAGE_PER_FRAME);
+/// The pit heal must actually restore durability, enforced at compile time.
+const _: () = assert!(BASE_REPAIR_PER_FRAME > 0.0);
 
 /// Per-team vehicle durability, mirroring [`crate::gameplay::pickup::NitroBoosts`].
 ///
@@ -203,6 +226,14 @@ impl VehicleIntegrity {
     pub fn apply_damage(&mut self, damage: TeamDamage) {
         self.player = (self.player - damage.player).max(0.0);
         self.opponent = (self.opponent - damage.opponent).max(0.0);
+    }
+
+    /// Patches each team up by its home-base pit recovery, capped at
+    /// [`MAX_INTEGRITY`]. The recovery mirror of [`Self::apply_damage`]: where ram
+    /// wear is subtracted, a team parked on its home turf adds durability back.
+    pub fn apply_base_repair(&mut self, repair: BaseRepair) {
+        self.player = (self.player + repair.player).min(MAX_INTEGRITY);
+        self.opponent = (self.opponent + repair.opponent).min(MAX_INTEGRITY);
     }
 
     /// Teams this frame's wear drove from operational (`> 0`) to a full wreck
@@ -756,6 +787,52 @@ pub fn aggressor_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Durability each team regains from home-base pit recovery in a single frame.
+///
+/// The recovery mirror of [`TeamDamage`]: where ram wear is subtracted from a
+/// team's pool, this is added back for a team that has retreated to its own base.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BaseRepair {
+    pub player: f32,
+    pub opponent: f32,
+}
+
+/// Computes the home-base pit recovery each team earns from the current car
+/// positions.
+///
+/// A team with at least one car within [`BASE_REPAIR_RADIUS`] of its own home
+/// base regains [`BASE_REPAIR_PER_FRAME`] durability; a team with no car home
+/// regains nothing. Presence is binary, one car home patches the whole team pool
+/// (matching the per-team integrity model), so massing cars at base grants no
+/// extra heal. A car loitering in the *enemy* base earns its own team nothing,
+/// so the recovery only ever rewards retreating to home turf.
+#[must_use]
+pub fn base_repair(cars: &[(AiTeam, Vec2)], blue_home: Vec2, red_home: Vec2) -> BaseRepair {
+    let radius_sq = BASE_REPAIR_RADIUS * BASE_REPAIR_RADIUS;
+    let home_for = |team: AiTeam| match team {
+        AiTeam::Blue => blue_home,
+        AiTeam::Red => red_home,
+    };
+    let team_at_home = |team: AiTeam| {
+        cars.iter().any(|&(car_team, position)| {
+            car_team == team && position.distance_squared(home_for(team)) <= radius_sq
+        })
+    };
+
+    BaseRepair {
+        player: if team_at_home(AiTeam::Blue) {
+            BASE_REPAIR_PER_FRAME
+        } else {
+            0.0
+        },
+        opponent: if team_at_home(AiTeam::Red) {
+            BASE_REPAIR_PER_FRAME
+        } else {
+            0.0
+        },
+    }
+}
+
 /// Drops every flag held by a team that was freshly wrecked this frame.
 ///
 /// A spun-out wreck cannot keep its grip on a stolen flag, so the holder of any
@@ -915,6 +992,55 @@ pub fn ram_damage_system(
     }
 }
 
+/// Patches up any team that has retreated to its own base this frame.
+///
+/// The pit-stop recovery: a battered team can break off and crawl home to undo
+/// ram wear, a reliable alternative to a contested repair pickup. Each team's
+/// home base is read from its flag; a resolved match is skipped so a decided
+/// round stays frozen, and a frame missing either flag heals no one.
+pub fn base_repair_system(
+    match_result: Option<Res<CtfMatchResult>>,
+    mut integrity: ResMut<VehicleIntegrity>,
+    player_query: Query<&Transform, With<Player>>,
+    virtual_player_query: Query<(&VirtualPlayer, &Transform), Without<Player>>,
+    flag_query: Query<&CtfFlag>,
+) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
+    let Some((blue_home, red_home)) = team_home_bases(&flag_query) else {
+        return;
+    };
+
+    let mut cars: Vec<(AiTeam, Vec2)> = Vec::new();
+    if let Ok(transform) = player_query.get_single() {
+        cars.push((AiTeam::Blue, transform.translation.xy()));
+    }
+    for (virtual_player, transform) in &virtual_player_query {
+        cars.push((virtual_player.team, transform.translation.xy()));
+    }
+
+    integrity.apply_base_repair(base_repair(&cars, blue_home, red_home));
+}
+
+/// Reads each team's home base from its flag, returning `None` until both flags
+/// are present so a half-loaded arena never heals against a stale base.
+fn team_home_bases(flag_query: &Query<&CtfFlag>) -> Option<(Vec2, Vec2)> {
+    let mut blue_home = None;
+    let mut red_home = None;
+    for flag in flag_query {
+        match flag.team {
+            FlagTeam::Blue => blue_home = Some(flag.home),
+            FlagTeam::Red => red_home = Some(flag.home),
+        }
+    }
+    Some((blue_home?, red_home?))
+}
+
 fn reset_vehicle_integrity(mut integrity: ResMut<VehicleIntegrity>) {
     *integrity = VehicleIntegrity::default();
 }
@@ -965,7 +1091,11 @@ impl Plugin for CombatPlugin {
             )
             .add_system(wreck_stun_decay_system.before(ram_damage_system))
             .add_system(wreck_surge_decay_system.before(ram_damage_system))
-            .add_system(ram_damage_system);
+            .add_system(ram_damage_system)
+            // Pit recovery runs after the frame's wear is settled, so a battered
+            // car that has just disengaged to home patches up against its
+            // post-damage integrity rather than racing the scrape.
+            .add_system(base_repair_system.after(ram_damage_system));
     }
 }
 
@@ -1755,6 +1885,213 @@ mod tests {
             Some(carrier),
             "an operational carrier must keep its grip on the flag"
         );
+    }
+
+    const BLUE_HOME: Vec2 = Vec2::new(-500.0, 0.0);
+    const RED_HOME: Vec2 = Vec2::new(500.0, 0.0);
+
+    #[test]
+    fn base_repair_heals_a_team_parked_in_its_own_base() {
+        let cars = [(AiTeam::Blue, BLUE_HOME)];
+        let repair = base_repair(&cars, BLUE_HOME, RED_HOME);
+        assert_near(repair.player, BASE_REPAIR_PER_FRAME);
+        assert_near(repair.opponent, 0.0);
+    }
+
+    #[test]
+    fn base_repair_ignores_a_car_just_outside_its_base_radius() {
+        let cars = [(
+            AiTeam::Blue,
+            BLUE_HOME + Vec2::new(BASE_REPAIR_RADIUS + 1.0, 0.0),
+        )];
+        let repair = base_repair(&cars, BLUE_HOME, RED_HOME);
+        assert_near(repair.player, 0.0);
+        assert_near(repair.opponent, 0.0);
+    }
+
+    #[test]
+    fn base_repair_ignores_a_car_loitering_in_the_enemy_base() {
+        // A blue car sitting on the red base earns neither team a heal.
+        let cars = [(AiTeam::Blue, RED_HOME)];
+        let repair = base_repair(&cars, BLUE_HOME, RED_HOME);
+        assert_near(repair.player, 0.0);
+        assert_near(repair.opponent, 0.0);
+    }
+
+    #[test]
+    fn base_repair_heals_each_team_independently() {
+        let cars = [(AiTeam::Blue, BLUE_HOME), (AiTeam::Red, RED_HOME)];
+        let repair = base_repair(&cars, BLUE_HOME, RED_HOME);
+        assert_near(repair.player, BASE_REPAIR_PER_FRAME);
+        assert_near(repair.opponent, BASE_REPAIR_PER_FRAME);
+    }
+
+    #[test]
+    fn base_repair_pools_per_team_so_a_second_home_car_adds_nothing() {
+        let cars = [
+            (AiTeam::Blue, BLUE_HOME),
+            (AiTeam::Blue, BLUE_HOME + Vec2::new(10.0, 0.0)),
+        ];
+        let repair = base_repair(&cars, BLUE_HOME, RED_HOME);
+        assert_near(repair.player, BASE_REPAIR_PER_FRAME);
+    }
+
+    #[test]
+    fn apply_base_repair_caps_each_team_at_full_integrity() {
+        let mut integrity = VehicleIntegrity::default();
+        integrity.apply_base_repair(BaseRepair {
+            player: BASE_REPAIR_PER_FRAME,
+            opponent: BASE_REPAIR_PER_FRAME,
+        });
+        assert_near(integrity.player, MAX_INTEGRITY);
+        assert_near(integrity.opponent, MAX_INTEGRITY);
+    }
+
+    #[test]
+    fn apply_base_repair_lifts_only_the_recovering_team() {
+        let mut integrity = VehicleIntegrity {
+            player: 10.0,
+            opponent: 50.0,
+        };
+        integrity.apply_base_repair(BaseRepair {
+            player: BASE_REPAIR_PER_FRAME,
+            opponent: 0.0,
+        });
+        assert_near(integrity.player, 10.0 + BASE_REPAIR_PER_FRAME);
+        assert_near(integrity.opponent, 50.0);
+    }
+
+    fn spawn_base_flags(app: &mut App) {
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: BLUE_HOME,
+                holder: None,
+            },
+            Transform::from_translation(BLUE_HOME.extend(0.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: RED_HOME,
+                holder: None,
+            },
+            Transform::from_translation(RED_HOME.extend(0.0)),
+        ));
+    }
+
+    #[test]
+    fn system_patches_up_a_battered_team_parked_in_its_base() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        app.add_system(base_repair_system);
+        spawn_base_flags(&mut app);
+        // The battered human sits on the blue base.
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(BLUE_HOME.extend(0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert_near(integrity.player, 20.0 + BASE_REPAIR_PER_FRAME);
+        // No red car is home, so the opponent earns no pit recovery.
+        assert_near(integrity.opponent, MAX_INTEGRITY);
+    }
+
+    #[test]
+    fn system_leaves_a_team_fighting_in_the_field_unhealed() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        app.add_system(base_repair_system);
+        spawn_base_flags(&mut app);
+        // The player is out in midfield, far from its base.
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().player, 20.0);
+    }
+
+    #[test]
+    fn system_heals_a_red_virtual_player_on_its_own_base() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 20.0,
+        });
+        app.add_system(base_repair_system);
+        spawn_base_flags(&mut app);
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(RED_HOME.extend(0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert_near(integrity.opponent, 20.0 + BASE_REPAIR_PER_FRAME);
+        assert_near(integrity.player, MAX_INTEGRITY);
+    }
+
+    #[test]
+    fn system_does_not_patch_up_after_the_match_resolves() {
+        use crate::gameplay::ctf::CtfMatchWinner;
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.add_system(base_repair_system);
+        spawn_base_flags(&mut app);
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(BLUE_HOME.extend(0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().player, 20.0);
+    }
+
+    #[test]
+    fn system_heals_no_one_when_a_base_flag_is_missing() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        app.add_system(base_repair_system);
+        // Only the blue flag exists: without both bases the system bails out.
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: BLUE_HOME,
+                holder: None,
+            },
+            Transform::from_translation(BLUE_HOME.extend(0.0)),
+        ));
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(BLUE_HOME.extend(0.0)),
+        ));
+
+        app.update();
+
+        assert_near(app.world.resource::<VehicleIntegrity>().player, 20.0);
     }
 
     #[test]
