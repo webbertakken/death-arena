@@ -297,6 +297,26 @@ fn time_limit_winner(
     }
 }
 
+/// Breaks an overtime level on every objective by the team that did more damage.
+///
+/// When sudden death expires with captures, steals, and returns all dead even,
+/// the round goes to whichever side wrecked more enemy cars: the classic Death
+/// Rally decider where raw aggression settles a standstill the objective could
+/// not. Only a match also level on wrecks stays a true [`CtfMatchWinner::Draw`].
+#[must_use]
+const fn break_level_overtime_by_wrecks(
+    player_wrecks: u32,
+    opponent_wrecks: u32,
+) -> CtfMatchWinner {
+    if player_wrecks > opponent_wrecks {
+        CtfMatchWinner::Player
+    } else if player_wrecks < opponent_wrecks {
+        CtfMatchWinner::Opponents
+    } else {
+        CtfMatchWinner::Draw
+    }
+}
+
 /// Speed multiplier for a car given whether it is carrying the enemy flag.
 ///
 /// A car hauling a flag drives at [`FLAG_CARRIER_SPEED_MULTIPLIER`]; an
@@ -671,14 +691,18 @@ pub fn capture_the_flag_system(
 ///
 /// Runs after [`capture_the_flag_system`] so a capture landed on the final frame
 /// still counts before the time limit decides the result. A level regulation
-/// scoreline opens a sudden-death overtime instead of a draw; only an equally
-/// level overtime falls back to [`CtfMatchWinner::Draw`].
+/// scoreline opens a sudden-death overtime instead of a draw; an overtime still
+/// level on objectives is then settled by
+/// [`break_level_overtime_by_wrecks`], so only a match dead even on damage too
+/// falls back to [`CtfMatchWinner::Draw`].
 fn expire_match_on_time_limit(
     mut clock: ResMut<MatchClock>,
     mut result: ResMut<CtfMatchResult>,
     captures: Res<CaptureScore>,
     steals: Res<FlagStealScore>,
     returns: Res<FlagReturnScore>,
+    score: Res<Score>,
+    opponent_score: Res<OpponentScore>,
 ) {
     if result.winner.is_some() {
         return;
@@ -700,8 +724,14 @@ fn expire_match_on_time_limit(
             result.winner = Some(leader);
         }
         MatchPhase::SuddenDeath => {
-            info!("CTF sudden death expired; resolved as {leader:?}");
-            result.winner = Some(leader);
+            let resolved = match leader {
+                CtfMatchWinner::Draw => {
+                    break_level_overtime_by_wrecks(score.wrecks, opponent_score.wrecks)
+                }
+                decided => decided,
+            };
+            info!("CTF sudden death expired; resolved as {resolved:?}");
+            result.winner = Some(resolved);
         }
     }
 }
@@ -867,6 +897,8 @@ impl Plugin for CtfPlugin {
             .init_resource::<FlagStealScore>()
             .init_resource::<FlagReturnScore>()
             .init_resource::<NitroBoosts>()
+            .init_resource::<Score>()
+            .init_resource::<OpponentScore>()
             .init_resource::<CtfMatchResult>()
             .init_resource::<MatchPursePaid>()
             .init_resource::<MatchClock>()
@@ -1270,6 +1302,34 @@ mod tests {
         assert_eq!(winner, CtfMatchWinner::Draw);
     }
 
+    #[test]
+    fn level_overtime_goes_to_the_team_that_wrecked_more() {
+        assert_eq!(
+            break_level_overtime_by_wrecks(4, 2),
+            CtfMatchWinner::Player,
+            "the team that did more damage takes the deadlock"
+        );
+        assert_eq!(
+            break_level_overtime_by_wrecks(1, 5),
+            CtfMatchWinner::Opponents,
+            "the more aggressive opponents take the deadlock"
+        );
+    }
+
+    #[test]
+    fn level_overtime_stays_a_draw_when_wrecks_are_also_level() {
+        assert_eq!(
+            break_level_overtime_by_wrecks(3, 3),
+            CtfMatchWinner::Draw,
+            "a match level on objectives and damage is a true draw"
+        );
+        assert_eq!(
+            break_level_overtime_by_wrecks(0, 0),
+            CtfMatchWinner::Draw,
+            "a passive deadlock with no wrecks stays a draw"
+        );
+    }
+
     fn app_with_clock(frames_remaining: u32) -> App {
         app_with_phased_clock(frames_remaining, MatchPhase::Regulation)
     }
@@ -1279,6 +1339,8 @@ mod tests {
         app.init_resource::<CaptureScore>();
         app.init_resource::<FlagStealScore>();
         app.init_resource::<FlagReturnScore>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
         app.init_resource::<CtfMatchResult>();
         app.insert_resource(MatchClock {
             frames_remaining,
@@ -1332,7 +1394,53 @@ mod tests {
         assert_eq!(
             app.world.resource::<CtfMatchResult>().winner,
             Some(CtfMatchWinner::Draw),
-            "a level overtime is the final fallback to a draw"
+            "an overtime level on objectives and damage is the final fallback to a draw"
+        );
+    }
+
+    #[test]
+    fn level_sudden_death_is_decided_by_the_heavier_wrecker() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+        app.insert_resource(Score {
+            wrecks: 3,
+            ..Score::default()
+        });
+        app.insert_resource(OpponentScore {
+            wrecks: 1,
+            ..OpponentScore::default()
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player),
+            "a deadlocked overtime goes to the team that wrecked more enemies"
+        );
+    }
+
+    #[test]
+    fn objective_lead_still_wins_overtime_regardless_of_wrecks() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+        app.insert_resource(CaptureScore {
+            player: 1,
+            opponents: 0,
+        });
+        app.insert_resource(Score {
+            wrecks: 0,
+            ..Score::default()
+        });
+        app.insert_resource(OpponentScore {
+            wrecks: 9,
+            ..OpponentScore::default()
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player),
+            "the wreck tie-break must never override a genuine objective lead"
         );
     }
 
