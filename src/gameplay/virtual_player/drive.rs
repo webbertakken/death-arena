@@ -7,9 +7,9 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    finish_off_car, lead_defence_car, next_waypoint, pit_retreat_car, AiTeam, DrivingChoices,
-    DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget,
-    PitRetreatCandidate, ThreatTarget,
+    finish_off_car, lead_defence_car, next_waypoint, pincer_partner, pit_retreat_car, AiTeam,
+    DrivingChoices, DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate,
+    PickupTarget, PitRetreatCandidate, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -775,6 +775,8 @@ fn pit_retreat_targets(
 /// team's own stolen flag, which sits at its carrier.
 /// A team trailing on `captures` presses at even health (the comeback gamble),
 /// mirroring the [`crate::gameplay::combat::most_wanted_wreck_bonus`] economy.
+/// A team with cars to spare also piles a second hunter onto the same victim (see
+/// [`pincer_partner`]), springing the combat pincer so the kill lands faster.
 /// Without an integrity resource (no combat loaded) no team ever presses.
 fn finish_off_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
@@ -822,6 +824,12 @@ fn finish_off_targets(
             enemy_flag_carrier,
         ) {
             targets.push((entity, DrivingTarget::FinishWreck(prey)));
+            // Pile a second spare car onto the same victim when the team can field
+            // one without abandoning the objective, springing the combat pincer so
+            // the kill lands faster (see [`pincer_partner`]).
+            if let Some(partner) = pincer_partner(entity, prey, &candidates) {
+                targets.push((partner, DrivingTarget::FinishWreck(prey)));
+            }
         }
     }
     targets
@@ -2026,6 +2034,65 @@ mod tests {
         assert!(
             reeling < -0.001,
             "against a reeling enemy the red car breaks off to hunt it down behind: {reeling}"
+        );
+    }
+
+    #[test]
+    fn a_team_with_cars_to_spare_pincers_a_reeling_enemy() {
+        // Three healthy red cars against a lone reeling blue prey straight behind
+        // them. The two nearest red cars (B nearest, then A at the origin) both
+        // break off to gang up on the kill, springing the combat pincer, while the
+        // third (C, farthest) stays on the objective. A lone kill press would send
+        // only B and leave A driving forward to its waypoint; A reversing to hunt
+        // is the tell that the second hunter joined.
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        // A: at the origin facing +Y, waypoint ahead. The pincer partner.
+        let car_a = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 600.0)]);
+        // B: nearest the prey, the primary hunter.
+        let car_b = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 600.0)],
+            Vec3::new(0.0, -200.0, 4.0),
+        );
+        // C: farthest from the prey, stays on the objective driving to its waypoint.
+        let car_c = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 600.0)],
+            Vec3::new(0.0, 400.0, 4.0),
+        );
+        // The reeling blue prey, straight behind the red cars.
+        app.world.spawn((
+            VirtualPlayer {
+                team: AiTeam::Blue,
+                movement_speed: 500.0,
+                rotation_speed: f32::to_radians(360.0),
+                waypoints: vec![Vec2::new(0.0, -2000.0)],
+                current_waypoint: 0,
+            },
+            Transform::from_translation(Vec3::new(0.0, -500.0, 4.0)),
+        ));
+
+        app.update();
+
+        let a_y = app.world.get::<Transform>(car_a).unwrap().translation.y;
+        let b_y = app.world.get::<Transform>(car_b).unwrap().translation.y;
+        let c_y = app.world.get::<Transform>(car_c).unwrap().translation.y;
+
+        assert!(
+            b_y < -200.0,
+            "the primary hunter breaks off to chase the prey behind it: {b_y}"
+        );
+        assert!(
+            a_y < 0.0,
+            "the spare car joins the pincer, reversing to gang up rather than driving its route: {a_y}"
+        );
+        assert!(
+            c_y > 400.0,
+            "the farthest car stays on the objective, never abandoning the field: {c_y}"
         );
     }
 

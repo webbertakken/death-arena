@@ -472,6 +472,77 @@ pub fn finish_off_car(
         .map(|(candidate, prey, _)| (candidate.entity, prey))
 }
 
+/// Cars a healthy team piles onto a single kill once it springs the pincer: the
+/// primary [`finish_off_car`] hunter plus one [`pincer_partner`].
+///
+/// Death Rally's classic "swarm the weakened car". Where [`finish_off_car`] sends
+/// one hunter at a reeling enemy, a team with cars to spare sends a second to gang
+/// up, and the combat layer pays it off: two cars trading paint with one victim at
+/// once spring the [`crate::gameplay::combat::PINCER_RAM_DAMAGE_PER_FRAME`] gang-up
+/// that grinds a surrounded car down faster than a lone ram can. The kill press
+/// lands harder and quicker, banking the wreck (and any carrier-takedown turnover)
+/// before the victim can limp to a repair.
+pub const FINISH_OFF_PINCER_HUNTERS: usize = 2;
+
+/// The two hunters must genuinely meet the gang-up threshold, enforced at compile
+/// time, so a pincer kill actually springs the bonus it is sent to land.
+const _: () = assert!(FINISH_OFF_PINCER_HUNTERS >= crate::gameplay::combat::PINCER_MIN_ATTACKERS);
+
+/// Smallest team car count that still spares one car for the objective while two
+/// hunt: the [`FINISH_OFF_PINCER_HUNTERS`] plus the lone car left on duty.
+///
+/// The pincer's "never abandon the field" guard, the same principle
+/// [`finish_off_car`] keeps for a lone hunter (it never pulls a team's last car),
+/// raised by one because the pincer pulls a second.
+pub const PINCER_MIN_TEAM_CARS: usize = FINISH_OFF_PINCER_HUNTERS + 1;
+
+/// A pincer must leave more cars behind than a lone hunt, enforced at compile time,
+/// so committing the second car never empties the objective.
+const _: () = assert!(PINCER_MIN_TEAM_CARS > FINISH_OFF_PINCER_HUNTERS);
+
+/// Picks a second car to pile onto the kill the primary [`finish_off_car`] hunter
+/// is making, springing the pincer, or `None` when no car can join without
+/// abandoning the objective.
+///
+/// Given the `primary_hunter` already committed to `prey` and the team's full car
+/// roster, this sends the next-keenest spare car, the non-carrier nearest the prey
+/// after the primary, to gang up on the same victim. Two cars hemming one foe in at
+/// once spring the [`crate::gameplay::combat::PINCER_RAM_DAMAGE_PER_FRAME`] gang-up,
+/// grinding it down faster than the lone hunter could.
+///
+/// Stateless and deterministic, mirroring [`finish_off_car`]: the eligible car
+/// nearest the prey is chosen with the shared `x`-then-`y` [`compare_positions`]
+/// tie-break, so the partner pick never wavers frame to frame.
+///
+/// Guards keep the gang-up from backfiring:
+/// - the primary hunter is never re-sent as its own partner;
+/// - a flag carrier is never pulled off its capture run, matching the lone hunt;
+/// - the team must field at least [`PINCER_MIN_TEAM_CARS`] cars, so committing two
+///   to the kill always leaves at least one on the objective, the same "never
+///   abandon the field" principle [`finish_off_car`] keeps for a single hunter.
+#[must_use]
+pub fn pincer_partner(
+    primary_hunter: Entity,
+    prey: Vec2,
+    candidates: &[FinishOffCandidate],
+) -> Option<Entity> {
+    if candidates.len() < PINCER_MIN_TEAM_CARS {
+        return None;
+    }
+
+    candidates
+        .iter()
+        .filter(|candidate| candidate.entity != primary_hunter && !candidate.carries_enemy_flag)
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(prey)
+                .partial_cmp(&b.position.distance_squared(prey))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare_positions(a.position, b.position))
+        })
+        .map(|candidate| candidate.entity)
+}
+
 /// Closest position in `positions` to `from`, with the shared deterministic
 /// `x`-then-`y` tie-break so the pick never wavers between equidistant targets.
 fn nearest_position(from: Vec2, positions: &[Vec2]) -> Option<Vec2> {
@@ -2792,6 +2863,109 @@ mod tests {
         assert_eq!(
             finish_off_car(0.8, 0.2, false, &lone, &enemies, Some(carrier)),
             None
+        );
+    }
+
+    fn finish_off_carrier_candidate(entity: u32, position: Vec2) -> FinishOffCandidate {
+        FinishOffCandidate {
+            entity: Entity::from_raw(entity),
+            position,
+            carries_enemy_flag: true,
+        }
+    }
+
+    #[test]
+    fn pincer_partner_sends_the_next_nearest_spare_car() {
+        // Car 1 is already hunting the prey; of the two spare cars the nearer one
+        // (car 2) piles in to spring the gang-up, leaving car 3 on the objective.
+        let prey = Vec2::new(500.0, 0.0);
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(400.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(300.0, 0.0)),
+            finish_off_candidate(3, Vec2::new(-300.0, 0.0)),
+        ];
+
+        assert_eq!(
+            pincer_partner(Entity::from_raw(1), prey, &candidates),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn pincer_partner_never_re_sends_the_primary_hunter() {
+        // The primary sits right on the prey, so it would be the nearest car of
+        // all, yet it is already committed: the partner must be a different car.
+        let prey = Vec2::new(500.0, 0.0);
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(500.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(490.0, 0.0)),
+            finish_off_candidate(3, Vec2::new(-300.0, 0.0)),
+        ];
+
+        assert_eq!(
+            pincer_partner(Entity::from_raw(1), prey, &candidates),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn pincer_partner_spares_the_objective_with_too_few_cars() {
+        // Only the primary plus one spare: pulling the spare would empty the
+        // objective, so no pincer springs and the lone hunter presses alone.
+        let prey = Vec2::new(500.0, 0.0);
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(400.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(300.0, 0.0)),
+        ];
+
+        assert_eq!(pincer_partner(Entity::from_raw(1), prey, &candidates), None);
+    }
+
+    #[test]
+    fn pincer_partner_never_pulls_a_flag_carrier() {
+        // The nearest spare car is hauling the enemy flag home, so it is skipped:
+        // the partner is the next eligible non-carrier instead.
+        let prey = Vec2::new(500.0, 0.0);
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(400.0, 0.0)),
+            finish_off_carrier_candidate(2, Vec2::new(450.0, 0.0)),
+            finish_off_candidate(3, Vec2::new(-300.0, 0.0)),
+        ];
+
+        assert_eq!(
+            pincer_partner(Entity::from_raw(1), prey, &candidates),
+            Some(Entity::from_raw(3))
+        );
+    }
+
+    #[test]
+    fn pincer_partner_returns_none_when_only_the_primary_can_join() {
+        // Three cars, but the other two are both carriers: no spare non-carrier is
+        // free to gang up, so the kill press stays a lone hunt.
+        let prey = Vec2::new(500.0, 0.0);
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(400.0, 0.0)),
+            finish_off_carrier_candidate(2, Vec2::new(450.0, 0.0)),
+            finish_off_carrier_candidate(3, Vec2::new(460.0, 0.0)),
+        ];
+
+        assert_eq!(pincer_partner(Entity::from_raw(1), prey, &candidates), None);
+    }
+
+    #[test]
+    fn pincer_partner_breaks_ties_deterministically() {
+        // Two spare cars equidistant from the prey settle the pick by the shared
+        // x-then-y tie-break, so the partner choice is stable frame to frame.
+        let prey = Vec2::ZERO;
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(1000.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(0.0, 50.0)),
+            finish_off_candidate(3, Vec2::new(0.0, -50.0)),
+        ];
+
+        assert_eq!(
+            pincer_partner(Entity::from_raw(1), prey, &candidates),
+            Some(Entity::from_raw(3))
         );
     }
 }
