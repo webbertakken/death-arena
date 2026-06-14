@@ -322,12 +322,17 @@ fn arena_pickups(
         .collect()
 }
 
-/// Per-team flag for the one threat that lifts a pickup above its own-wear value:
-/// is an enemy currently hauling this team's flag away?
+/// Per-team record of which flags are in flight, the two situations that lift a
+/// pickup above its own-wear value: is an enemy currently hauling this team's flag
+/// away?
 ///
 /// A live steal turns a sabotage into a carrier-chase tool (slow the thief so a
-/// defender catches it), so the pricing reads this alongside durability. Default
-/// (no steal in flight) leaves every pickup at its integrity-scaled price.
+/// defender catches it), so the pricing reads this alongside durability. It does
+/// double duty for the getaway case too: because a flag is only ever held by an
+/// enemy, the *enemy* team's flag being stolen means *this* team is the one
+/// hauling it home, so `for_team(team.enemy())` reads "we hold the enemy flag" and
+/// turns a sabotage into getaway cover. Default (no flag in flight) leaves every
+/// pickup at its integrity-scaled price.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct FlagStolen {
     blue: bool,
@@ -370,11 +375,16 @@ fn price_pickup_for_team(
     flag_stolen: FlagStolen,
 ) -> PickupTarget {
     let fraction = integrity.map_or(1.0, |integrity| integrity.fraction_for_team(team));
+    // A flag is only ever held by an enemy, so "we hold the enemy flag" is exactly
+    // "the enemy team's flag is stolen": this team has a car running it home and
+    // values a sabotage as getaway cover for that run.
     PickupTarget {
         position: pickup.position,
-        priority: pickup
-            .kind
-            .virtual_player_priority_for_context(fraction, flag_stolen.for_team(team)),
+        priority: pickup.kind.virtual_player_priority_for_context(
+            fraction,
+            flag_stolen.for_team(team),
+            flag_stolen.for_team(team.enemy()),
+        ),
     }
 }
 
@@ -3729,7 +3739,10 @@ mod tests {
     fn pricing_lifts_a_sabotage_for_the_team_whose_flag_is_stolen() {
         use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
 
-        // Red's flag is being hauled off by an enemy; Blue's sits safe at home.
+        // Red's flag is being hauled off by an enemy. A flag is only ever held by
+        // an enemy, so the same event makes Blue the carrier running it home: the
+        // robbed team (Red) prices the sabotage to chase the thief, the carrier
+        // team (Blue) to cover its own getaway, and the chase outranks the getaway.
         let flags = [
             FlagTarget {
                 team: AiTeam::Red,
@@ -3748,7 +3761,7 @@ mod tests {
         assert!(stolen.for_team(AiTeam::Red), "an enemy holds Red's flag");
         assert!(
             !stolen.for_team(AiTeam::Blue),
-            "Blue's flag is safe at home"
+            "Blue's own flag is safe at home"
         );
 
         let sabotage = ArenaPickup {
@@ -3756,16 +3769,71 @@ mod tests {
             kind: PickupKind::Sabotage,
         };
         let robbed = price_pickup_for_team(sabotage, None, AiTeam::Red, stolen).priority;
-        let safe = price_pickup_for_team(sabotage, None, AiTeam::Blue, stolen).priority;
+        let carrier = price_pickup_for_team(sabotage, None, AiTeam::Blue, stolen).priority;
 
         assert!(
             robbed >= CTF_WIDE_DETOUR_MIN_PRIORITY,
             "the robbed team must value the sabotage enough to chase the thief: {robbed}"
         );
+        assert!(
+            carrier >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "the carrier team must value the sabotage enough to cover its getaway: {carrier}"
+        );
+        assert!(
+            robbed > carrier,
+            "chasing the thief must still outrank covering our own run: robbed={robbed}, carrier={carrier}"
+        );
+    }
+
+    #[test]
+    fn pricing_lifts_a_sabotage_for_the_team_carrying_the_enemy_flag() {
+        use crate::gameplay::pickup::collect::SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY;
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+
+        // Red hauls Blue's flag home; Red's own flag sits safe at base. So Red is
+        // the carrier-team that values the sabotage as getaway cover, while Blue is
+        // the robbed team that values it to chase the thief.
+        let flags = [
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::new(0.0, 0.0),
+                holder: Some(Entity::from_raw(7)),
+            },
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            },
+        ];
+        let stolen = flag_stolen_state(&flags);
+        assert!(stolen.for_team(AiTeam::Blue), "an enemy holds Blue's flag");
+        assert!(!stolen.for_team(AiTeam::Red), "Red's flag is safe at home");
+
+        let sabotage = ArenaPickup {
+            position: Vec2::new(50.0, 0.0),
+            kind: PickupKind::Sabotage,
+        };
+        let carrier_team = price_pickup_for_team(sabotage, None, AiTeam::Red, stolen).priority;
+        let robbed_team = price_pickup_for_team(sabotage, None, AiTeam::Blue, stolen).priority;
+
         assert_eq!(
-            safe,
-            PickupKind::Sabotage.virtual_player_priority(),
-            "the team whose flag is safe keeps the sabotage at its flat value"
+            carrier_team, SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "the team running the enemy flag home prices the sabotage as getaway cover: {carrier_team}"
+        );
+        assert!(
+            carrier_team >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "getaway cover must justify pulling an escort off a committed run: {carrier_team}"
+        );
+        assert!(
+            carrier_team > PickupKind::Sabotage.virtual_player_priority(),
+            "covering our own carrier must beat the flat sabotage value: {carrier_team}"
+        );
+        assert!(
+            robbed_team > carrier_team,
+            "defending the robbed team's own steal still outranks getaway cover: \
+             robbed={robbed_team}, carrier={carrier_team}"
         );
     }
 
@@ -3832,6 +3900,77 @@ mod tests {
         assert!(
             cash_y.abs() < 1e-3,
             "a disciplined defender must leave a cash bag and hold its intercept route, y={cash_y}"
+        );
+    }
+
+    /// Drives one frame with a Red escort facing east along its escort route while
+    /// a Red carrier hauls the Blue flag home (Red's own flag safe) in closing-time
+    /// discipline, then reports the escort's `y` drift. A pickup of `kind` sits off
+    /// the route at `(300, 80)`: only a pickup worth the wide closing-time detour
+    /// pulls the escort off the line, so a positive `y` means it broke off for it.
+    /// A flat-priced sabotage stays on its narrow lane and is dropped in closing
+    /// time, so only the getaway-priced sabotage (our carrier is running) detours.
+    fn disciplined_escort_detour_y(kind: PickupKind) -> f32 {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+        use std::f32::consts::FRAC_PI_2;
+
+        let mut app = app_with_system();
+        app.insert_resource(MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        });
+
+        let escort = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(200.0, 0.0, 4.0),
+        );
+        // Face the escort east, straight along its escort route toward home, so any
+        // +y motion is a genuine detour and not steering slack off the spawn facing.
+        app.world.get_mut::<Transform>(escort).unwrap().rotation =
+            Quat::from_rotation_z(-FRAC_PI_2);
+
+        let carrier = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(400.0, 0.0, 4.0),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(500.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(400.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        app.world.spawn((
+            Pickup { kind },
+            Transform::from_translation(Vec3::new(300.0, 80.0, 2.0)),
+        ));
+
+        app.update();
+
+        app.world.get::<Transform>(escort).unwrap().translation.y
+    }
+
+    #[test]
+    fn carried_flag_pulls_a_disciplined_escort_onto_a_sabotage() {
+        let sabotage_y = disciplined_escort_detour_y(PickupKind::Sabotage);
+        let cash_y = disciplined_escort_detour_y(PickupKind::Cash);
+
+        assert!(
+            sabotage_y > 0.0,
+            "an escort must break off onto the sabotage to cover its carrier's run home, y={sabotage_y}"
+        );
+        assert!(
+            cash_y.abs() < 1e-3,
+            "a disciplined escort must leave a cash bag and hold its escort route, y={cash_y}"
         );
     }
 

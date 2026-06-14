@@ -38,6 +38,33 @@ const _: () = assert!(
     "a wrecked team's survival grabs (shield/repair) must still outrank a sabotage chase"
 );
 
+/// Tactical value a team places on a sabotage charge while one of its own cars is
+/// hauling the enemy flag home.
+///
+/// The offensive mirror of [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`]: where
+/// a stolen flag turns a sabotage into a tool to *chase the thief*, an in-flight
+/// capture turns it into the classic Death Rally *getaway cover*. A sabotage
+/// slows the whole enemy team, so dropping one while our carrier runs home slows
+/// the defenders and pursuers closing on it, smoothing the run more directly than
+/// raw escort speed (nitro only speeds an escort, never the slowed carrier).
+/// Pitched above nitro for that reason, yet below the chase value so defending
+/// against the enemy's own in-flight steal still comes first, and below a wrecked
+/// team's shield/repair panic so survival outranks covering the run.
+pub const SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY: u32 = 152;
+
+/// Defending against an enemy steal in flight must still outrank covering our own
+/// carrier, enforced at compile time, so a team caught in a double steal slows the
+/// enemy primarily to stop the concession it is about to suffer.
+const _: () = assert!(
+    SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY < SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY
+);
+
+/// Slowing the carrier's pursuers must edge out raw escort speed, enforced at
+/// compile time, so an escort reaches for the getaway sabotage before a nitro.
+const _: () = assert!(
+    SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY > PickupKind::Nitro.virtual_player_priority()
+);
+
 /// The classic Death Rally trackside collectibles a car can drive over.
 ///
 /// Each kind awards a cash bounty when picked up; richer per-kind effects
@@ -109,21 +136,30 @@ impl PickupKind {
     }
 
     /// Tactical value virtual players place on this pickup given both their team's
-    /// durability and whether an enemy is currently hauling their flag away.
+    /// durability and the two flag situations in flight.
     ///
     /// Folds the durability-driven pricing ([`Self::virtual_player_priority_for_integrity`])
-    /// together with the one threat that lifts a pickup's value above its own
-    /// wear: a live steal turns a sabotage into a carrier-chase tool, so it
-    /// jumps to [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`]. Every other case
-    /// keeps the integrity-scaled price.
+    /// together with the two flag threats that lift a sabotage above its own wear:
+    /// - `enemy_holds_our_flag`: a live steal turns a sabotage into a tool to
+    ///   chase the thief down, so it jumps to
+    ///   [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`];
+    /// - `we_hold_enemy_flag`: our own carrier running the enemy flag home turns a
+    ///   sabotage into getaway cover (slow the pursuers), so it jumps to
+    ///   [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`].
+    ///
+    /// Defending an in-flight steal takes precedence over covering our own run, so
+    /// a team caught in a double steal prices the sabotage at the chase value.
+    /// Every other case keeps the integrity-scaled price.
     #[must_use]
     pub fn virtual_player_priority_for_context(
         self,
         integrity_fraction: f32,
         enemy_holds_our_flag: bool,
+        we_hold_enemy_flag: bool,
     ) -> u32 {
         match self {
             Self::Sabotage if enemy_holds_our_flag => SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY,
+            Self::Sabotage if we_hold_enemy_flag => SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
             other => other.virtual_player_priority_for_integrity(integrity_fraction),
         }
     }
@@ -267,8 +303,8 @@ mod tests {
 
     #[test]
     fn stolen_flag_lifts_sabotage_into_a_carrier_chase() {
-        let calm = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false);
-        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true);
+        let calm = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false, false);
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true, false);
         assert_eq!(
             calm,
             PickupKind::Sabotage.virtual_player_priority(),
@@ -283,7 +319,7 @@ mod tests {
     #[test]
     fn flag_chase_sabotage_justifies_a_wide_detour() {
         use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
-        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true);
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true, false);
         assert!(
             chasing >= CTF_WIDE_DETOUR_MIN_PRIORITY,
             "a defender must break off a committed run to slow a fleeing carrier: {chasing}"
@@ -295,6 +331,51 @@ mod tests {
     }
 
     #[test]
+    fn carrying_the_enemy_flag_lifts_sabotage_into_getaway_cover() {
+        let calm = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false, false);
+        let covering = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false, true);
+        assert_eq!(
+            calm,
+            PickupKind::Sabotage.virtual_player_priority(),
+            "with no flag in flight a sabotage keeps its flat value"
+        );
+        assert_eq!(
+            covering, SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "hauling the enemy flag home must price a sabotage as getaway cover"
+        );
+        assert!(
+            covering > calm,
+            "covering our own carrier must make a sabotage more valuable: {calm} -> {covering}"
+        );
+    }
+
+    #[test]
+    fn getaway_sabotage_justifies_a_wide_detour_above_nitro() {
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+        let covering = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false, true);
+        assert!(
+            covering >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "an escort must break off a committed run to slow the carrier's pursuers: {covering}"
+        );
+        assert!(
+            covering > PickupKind::Nitro.virtual_player_priority(),
+            "slowing the pursuers should edge out raw escort speed while we carry: {covering}"
+        );
+    }
+
+    #[test]
+    fn defending_a_steal_outranks_covering_our_own_carrier() {
+        // A double steal: an enemy hauls our flag while we haul theirs. Defending
+        // against the imminent concession must take precedence over covering our run.
+        let both = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true, true);
+        assert_eq!(
+            both, SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY,
+            "in a double steal a sabotage is priced to chase the thief first"
+        );
+        assert!(both > SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY);
+    }
+
+    #[test]
     fn stolen_flag_only_lifts_sabotage_not_other_pickups() {
         for kind in [
             PickupKind::Cash,
@@ -303,18 +384,20 @@ mod tests {
             PickupKind::Shield,
         ] {
             for fraction in [1.0, 0.5, 0.0] {
-                assert_eq!(
-                    kind.virtual_player_priority_for_context(fraction, true),
-                    kind.virtual_player_priority_for_integrity(fraction),
-                    "a stolen flag only changes how a team values a sabotage, not a {kind:?}"
-                );
+                for we_carry in [false, true] {
+                    assert_eq!(
+                        kind.virtual_player_priority_for_context(fraction, true, we_carry),
+                        kind.virtual_player_priority_for_integrity(fraction),
+                        "a flag in flight only changes how a team values a sabotage, not a {kind:?}"
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn flag_chase_sabotage_yields_to_a_wrecked_teams_survival_grabs() {
-        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(0.0, true);
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(0.0, true, false);
         assert!(
             chasing < PickupKind::Shield.virtual_player_priority_for_integrity(0.0),
             "a wrecked team must still reach for its shield breather before chasing the thief"
@@ -322,6 +405,19 @@ mod tests {
         assert!(
             chasing < PickupKind::Repair.virtual_player_priority_for_integrity(0.0),
             "a wrecked team must still reach for a repair before chasing the thief"
+        );
+    }
+
+    #[test]
+    fn getaway_sabotage_yields_to_a_wrecked_teams_survival_grabs() {
+        let covering = PickupKind::Sabotage.virtual_player_priority_for_context(0.0, false, true);
+        assert!(
+            covering < PickupKind::Shield.virtual_player_priority_for_integrity(0.0),
+            "a wrecked carrier-team must still reach for its shield breather before getaway cover"
+        );
+        assert!(
+            covering < PickupKind::Repair.virtual_player_priority_for_integrity(0.0),
+            "a wrecked carrier-team must still reach for a repair before getaway cover"
         );
     }
 
