@@ -2,6 +2,7 @@ use crate::gameplay::ctf::{
     CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, CAPTURES_TO_WIN, CAPTURE_CASH_BOUNTY,
     FLAG_RETURN_CASH_BOUNTY,
 };
+use crate::gameplay::main::BOUNDS;
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -281,6 +282,36 @@ const _: () = assert!(PINCER_MAX_EXTRA_ATTACKERS >= 1);
 /// compile time, so a boosted ram remains the single hardest source of wear and
 /// the swarm bonus stays bounded.
 const _: () = assert!(PINCER_MAX_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
+/// World-space distance from an arena wall within which a car counts as pinned
+/// against it for [`wall_crush_ram_damage`].
+///
+/// A car's centre clamps to the arena half-extents, so a car shoved up against
+/// the invisible boundary sits comfortably inside this band, while open-field
+/// trading well away from the edge never trips it.
+pub const WALL_CRUSH_MARGIN: f32 = 120.0;
+/// Extra durability a car crushed against the arena wall by a charging enemy
+/// loses each frame the two are trading paint.
+///
+/// The classic Death Rally wall slam: shoving a foe up against the arena
+/// boundary leaves it nowhere to escape, so the wall plays the part of a second
+/// attacker and a lone charging car grinds the pinned victim down. Lands only
+/// when the victim is within [`WALL_CRUSH_MARGIN`] of a wall and an enemy is
+/// *charging* it (nose-on, the same [`AGGRESSOR_RAM_ALIGNMENT`] commitment the
+/// other directional hits demand) from the open side, shoving it into that wall.
+/// Bleeds into the victim's *own* team pool on top of the base [`ram_damage`]
+/// scrape, mirroring the per-victim model of [`broadside_ram_damage`]: charged
+/// once per crushed car however many enemies pile in. Priced as punishingly as a
+/// flank T-bone, since a pinned car likewise cannot trade the hit back, above
+/// the lone base scrape so a wall pin always out-bites open-field trading, yet
+/// kept under the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted ram stays
+/// the single hardest source of wear.
+pub const WALL_CRUSH_RAM_DAMAGE_PER_FRAME: f32 = 0.4;
+/// A wall pin must out-bite a lone scrape, enforced at compile time, so being
+/// crushed against the boundary always beats trading paint in the open.
+const _: () = assert!(WALL_CRUSH_RAM_DAMAGE_PER_FRAME > RAM_DAMAGE_PER_FRAME);
+/// A wall pin must stay under the earned nitro charge, enforced at compile time,
+/// so a boosted ram remains the hardest single hit a car can land.
+const _: () = assert!(WALL_CRUSH_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
 /// Fraction of incoming ram damage a shielded team still takes.
 ///
 /// The defensive counter to the all-offence ramming loop: while a team's shield
@@ -1251,6 +1282,81 @@ pub fn pincer_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Whether a charging `striker_position` is shoving a car at `victim_position`
+/// into an arena wall it is pinned against.
+///
+/// The victim must sit within [`WALL_CRUSH_MARGIN`] of a wall and the striker
+/// must be on the open side of that wall, so the approach drives the victim
+/// *into* the boundary rather than away from it. Every wall the victim is
+/// against is checked, so a car wedged into a corner is pinned by a charge
+/// toward either face.
+#[must_use]
+fn is_pinned_against_wall(
+    victim_position: Vec2,
+    striker_position: Vec2,
+    half_extents: Vec2,
+) -> bool {
+    let against_positive_x = victim_position.x >= half_extents.x - WALL_CRUSH_MARGIN;
+    let against_negative_x = victim_position.x <= -(half_extents.x - WALL_CRUSH_MARGIN);
+    let against_positive_y = victim_position.y >= half_extents.y - WALL_CRUSH_MARGIN;
+    let against_negative_y = victim_position.y <= -(half_extents.y - WALL_CRUSH_MARGIN);
+    let push = victim_position - striker_position;
+    (against_positive_x && push.x > 0.0)
+        || (against_negative_x && push.x < 0.0)
+        || (against_positive_y && push.y > 0.0)
+        || (against_negative_y && push.y < 0.0)
+}
+
+/// Computes the bonus ram damage cars crushed against an arena wall by a
+/// charging enemy take.
+///
+/// A car is "wall-crushed" when an opposing car is within [`RAM_RADIUS`], is
+/// charging it (the striker's nose inside the [`AGGRESSOR_RAM_ALIGNMENT`] cone,
+/// the same commitment the directional bonuses demand) and shoves it into a wall
+/// it is pinned against (see [`is_pinned_against_wall`]). Every crushed car
+/// bleeds [`WALL_CRUSH_RAM_DAMAGE_PER_FRAME`] into its *own* team's pool on top
+/// of the base [`ram_damage`] scrape, so cornering a foe against the boundary
+/// where it cannot escape wears it down faster than open-field trading. Charged
+/// once per crushed car however many enemies pin it, mirroring the per-victim
+/// model of [`broadside_ram_damage`].
+#[must_use]
+pub fn wall_crush_ram_damage(cars: &[RamCar], half_extents: Vec2) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, victim) in cars.iter().enumerate() {
+        let is_crushed = cars.iter().enumerate().any(|(other_index, striker)| {
+            if other_index == index || striker.team == victim.team {
+                return false;
+            }
+            let to_victim = victim.position - striker.position;
+            if to_victim.length_squared() > radius_sq {
+                return false;
+            }
+            let Some(approach) = to_victim.try_normalize() else {
+                return false;
+            };
+            // The striker is committing to the hit: its nose is on the victim.
+            let charging = striker
+                .forward
+                .try_normalize()
+                .is_some_and(|heading| heading.dot(approach) >= AGGRESSOR_RAM_ALIGNMENT);
+            charging && is_pinned_against_wall(victim.position, striker.position, half_extents)
+        });
+        if is_crushed {
+            match victim.team {
+                AiTeam::Blue => damage.player += WALL_CRUSH_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += WALL_CRUSH_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Durability each team regains from home-base pit recovery in a single frame.
 ///
 /// The recovery mirror of [`TeamDamage`]: where ram wear is subtracted from a
@@ -1410,7 +1516,8 @@ pub fn ram_damage_system(
         .combined(aggressor_ram_damage(&cars))
         .combined(broadside_ram_damage(&cars))
         .combined(rear_end_ram_damage(&cars))
-        .combined(pincer_ram_damage(&cars));
+        .combined(pincer_ram_damage(&cars))
+        .combined(wall_crush_ram_damage(&cars, BOUNDS / 2.0));
     // A team with its shield up shrugs off part of every ram it eats this frame.
     let damage = armour_mitigated_damage(raw_damage, shield);
 
@@ -4093,6 +4200,161 @@ mod tests {
         app.update();
 
         assert_eq!(*app.world.resource::<WreckSurges>(), WreckSurges::default());
+    }
+
+    /// The arena half-extents the wall-crush tests pin cars against, matching the
+    /// real arena's `BOUNDS / 2.0`.
+    fn arena_half() -> Vec2 {
+        BOUNDS / 2.0
+    }
+
+    #[test]
+    fn wall_crush_hits_a_car_pinned_against_a_wall_by_a_charging_enemy() {
+        // A red victim shoved up against the +X wall; a blue striker charges +X
+        // into it, leaving it nowhere to escape.
+        let cars = [
+            blue_facing(Vec2::new(810.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn wall_crush_spares_a_car_trading_paint_in_open_field() {
+        // The same charge at the arena centre is just a ram, not a wall pin.
+        let cars = [
+            blue_facing(Vec2::new(-90.0, 0.0), Vec2::ZERO),
+            red(Vec2::ZERO),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_needs_a_charging_enemy_not_a_mere_wall_hugger() {
+        // The red sits against the +X wall, but the blue alongside it faces +Y,
+        // not into the victim, so it is not charging and no crush lands.
+        let cars = [blue(Vec2::new(810.0, 0.0)), red(Vec2::new(900.0, 0.0))];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_ignores_a_charge_from_the_wall_side() {
+        // The blue striker is wedged between the red victim and the +X wall,
+        // charging -X: it shoves the victim away from the wall, not into it.
+        let cars = [
+            blue_facing(Vec2::new(960.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_charges_a_pinned_victim_once_regardless_of_attackers() {
+        // Two blue strikers both charge the red car pinned against the +X wall;
+        // the victim eats the crush once, mirroring the per-victim broadside model.
+        let cars = [
+            red(Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(820.0, 40.0), Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(820.0, -40.0), Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn wall_crush_wears_a_pinned_blue_victim_into_the_player_pool() {
+        // Symmetry: a blue car pinned against the -X wall by a charging red
+        // bleeds the player pool.
+        let cars = [
+            blue(Vec2::new(-900.0, 0.0)),
+            red_facing(Vec2::new(-810.0, 0.0), Vec2::new(-900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_needs_the_enemy_within_ram_range() {
+        // The blue charges the wall-pinned red, but from beyond ram range.
+        let cars = [
+            blue_facing(Vec2::new(700.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_spares_a_same_team_pin() {
+        // A blue teammate charging another blue against the wall deals no crush.
+        let cars = [
+            blue(Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(810.0, 0.0), Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_pins_a_cornered_car() {
+        // A red wedged into the +X/+Y corner, charged toward +X, is pinned.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(810.0, 500.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_adds_wall_crush_bonus_when_a_charge_pins_a_car_to_the_wall() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        // Nose to nose against the +X wall: the player (blue) charges +X into the
+        // red car, which charges -X straight back. Both eat the base scrape and
+        // the head-on aggressor charge, but only the red is pinned against the
+        // wall, so the wall-crush bonus is the sole extra wear it takes.
+        app.world.spawn((
+            player_stub(),
+            Transform::from_translation(Vec3::new(810.0, 0.0, 0.0))
+                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+        ));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(900.0, 0.0, 0.0))
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // The unpinned player eats only the base scrape and the aggressor charge.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+        );
+        // The wall-pinned red eats the wall-crush bonus on top of the same two.
+        assert_near(
+            integrity.opponent,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - WALL_CRUSH_RAM_DAMAGE_PER_FRAME,
+        );
     }
 
     fn player_stub() -> Player {
