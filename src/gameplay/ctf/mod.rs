@@ -30,6 +30,21 @@ pub const VICTORY_CASH_PURSE: u32 = 1_000;
 pub const DRAW_CASH_PURSE: u32 = 250;
 /// A win must always out-pay a draw, enforced at compile time.
 const _: () = assert!(DRAW_CASH_PURSE < VICTORY_CASH_PURSE);
+/// Cash a decisive winner banks on top of [`VICTORY_CASH_PURSE`] for a clean
+/// sheet: taking the round without conceding a single capture.
+///
+/// The Death Rally reward for an airtight round. A flat bonus paid only on a
+/// decisive win where the beaten team never captured, so it prizes watertight
+/// CTF defence on top of taking the round. Pitched well below the victory purse
+/// so the clean sheet enriches a win without ever out-paying taking the round
+/// itself, and a level draw never earns it however stingy the defence.
+pub const CLEAN_SHEET_CASH_BONUS: u32 = 500;
+/// A clean sheet must enrich a win, never out-pay taking the round itself,
+/// enforced at compile time.
+const _: () = assert!(CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
+/// A clean-sheet bonus must be a real payday, not a token, enforced at compile
+/// time.
+const _: () = assert!(CLEAN_SHEET_CASH_BONUS > 0);
 /// Fixed update frames a CTF round runs before it resolves on time.
 ///
 /// Caps stalemates so a match always ends even if neither team reaches
@@ -777,19 +792,46 @@ const fn award_golden_goal(
     }
 }
 
+/// Cash a decisive winner banks for a clean sheet given the final capture
+/// tally: [`CLEAN_SHEET_CASH_BONUS`] if the beaten team never captured, else 0.
+///
+/// A level [`CtfMatchWinner::Draw`] never earns the bonus: a drawn result is no
+/// clean-sheet win however few captures changed hands.
+#[must_use]
+const fn clean_sheet_bonus(winner: CtfMatchWinner, captures: CaptureScore) -> u32 {
+    let clean_sheet = match winner {
+        CtfMatchWinner::Player => captures.opponents == 0,
+        CtfMatchWinner::Opponents => captures.player == 0,
+        CtfMatchWinner::Draw => false,
+    };
+    if clean_sheet {
+        CLEAN_SHEET_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Banks the end-of-match purse to whichever side the result favours.
 ///
-/// A win pays the victor [`VICTORY_CASH_PURSE`]; a draw pays both teams the
-/// smaller [`DRAW_CASH_PURSE`] for fighting to a standstill. Pure cash, banked
-/// on top of every in-match bounty.
+/// A win pays the victor [`VICTORY_CASH_PURSE`], plus a
+/// [`CLEAN_SHEET_CASH_BONUS`] when the beaten team never captured (see
+/// [`clean_sheet_bonus`]); a draw pays both teams the smaller
+/// [`DRAW_CASH_PURSE`] for fighting to a standstill. Pure cash, banked on top of
+/// every in-match bounty.
 const fn award_match_purse(
     winner: CtfMatchWinner,
+    captures: CaptureScore,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
+    let clean_sheet = clean_sheet_bonus(winner, captures);
     match winner {
-        CtfMatchWinner::Player => player_economy.bank_match_purse(VICTORY_CASH_PURSE),
-        CtfMatchWinner::Opponents => opponent_economy.bank_match_purse(VICTORY_CASH_PURSE),
+        CtfMatchWinner::Player => {
+            player_economy.bank_match_purse(VICTORY_CASH_PURSE + clean_sheet);
+        }
+        CtfMatchWinner::Opponents => {
+            opponent_economy.bank_match_purse(VICTORY_CASH_PURSE + clean_sheet);
+        }
         CtfMatchWinner::Draw => {
             player_economy.bank_match_purse(DRAW_CASH_PURSE);
             opponent_economy.bank_match_purse(DRAW_CASH_PURSE);
@@ -805,6 +847,7 @@ const fn award_match_purse(
 /// result lingers for the rest of the frozen round.
 fn award_match_purse_on_resolution(
     result: Res<CtfMatchResult>,
+    captures: Res<CaptureScore>,
     mut paid: ResMut<MatchPursePaid>,
     mut player_economy: ResMut<Score>,
     mut opponent_economy: ResMut<OpponentScore>,
@@ -816,7 +859,12 @@ fn award_match_purse_on_resolution(
         return;
     };
 
-    award_match_purse(winner, &mut player_economy, &mut opponent_economy);
+    award_match_purse(
+        winner,
+        *captures,
+        &mut player_economy,
+        &mut opponent_economy,
+    );
     paid.0 = true;
     info!("Match purse banked for {winner:?}");
 }
@@ -2701,8 +2749,13 @@ mod tests {
         let mut player_economy = Score::default();
         let mut opponent_economy = OpponentScore::default();
 
+        // A conceded capture means no clean sheet, so just the bare purse.
         award_match_purse(
             CtfMatchWinner::Player,
+            CaptureScore {
+                player: 3,
+                opponents: 1,
+            },
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -2716,8 +2769,13 @@ mod tests {
         let mut player_economy = Score::default();
         let mut opponent_economy = OpponentScore::default();
 
+        // A conceded capture means no clean sheet, so just the bare purse.
         award_match_purse(
             CtfMatchWinner::Opponents,
+            CaptureScore {
+                player: 1,
+                opponents: 3,
+            },
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -2733,6 +2791,7 @@ mod tests {
 
         award_match_purse(
             CtfMatchWinner::Draw,
+            CaptureScore::default(),
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -2741,10 +2800,93 @@ mod tests {
         assert_eq!(opponent_economy.cash, DRAW_CASH_PURSE);
     }
 
+    #[test]
+    fn a_clean_sheet_win_tops_the_purse_with_the_bonus_for_the_player() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // The beaten opponents never captured: an airtight clean-sheet win.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: 3,
+                opponents: 0,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS,
+            "holding the enemy to zero captures must top the purse with the clean-sheet bonus"
+        );
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_clean_sheet_win_tops_the_purse_with_the_bonus_for_the_opponents() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // The beaten player team never captured: an airtight clean-sheet win.
+        award_match_purse(
+            CtfMatchWinner::Opponents,
+            CaptureScore {
+                player: 0,
+                opponents: 3,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            opponent_economy.cash,
+            VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS
+        );
+        assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn conceding_a_single_capture_forfeits_the_clean_sheet_bonus() {
+        assert_eq!(
+            clean_sheet_bonus(
+                CtfMatchWinner::Player,
+                CaptureScore {
+                    player: 3,
+                    opponents: 1,
+                },
+            ),
+            0,
+            "one conceded capture is enough to lose the clean sheet"
+        );
+    }
+
+    #[test]
+    fn a_zero_zero_capture_win_still_counts_as_a_clean_sheet() {
+        // A win decided on steals or returns with no capture conceded is still a
+        // watertight defensive round on the capture objective.
+        assert_eq!(
+            clean_sheet_bonus(CtfMatchWinner::Player, CaptureScore::default()),
+            CLEAN_SHEET_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_draw_never_earns_a_clean_sheet_bonus() {
+        // Even a draw with both teams held to zero captures pays no bonus: a
+        // level result is no clean-sheet win.
+        assert_eq!(
+            clean_sheet_bonus(CtfMatchWinner::Draw, CaptureScore::default()),
+            0
+        );
+    }
+
     fn purse_app() -> App {
         let mut app = App::new();
         app.init_resource::<Score>();
         app.init_resource::<OpponentScore>();
+        app.init_resource::<CaptureScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<MatchPursePaid>();
         app.add_system(award_match_purse_on_resolution);
@@ -2765,6 +2907,11 @@ mod tests {
     #[test]
     fn resolved_match_banks_the_purse_and_latches_it() {
         let mut app = purse_app();
+        // A conceded capture keeps this a bare-purse win, not a clean sheet.
+        app.insert_resource(CaptureScore {
+            player: 3,
+            opponents: 2,
+        });
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
         });
@@ -2781,6 +2928,11 @@ mod tests {
     #[test]
     fn a_resolved_match_pays_the_purse_only_once() {
         let mut app = purse_app();
+        // A conceded capture keeps this a bare-purse win, not a clean sheet.
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 3,
+        });
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Opponents),
         });
@@ -2793,6 +2945,27 @@ mod tests {
             app.world.resource::<OpponentScore>().cash,
             VICTORY_CASH_PURSE,
             "the frozen post-match frames must not keep re-banking the purse"
+        );
+    }
+
+    #[test]
+    fn a_resolved_clean_sheet_banks_the_bonus_through_the_system() {
+        let mut app = purse_app();
+        // The beaten opponents never captured: the resolution system must bank
+        // the clean-sheet bonus on top of the victory purse.
+        app.insert_resource(CaptureScore {
+            player: 3,
+            opponents: 0,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS
         );
     }
 }
