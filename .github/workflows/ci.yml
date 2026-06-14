@@ -216,3 +216,11 @@ jobs:
 
       - name: Check Rust suppressions (no crate-wide unused/dead_code allow)
         run: bash scripts/check_rust_suppressions.sh
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Check unused dependencies
+        run: bash scripts/check_unused_dependencies.sh

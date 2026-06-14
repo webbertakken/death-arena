@@ -1272,14 +1272,12 @@ dependencies = [
  "bevy_rapier2d",
  "dotenvy",
  "embed-resource",
- "image",
  "log",
  "rand",
  "ron 0.7.1",
  "rusty-hook",
  "serde",
  "serde_json",
- "winit",
 ]
 
 [[package]]

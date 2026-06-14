@@ -7,6 +7,7 @@ bash scripts/check_scheduled_audit_workflow.sh
 bash scripts/check_shell_scripts.sh
 bash scripts/check_rust_safety.sh
 bash scripts/check_rust_suppressions.sh
+bash scripts/check_unused_dependencies.sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
