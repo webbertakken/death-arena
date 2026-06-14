@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::gameplay::combat::{VehicleIntegrity, WreckStuns};
+    use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
     use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, CtfMatchWinner, FlagTeam};
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::NitroBoosts;
@@ -272,6 +272,82 @@ mod tests {
         assert!(
             (player_y - healthy_y).abs() < 1e-4,
             "the opponents' spin-out must not slow the player: healthy={healthy_y}, player={player_y}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_kill_surge_increases_forward_distance() {
+        let mut normal_app = setup_test_app();
+        let normal_player = spawn_player(&mut normal_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut normal_app, normal_player);
+        normal_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        normal_app.update();
+        let normal_y = normal_app
+            .world
+            .get::<Transform>(normal_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut surging_app = setup_test_app();
+        let mut surges = WreckSurges::default();
+        surges.trigger_player();
+        surging_app.insert_resource(surges);
+        let surging_player = spawn_player(&mut surging_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut surging_app, surging_player);
+        surging_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        surging_app.update();
+        let surging_y = surging_app
+            .world
+            .get::<Transform>(surging_player)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            surging_y > normal_y,
+            "a fresh-kill surge should speed the player up: normal={normal_y}, surging={surging_y}"
+        );
+    }
+
+    #[test]
+    fn an_opponent_surge_does_not_speed_the_player() {
+        let mut normal_app = setup_test_app();
+        let normal_player = spawn_player(&mut normal_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut normal_app, normal_player);
+        normal_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        normal_app.update();
+        let normal_y = normal_app
+            .world
+            .get::<Transform>(normal_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut app = setup_test_app();
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        app.insert_resource(surges);
+        let player = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut app, player);
+        app.world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        app.update();
+        let player_y = app.world.get::<Transform>(player).unwrap().translation.y;
+
+        assert!(
+            (player_y - normal_y).abs() < 1e-4,
+            "the opponents' surge must not speed the player: normal={normal_y}, player={player_y}"
         );
     }
 

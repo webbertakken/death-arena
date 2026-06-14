@@ -69,6 +69,29 @@ pub const WRECK_STUN_FRAMES: u32 = 90;
 /// barely crawls. Harsh enough that the spin-out reads as a real stagger, yet
 /// above a dead stop so a stunned car keeps inching and never feels frozen.
 pub const WRECK_STUN_SPEED_MULTIPLIER: f32 = 0.35;
+/// Fixed update frames a team's cars surge after wrecking an enemy.
+///
+/// The reward mirror of [`WRECK_STUN_FRAMES`]: the instant a team grinds an
+/// enemy car to a full wreck, its own cars get a short burst of speed, the
+/// adrenaline of the kill. Matched to the spin-out window so the surge and the
+/// victim's stagger overlap exactly, handing the wrecking team a clean opening
+/// to push the flag home, break away, or chain a second wreck. Fires once on the
+/// frame integrity crosses to zero, mirroring the spin-out, so a team only surges
+/// anew on its next kill. At the game's 60 FPS convention this is 1.5 seconds.
+pub const WRECK_SURGE_FRAMES: u32 = 90;
+/// Speed multiplier a team's cars enjoy while surging from a fresh wreck.
+///
+/// A moderate burst that rewards landing the kill without eclipsing nitro: kept
+/// below the 1.5x nitro boost so nitro stays the fastest a car ever goes, yet
+/// high enough that the surge reads as a real swing. Stacks on top of nitro, so a
+/// boosted wrecker briefly screams; stacks under the spin-out too, so a team
+/// caught in a double wreck still crawls.
+pub const WRECK_SURGE_SPEED_MULTIPLIER: f32 = 1.25;
+/// A surge must be a real speed-up, enforced at compile time.
+const _: () = assert!(WRECK_SURGE_SPEED_MULTIPLIER > 1.0);
+/// Nitro must stay the fastest a car can go, enforced at compile time.
+const _: () =
+    assert!(WRECK_SURGE_SPEED_MULTIPLIER < crate::gameplay::pickup::NITRO_SPEED_MULTIPLIER);
 /// Extra durability a flag-carrying car's team loses each frame it is trading
 /// paint with an enemy.
 ///
@@ -388,6 +411,83 @@ impl WreckStuns {
     }
 }
 
+/// Brief speed surge each team enjoys the instant it wrecks an enemy.
+///
+/// The reward mirror of [`WreckStuns`]: where the wrecked team spins out, the
+/// team that dealt the wreck surges. Same per-team frame-timer shape, triggered
+/// by [`ram_damage_system`] on the frame an enemy is newly wrecked, wound down
+/// each frame by [`wreck_surge_decay_system`], and read by the movement systems
+/// to give a fresh wrecker a burst of speed it can capitalise on.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WreckSurges {
+    /// Frames the player team's cars keep surging.
+    pub player_frames: u32,
+    /// Frames the opponent team's cars keep surging.
+    pub opponent_frames: u32,
+}
+
+impl WreckSurges {
+    /// Speed multiplier the player team enjoys while surging.
+    #[must_use]
+    pub const fn player_multiplier(self) -> f32 {
+        if self.player_frames > 0 {
+            WRECK_SURGE_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Speed multiplier the opponent team enjoys while surging.
+    #[must_use]
+    pub const fn opponent_multiplier(self) -> f32 {
+        if self.opponent_frames > 0 {
+            WRECK_SURGE_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Speed multiplier for the given team's current surge.
+    #[must_use]
+    pub const fn multiplier_for_team(self, team: AiTeam) -> f32 {
+        match team {
+            AiTeam::Blue => self.player_multiplier(),
+            AiTeam::Red => self.opponent_multiplier(),
+        }
+    }
+
+    /// Surges the player team for a fresh [`WRECK_SURGE_FRAMES`] window.
+    pub const fn trigger_player(&mut self) {
+        self.player_frames = WRECK_SURGE_FRAMES;
+    }
+
+    /// Surges the opponent team for a fresh [`WRECK_SURGE_FRAMES`] window.
+    pub const fn trigger_opponent(&mut self) {
+        self.opponent_frames = WRECK_SURGE_FRAMES;
+    }
+
+    /// Surges whichever team *dealt* a wreck this frame: the enemy of each
+    /// wrecked team.
+    ///
+    /// A wrecked opponent means the player team landed the kill and surges, and
+    /// vice versa. A double wreck surges both teams at once, mirroring how both
+    /// also spin out.
+    pub const fn reward_wreckers(&mut self, wrecks: WreckEvents) {
+        if wrecks.opponent {
+            self.trigger_player();
+        }
+        if wrecks.player {
+            self.trigger_opponent();
+        }
+    }
+
+    /// Winds every team's surge down by one frame.
+    pub const fn tick(&mut self) {
+        self.player_frames = self.player_frames.saturating_sub(1);
+        self.opponent_frames = self.opponent_frames.saturating_sub(1);
+    }
+}
+
 /// Maps a durability value onto the linear speed penalty it imposes.
 fn integrity_speed_multiplier(integrity: f32) -> f32 {
     let fraction = (integrity / MAX_INTEGRITY).clamp(0.0, 1.0);
@@ -604,6 +704,7 @@ pub fn ram_damage_system(
     mut integrity: ResMut<VehicleIntegrity>,
     mut wreck_streaks: Option<ResMut<WreckStreaks>>,
     mut wreck_stuns: Option<ResMut<WreckStuns>>,
+    mut wreck_surges: Option<ResMut<WreckSurges>>,
     mut score: Option<ResMut<Score>>,
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
@@ -662,6 +763,12 @@ pub fn ram_damage_system(
     // the wrecking team gets a real opening to capitalise.
     if let Some(stuns) = wreck_stuns.as_deref_mut() {
         stuns.apply_wrecks(wrecks);
+    }
+
+    // The team that dealt the wreck surges: a short burst of speed, the mirror
+    // of the victim's spin-out, so the kill opens a clean window to exploit.
+    if let Some(surges) = wreck_surges.as_deref_mut() {
+        surges.reward_wreckers(wrecks);
     }
 
     // A spun-out wreck cannot keep its grip on a stolen flag: drop every flag a
@@ -737,12 +844,24 @@ fn reset_wreck_stuns(mut stuns: ResMut<WreckStuns>) {
     *stuns = WreckStuns::default();
 }
 
+fn reset_wreck_surges(mut surges: ResMut<WreckSurges>) {
+    *surges = WreckSurges::default();
+}
+
 /// Winds every team's wreck spin-out down by one frame.
 ///
 /// Runs before [`ram_damage_system`] each frame so a spin-out triggered this
 /// frame keeps its full [`WRECK_STUN_FRAMES`] window before the next tick.
 fn wreck_stun_decay_system(mut stuns: ResMut<WreckStuns>) {
     stuns.tick();
+}
+
+/// Winds every team's wreck surge down by one frame.
+///
+/// Runs before [`ram_damage_system`] each frame so a surge triggered this frame
+/// keeps its full [`WRECK_SURGE_FRAMES`] window before the next tick.
+fn wreck_surge_decay_system(mut surges: ResMut<WreckSurges>) {
+    surges.tick();
 }
 
 #[derive(Default)]
@@ -753,13 +872,16 @@ impl Plugin for CombatPlugin {
         app.init_resource::<VehicleIntegrity>()
             .init_resource::<WreckStreaks>()
             .init_resource::<WreckStuns>()
+            .init_resource::<WreckSurges>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
                     .with_system(reset_vehicle_integrity)
                     .with_system(reset_wreck_streaks)
-                    .with_system(reset_wreck_stuns),
+                    .with_system(reset_wreck_stuns)
+                    .with_system(reset_wreck_surges),
             )
             .add_system(wreck_stun_decay_system.before(ram_damage_system))
+            .add_system(wreck_surge_decay_system.before(ram_damage_system))
             .add_system(ram_damage_system);
     }
 }
@@ -2051,6 +2173,165 @@ mod tests {
         app.update();
 
         assert_eq!(*app.world.resource::<WreckStuns>(), WreckStuns::default());
+    }
+
+    #[test]
+    fn wreck_surges_default_to_inactive_for_both_teams() {
+        let surges = WreckSurges::default();
+        assert_eq!(surges.player_frames, 0);
+        assert_eq!(surges.opponent_frames, 0);
+        assert_near(surges.player_multiplier(), 1.0);
+        assert_near(surges.opponent_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn a_surge_speeds_only_the_team_that_landed_the_kill() {
+        let mut surges = WreckSurges::default();
+        surges.trigger_player();
+        assert_eq!(surges.player_frames, WRECK_SURGE_FRAMES);
+        assert_near(surges.player_multiplier(), WRECK_SURGE_SPEED_MULTIPLIER);
+        // The wrecked team gets no surge; only the wrecker speeds up.
+        assert_eq!(surges.opponent_frames, 0);
+        assert_near(surges.opponent_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn a_surge_expires_after_its_window() {
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        for _ in 0..WRECK_SURGE_FRAMES {
+            assert_near(surges.opponent_multiplier(), WRECK_SURGE_SPEED_MULTIPLIER);
+            surges.tick();
+        }
+        assert_near(surges.opponent_multiplier(), 1.0);
+        // Ticking a spent timer never underflows.
+        surges.tick();
+        assert_eq!(surges.opponent_frames, 0);
+    }
+
+    #[test]
+    fn surge_multiplier_for_team_routes_to_the_right_pool() {
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        assert_near(
+            surges.multiplier_for_team(AiTeam::Red),
+            WRECK_SURGE_SPEED_MULTIPLIER,
+        );
+        assert_near(surges.multiplier_for_team(AiTeam::Blue), 1.0);
+    }
+
+    #[test]
+    fn reward_wreckers_surges_the_enemy_of_each_wrecked_team() {
+        // A wrecked opponent means the player team dealt the kill and surges.
+        let mut player_dealt = WreckSurges::default();
+        player_dealt.reward_wreckers(WreckEvents {
+            player: false,
+            opponent: true,
+        });
+        assert_eq!(player_dealt.player_frames, WRECK_SURGE_FRAMES);
+        assert_eq!(player_dealt.opponent_frames, 0);
+
+        // A wrecked player team means the opponents dealt the kill and surge.
+        let mut opponent_dealt = WreckSurges::default();
+        opponent_dealt.reward_wreckers(WreckEvents {
+            player: true,
+            opponent: false,
+        });
+        assert_eq!(opponent_dealt.opponent_frames, WRECK_SURGE_FRAMES);
+        assert_eq!(opponent_dealt.player_frames, 0);
+
+        // A double wreck surges both teams at once.
+        let mut both = WreckSurges::default();
+        both.reward_wreckers(WreckEvents {
+            player: true,
+            opponent: true,
+        });
+        assert_eq!(both.player_frames, WRECK_SURGE_FRAMES);
+        assert_eq!(both.opponent_frames, WRECK_SURGE_FRAMES);
+
+        // A quiet frame surges nobody.
+        let mut quiet = WreckSurges::default();
+        quiet.reward_wreckers(WreckEvents::default());
+        assert_eq!(quiet, WreckSurges::default());
+    }
+
+    #[test]
+    fn system_surges_a_team_that_grinds_an_enemy_to_a_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<WreckSurges>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let surges = app.world.resource::<WreckSurges>();
+        // The player team landed the kill and surges; the wreck does not.
+        assert_eq!(surges.player_frames, WRECK_SURGE_FRAMES);
+        assert_eq!(surges.opponent_frames, 0);
+    }
+
+    #[test]
+    fn system_leaves_operational_teams_without_a_surge() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.init_resource::<WreckSurges>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(*app.world.resource::<WreckSurges>(), WreckSurges::default());
+    }
+
+    #[test]
+    fn wreck_surge_decay_system_winds_down_each_team() {
+        let mut app = App::new();
+        app.insert_resource(WreckSurges {
+            player_frames: 2,
+            opponent_frames: 1,
+        });
+        app.add_system(wreck_surge_decay_system);
+
+        app.update();
+        assert_eq!(
+            *app.world.resource::<WreckSurges>(),
+            WreckSurges {
+                player_frames: 1,
+                opponent_frames: 0,
+            }
+        );
+
+        app.update();
+        assert_eq!(*app.world.resource::<WreckSurges>(), WreckSurges::default());
+    }
+
+    #[test]
+    fn entering_match_resets_wreck_surges() {
+        let mut app = App::new();
+        app.insert_resource(WreckSurges {
+            player_frames: 12,
+            opponent_frames: 34,
+        });
+        app.add_system(reset_wreck_surges);
+
+        app.update();
+
+        assert_eq!(*app.world.resource::<WreckSurges>(), WreckSurges::default());
     }
 
     fn player_stub() -> Player {

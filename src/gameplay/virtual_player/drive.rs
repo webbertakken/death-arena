@@ -1,4 +1,4 @@
-use crate::gameplay::combat::{VehicleIntegrity, WreckStuns};
+use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
 use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup};
@@ -29,6 +29,7 @@ type VirtualPlayerDriveContext<'w> = (
     Option<Res<'w, NitroBoosts>>,
     Option<Res<'w, VehicleIntegrity>>,
     Option<Res<'w, WreckStuns>>,
+    Option<Res<'w, WreckSurges>>,
     Option<Res<'w, CtfMatchResult>>,
 );
 
@@ -41,7 +42,7 @@ pub fn virtual_player_drive_system(
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     context: VirtualPlayerDriveContext,
 ) {
-    let (nitro_boosts, integrity, wreck_stuns, match_result) = context;
+    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -123,6 +124,9 @@ pub fn virtual_player_drive_system(
         let stun_multiplier = wreck_stuns
             .as_ref()
             .map_or(1.0, |stuns| stuns.multiplier_for_team(ai.team));
+        let surge_multiplier = wreck_surges
+            .as_ref()
+            .map_or(1.0, |surges| surges.multiplier_for_team(ai.team));
         let carry_multiplier =
             flag_carrier_speed_multiplier(carries_enemy_flag(entity, ai.team, &flags));
         let movement_distance = intent.throttle
@@ -130,6 +134,7 @@ pub fn virtual_player_drive_system(
             * nitro_multiplier
             * integrity_multiplier
             * stun_multiplier
+            * surge_multiplier
             * carry_multiplier
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
@@ -2514,6 +2519,42 @@ mod tests {
         assert!(
             (blue_y - healthy_y).abs() < 1e-4,
             "the opponents' spin-out must not slow blue cars: healthy={healthy_y}, blue={blue_y}"
+        );
+    }
+
+    fn one_frame_ai_y_with_surge(team: AiTeam, surges: WreckSurges) -> f32 {
+        let mut app = app_with_system();
+        app.insert_resource(surges);
+        let ai = spawn_ai_on_team(&mut app, team, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        app.world.get::<Transform>(ai).unwrap().translation.y
+    }
+
+    #[test]
+    fn a_fresh_kill_surge_increases_opponent_distance() {
+        let healthy_y = one_frame_ai_y(AiTeam::Red, None);
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        let surging_y = one_frame_ai_y_with_surge(AiTeam::Red, surges);
+
+        assert!(
+            surging_y > healthy_y,
+            "a fresh-kill surge should speed an opponent up: healthy={healthy_y}, surging={surging_y}"
+        );
+    }
+
+    #[test]
+    fn a_player_team_surge_does_not_speed_red_virtual_players() {
+        let healthy_y = one_frame_ai_y(AiTeam::Red, None);
+        let mut surges = WreckSurges::default();
+        surges.trigger_player();
+        let red_y = one_frame_ai_y_with_surge(AiTeam::Red, surges);
+
+        assert!(
+            (red_y - healthy_y).abs() < 1e-4,
+            "the player team's surge must not speed red cars: healthy={healthy_y}, red={red_y}"
         );
     }
 
