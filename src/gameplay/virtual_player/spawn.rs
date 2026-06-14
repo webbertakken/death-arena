@@ -16,12 +16,71 @@ pub fn arena_patrol_route() -> Vec<Vec2> {
     ]
 }
 
+/// A driving personality: a coherent speed/cornering trade-off that gives each
+/// opponent a distinct feel, the classic Death Rally roster of rival drivers.
+///
+/// Every archetype is a genuine trade-off rather than a strict upgrade, and the
+/// roster mirrors the same set of personalities across both teams (see
+/// [`spawn_roster`]) so variety never tips the balance one side's way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DriverProfile {
+    /// Linear speed in metres per second.
+    movement_speed: f32,
+    /// Rotation speed in degrees per second (converted to radians at spawn).
+    turn_degrees: f32,
+}
+
+impl DriverProfile {
+    /// Balanced baseline driver, preserving the original uniform 420 m/s,
+    /// 300 deg/s feel. The neutral all-rounder every other archetype is measured
+    /// against, and the filler opposite the human player so the AI rosters stay
+    /// perfectly mirrored.
+    const ALL_ROUNDER: Self = Self {
+        movement_speed: 420.0,
+        turn_degrees: 300.0,
+    };
+    /// Straight-line specialist: quicker down the open lane, lazier through a
+    /// corner.
+    const SPRINTER: Self = Self {
+        movement_speed: 450.0,
+        turn_degrees: 280.0,
+    };
+    /// Cornering specialist: sharper turn-in, a touch slower flat out.
+    const TECHNICIAN: Self = Self {
+        movement_speed: 390.0,
+        turn_degrees: 320.0,
+    };
+}
+
+/// Each archetype is a genuine trade-off, never a strict upgrade: more top speed
+/// is bought with lazier cornering, enforced at compile time so the roster can
+/// never drift into a profile that is simply better on both axes.
+const _: () = assert!(
+    DriverProfile::SPRINTER.movement_speed > DriverProfile::ALL_ROUNDER.movement_speed
+        && DriverProfile::ALL_ROUNDER.movement_speed > DriverProfile::TECHNICIAN.movement_speed
+);
+const _: () = assert!(
+    DriverProfile::SPRINTER.turn_degrees < DriverProfile::ALL_ROUNDER.turn_degrees
+        && DriverProfile::ALL_ROUNDER.turn_degrees < DriverProfile::TECHNICIAN.turn_degrees
+);
+/// Personalities stay in a tight band around the 420 m/s, 300 deg/s baseline so
+/// they are felt without breaking the tuned chase and escort balance: even the
+/// slowest chaser still outpaces the fastest flag carrier, which is slowed to a
+/// fraction of its own top speed. Enforced at compile time.
+const _: () = assert!(
+    DriverProfile::SPRINTER.movement_speed <= 480.0
+        && DriverProfile::TECHNICIAN.movement_speed >= 360.0
+        && DriverProfile::SPRINTER.turn_degrees >= 260.0
+        && DriverProfile::TECHNICIAN.turn_degrees <= 340.0
+);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct VirtualPlayerSpawn {
     name: &'static str,
     team: AiTeam,
     start_waypoint: usize,
     translation: Vec3,
+    profile: DriverProfile,
 }
 
 const fn spawn_roster() -> [VirtualPlayerSpawn; 7] {
@@ -31,42 +90,51 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 7] {
             team: AiTeam::Blue,
             start_waypoint: 3,
             translation: Vec3::new(-430.0, 200.0, 4.0),
+            profile: DriverProfile::SPRINTER,
         },
         VirtualPlayerSpawn {
             name: "Teammate 2",
             team: AiTeam::Blue,
             start_waypoint: 2,
             translation: Vec3::new(0.0, -380.0, 4.0),
+            profile: DriverProfile::TECHNICIAN,
         },
         VirtualPlayerSpawn {
             name: "Teammate 3",
             team: AiTeam::Blue,
             start_waypoint: 0,
             translation: Vec3::new(-430.0, -200.0, 4.0),
+            profile: DriverProfile::ALL_ROUNDER,
         },
         VirtualPlayerSpawn {
             name: "Opponent 1",
             team: AiTeam::Red,
             start_waypoint: 0,
             translation: Vec3::new(430.0, 200.0, 4.0),
+            profile: DriverProfile::SPRINTER,
         },
         VirtualPlayerSpawn {
             name: "Opponent 2",
             team: AiTeam::Red,
             start_waypoint: 1,
             translation: Vec3::new(0.0, 380.0, 4.0),
+            profile: DriverProfile::TECHNICIAN,
         },
         VirtualPlayerSpawn {
             name: "Opponent 3",
             team: AiTeam::Red,
             start_waypoint: 2,
             translation: Vec3::new(430.0, -200.0, 4.0),
+            profile: DriverProfile::ALL_ROUNDER,
         },
+        // Opponent 4 fills the slot opposite the human player with the neutral
+        // baseline, keeping both teams on the identical multiset of profiles.
         VirtualPlayerSpawn {
             name: "Opponent 4",
             team: AiTeam::Red,
             start_waypoint: 3,
             translation: Vec3::new(160.0, 380.0, 4.0),
+            profile: DriverProfile::ALL_ROUNDER,
         },
     ]
 }
@@ -80,7 +148,8 @@ fn initial_car_rotation(spawn: Vec3, target: Vec2) -> Quat {
     Quat::from_rotation_z(angle)
 }
 
-/// Spawns a small grid of virtual CTF drivers that patrol the arena.
+/// Spawns a small grid of virtual CTF drivers that patrol the arena, each with
+/// its own [`DriverProfile`] so the roster of rivals feels distinct.
 pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let chassis = asset_server.load("textures/car1/chassis1.png");
     let route = arena_patrol_route();
@@ -91,8 +160,8 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             Name::new(spawn.name),
             VirtualPlayer {
                 team: spawn.team,
-                movement_speed: 420.0,
-                rotation_speed: f32::to_radians(300.0),
+                movement_speed: spawn.profile.movement_speed,
+                rotation_speed: f32::to_radians(spawn.profile.turn_degrees),
                 waypoints: route.clone(),
                 current_waypoint: spawn.start_waypoint,
             },
@@ -170,6 +239,99 @@ mod tests {
                 .truncate()
                 .dot(target - spawn.translation.truncate())
                 > 0.0
+        );
+    }
+
+    fn occurrences(profiles: &[DriverProfile], target: DriverProfile) -> usize {
+        profiles
+            .iter()
+            .filter(|profile| **profile == target)
+            .count()
+    }
+
+    fn is_same_multiset(left: &[DriverProfile], right: &[DriverProfile]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .all(|profile| occurrences(left, *profile) == occurrences(right, *profile))
+    }
+
+    fn ai_profiles(team: AiTeam) -> Vec<DriverProfile> {
+        spawn_roster()
+            .into_iter()
+            .filter(|spawn| spawn.team == team)
+            .map(|spawn| spawn.profile)
+            .collect()
+    }
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= f32::EPSILON,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn the_all_rounder_preserves_the_original_uniform_driver() {
+        // The neutral baseline keeps the pre-personality 420 m/s, 300 deg/s feel,
+        // so only the sprinter and technician depart from it.
+        assert_near(DriverProfile::ALL_ROUNDER.movement_speed, 420.0);
+        assert_near(DriverProfile::ALL_ROUNDER.turn_degrees, 300.0);
+    }
+
+    #[test]
+    fn roster_fields_at_least_three_distinct_personalities() {
+        let roster = spawn_roster();
+        let mut distinct: Vec<DriverProfile> = Vec::new();
+        for spawn in roster {
+            if !distinct.contains(&spawn.profile) {
+                distinct.push(spawn.profile);
+            }
+        }
+        assert!(
+            distinct.len() >= 3,
+            "expected a roster of distinct driving personalities, found {}",
+            distinct.len()
+        );
+    }
+
+    #[test]
+    fn ai_rosters_mirror_once_the_human_fills_the_blue_baseline() {
+        // Blue fields three virtual drivers plus the human; Red fields four. The
+        // human occupies Blue's fourth slot as the neutral all-rounder, so both
+        // teams draw from the identical multiset of personalities: a perfectly
+        // mirrored roster, never a side that is systematically faster.
+        let mut blue = ai_profiles(AiTeam::Blue);
+        blue.push(DriverProfile::ALL_ROUNDER);
+        let red = ai_profiles(AiTeam::Red);
+        assert!(
+            is_same_multiset(&blue, &red),
+            "teams must field the same set of driving personalities"
+        );
+    }
+
+    #[test]
+    fn ai_rosters_balance_aggregate_speed_and_turn_with_the_human() {
+        // The multiset mirror implies equal aggregates: counting the human as the
+        // baseline all-rounder, neither team has more top speed or more cornering
+        // to share across its cars.
+        let human = DriverProfile::ALL_ROUNDER;
+        let blue = ai_profiles(AiTeam::Blue);
+        let red = ai_profiles(AiTeam::Red);
+
+        let blue_speed: f32 =
+            blue.iter().map(|p| p.movement_speed).sum::<f32>() + human.movement_speed;
+        let red_speed: f32 = red.iter().map(|p| p.movement_speed).sum();
+        assert!(
+            (blue_speed - red_speed).abs() <= f32::EPSILON,
+            "aggregate speed must be level: blue={blue_speed}, red={red_speed}"
+        );
+
+        let blue_turn: f32 = blue.iter().map(|p| p.turn_degrees).sum::<f32>() + human.turn_degrees;
+        let red_turn: f32 = red.iter().map(|p| p.turn_degrees).sum();
+        assert!(
+            (blue_turn - red_turn).abs() <= f32::EPSILON,
+            "aggregate cornering must be level: blue={blue_turn}, red={red_turn}"
         );
     }
 }
