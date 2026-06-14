@@ -150,6 +150,29 @@ const _: () = assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAM
 /// The flank arc must be a real wedge, enforced at compile time: a positive
 /// threshold opens the side window, below `1.0` keeps a pure head-on out of it.
 const _: () = assert!(BROADSIDE_RAM_FLANK_THRESHOLD > 0.0 && BROADSIDE_RAM_FLANK_THRESHOLD < 1.0);
+/// Extra durability a car caught from directly behind by a charging enemy loses
+/// each frame the two are trading paint.
+///
+/// The classic Death Rally chase-down (the racing-game "PIT" tap): running a
+/// fleeing enemy down and driving through its tail. Like the
+/// [`BROADSIDE_RAM_DAMAGE_PER_FRAME`] T-bone, the struck car cannot trade the
+/// hit back, its nose is pointed away, so a committed rear ram punishes it
+/// harder than a head-on meeting. A rear-end only lands when the striker is
+/// *also* charging (the same nose-on commitment [`AGGRESSOR_RAM_ALIGNMENT`]
+/// demands), so it stacks on the [`AGGRESSOR_RAM_DAMAGE_PER_FRAME`] hit a clean
+/// run-down already earns and rewards chasing a fleeing flag carrier or a
+/// reeling foe. Priced a notch above the head-on aggressor bite, since the
+/// victim cannot retaliate, yet kept under the [`BROADSIDE_RAM_DAMAGE_PER_FRAME`]
+/// flank, the more violent perpendicular angle, so a T-bone stays the hardest
+/// positional hit and the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] charge the
+/// hardest hit of all.
+pub const REAR_END_RAM_DAMAGE_PER_FRAME: f32 = 0.375;
+/// A rear-end must out-bite the head-on aggressor charge, enforced at compile
+/// time, so running a foe down from behind always beats meeting it nose-to-nose.
+const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+/// A flank T-bone must stay the hardest positional hit, enforced at compile
+/// time, so a clean broadside always out-bites a rear-end run-down.
+const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME < BROADSIDE_RAM_DAMAGE_PER_FRAME);
 /// Fraction of incoming ram damage a shielded team still takes.
 ///
 /// The defensive counter to the all-offence ramming loop: while a team's shield
@@ -874,6 +897,65 @@ pub fn broadside_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage cars run down from behind by a charging enemy
+/// take.
+///
+/// A car is "rear-ended" when an opposing car is within [`RAM_RADIUS`], is
+/// charging it (the striker's nose inside the [`AGGRESSOR_RAM_ALIGNMENT`] cone,
+/// the same commitment the aggressor and broadside bonuses demand) and strikes
+/// from the victim's rear arc, the wedge *behind* the flank arc set by
+/// [`BROADSIDE_RAM_FLANK_THRESHOLD`]. Every rear-ended car bleeds
+/// [`REAR_END_RAM_DAMAGE_PER_FRAME`] into its *own* team's pool on top of the
+/// base [`ram_damage`] scrape, so running a fleeing foe down wears it faster
+/// than meeting it head-on. The rear arc starts exactly where the flank arc
+/// ends, so a single strike is ever only a flank *or* a rear hit, never both.
+/// Charged once per struck car however many enemies pile into its tail,
+/// mirroring [`broadside_ram_damage`].
+#[must_use]
+pub fn rear_end_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, victim) in cars.iter().enumerate() {
+        let Some(victim_heading) = victim.forward.try_normalize() else {
+            continue;
+        };
+
+        let is_rear_ended = cars.iter().enumerate().any(|(other_index, striker)| {
+            if other_index == index || striker.team == victim.team {
+                return false;
+            }
+            let to_striker = striker.position - victim.position;
+            if to_striker.length_squared() > radius_sq {
+                return false;
+            }
+            let Some(approach) = to_striker.try_normalize() else {
+                return false;
+            };
+            // The striker is committing to the hit: its nose is on the victim.
+            let charging = striker
+                .forward
+                .try_normalize()
+                .is_some_and(|heading| heading.dot(-approach) >= AGGRESSOR_RAM_ALIGNMENT);
+            // The victim is caught from behind: the strike falls past its flank
+            // arc, onto the rear wedge where it faces dead away from the striker.
+            let rear = victim_heading.dot(approach) < -BROADSIDE_RAM_FLANK_THRESHOLD;
+            charging && rear
+        });
+        if is_rear_ended {
+            match victim.team {
+                AiTeam::Blue => damage.player += REAR_END_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += REAR_END_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Durability each team regains from home-base pit recovery in a single frame.
 ///
 /// The recovery mirror of [`TeamDamage`]: where ram wear is subtracted from a
@@ -1021,7 +1103,8 @@ pub fn ram_damage_system(
         .combined(nitro_ram_damage(&cars, boost))
         .combined(carrier_ram_damage(&cars))
         .combined(aggressor_ram_damage(&cars))
-        .combined(broadside_ram_damage(&cars));
+        .combined(broadside_ram_damage(&cars))
+        .combined(rear_end_ram_damage(&cars));
     // A team with its shield up shrugs off part of every ram it eats this frame.
     let damage = armour_mitigated_damage(raw_damage, shield);
 
@@ -1939,6 +2022,152 @@ mod tests {
     }
 
     #[test]
+    fn a_tail_charge_rear_ends_the_struck_team() {
+        // A red car runs the blue car down from directly behind: blue faces +Y
+        // while the red striker chases from -Y with its nose on blue's tail.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_tail_charge_wears_the_red_team_it_runs_down() {
+        // The mirror: a blue car runs a red car down from directly behind.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [red(victim), blue_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.opponent, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.player, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charge_is_no_rear_end() {
+        // Nose to nose: each car is struck on its front, not its tail, so the
+        // rear-end bonus stays silent and only the aggressor charge applies.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_on_charge_is_no_rear_end() {
+        // A clean flank T-bone falls inside the side arc, short of the rear
+        // wedge, so it earns a broadside but never a rear-end: the two arcs are
+        // disjoint, and a single strike is one or the other, never both.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        assert_near(
+            broadside_ram_damage(&cars).player,
+            BROADSIDE_RAM_DAMAGE_PER_FRAME,
+        );
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_tail_position_without_a_charge_is_no_rear_end() {
+        // A red car sits dead behind the blue car but faces away (-Y), so it is
+        // tailing without committing: a rear position alone earns no rear-end.
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            RamCar {
+                forward: Vec2::NEG_Y,
+                ..red(Vec2::new(0.0, -(RAM_RADIUS - 10.0)))
+            },
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rear_end_needs_contact() {
+        // A perfect tail charge just out of ram range deals nothing.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS + 1.0));
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_double_tail_charge_rear_ends_the_victim_once() {
+        // Two reds pile into a lone blue's tail: the struck car bleeds a single
+        // rear-end, not one per striker (the per-victim model).
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            red_facing(Vec2::new(0.0, -50.0), victim),
+            red_facing(Vec2::new(0.0, -90.0), victim),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_rear_end() {
+        // A victim with no facing cannot be judged from behind, so it is skipped.
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red_facing(striker, Vec2::ZERO),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn system_adds_rear_end_ram_bonus_on_a_tail_charge() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        // The player keeps its default +Y facing, exposing its tail along -Y.
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        // The red car chases from directly behind, keeping its own +Y facing so
+        // its nose is on the player's tail.
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(0.0, -30.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; a tail charge is necessarily an
+        // aggressor charge too (the chaser's nose is on the victim), so the
+        // player eats the aggressor charge and the rear-end bonus on top, while
+        // the chaser only takes the base scrape back.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - REAR_END_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
     fn system_adds_broadside_ram_bonus_on_a_flank_charge() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
@@ -1975,28 +2204,30 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
         app.add_system(ram_damage_system);
-        // The player charges head-first (+X) into the red car ahead of it.
+        // Nose to nose: the player charges +X into the red car while the red car
+        // charges -X straight back. Each strikes the other dead on the front, so
+        // both eat the aggressor charge but neither the flank nor the rear bonus.
         app.world.spawn((
             player_stub(),
             Transform::from_translation(Vec3::ZERO)
                 .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
         ));
-        // The red car faces +X too (driving away), so the player rear-ends it:
-        // it takes the head-on charge without dealing one back, and the strike
-        // lands on its tail rather than its flank, isolating the aggressor bonus
-        // from the broadside one.
         app.world.spawn((
             virtual_player_stub(AiTeam::Red),
             Transform::from_translation(Vec3::new(30.0, 0.0, 0.0))
-                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
         ));
 
         app.update();
 
         let integrity = app.world.resource::<VehicleIntegrity>();
-        // Base scrape wears both teams 0.25; the charging player also wears the
-        // red team for the aggressor bonus on top.
-        assert_near(integrity.player, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+        // Base scrape wears both teams 0.25; the head-on charge adds the
+        // aggressor bonus to each, and a dead-on hit triggers neither the flank
+        // nor the rear bonus.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+        );
         assert_near(
             integrity.opponent,
             MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
