@@ -5,6 +5,19 @@
 /// team breaks off to patch up and win its lost speed back.
 pub const REPAIR_MAX_VIRTUAL_PLAYER_PRIORITY: u32 = 175;
 
+/// Tactical value a wrecked team places on a shield pickup.
+///
+/// A shield prevents wear rather than healing it, so it is most precious to a
+/// team that is being ground down: it buys the breather to limp to a repair
+/// without being wrecked anew. Pitched just below a wrecked team's repair value
+/// so the heal still wins a straight choice, yet above nitro so a battered team
+/// reaches for the breather before raw speed.
+pub const SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY: u32 = 160;
+
+/// A wrecked team must still rate a heal over mere damage prevention, enforced
+/// at compile time, so a repair always wins a straight repair-vs-shield choice.
+const _: () = assert!(SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY < REPAIR_MAX_VIRTUAL_PLAYER_PRIORITY);
+
 /// The classic Death Rally trackside collectibles a car can drive over.
 ///
 /// Each kind awards a cash bounty when picked up; richer per-kind effects
@@ -51,13 +64,14 @@ impl PickupKind {
     /// Tactical value virtual players place on this pickup given their team's
     /// current durability `integrity_fraction` (`0.0` wrecked, `1.0` pristine).
     ///
-    /// Only repairs vary: the more battered the team, the harder its cars chase
-    /// a patch-up. Every other pickup keeps its flat
-    /// [`Self::virtual_player_priority`].
+    /// The two durability-driven pickups vary with wear: a repair (heal) and a
+    /// shield (prevent further wear) both grow more valuable the more battered a
+    /// team is. Every other pickup keeps its flat [`Self::virtual_player_priority`].
     #[must_use]
     pub fn virtual_player_priority_for_integrity(self, integrity_fraction: f32) -> u32 {
         match self {
             Self::Repair => repair_priority_for_integrity(integrity_fraction),
+            Self::Shield => shield_priority_for_integrity(integrity_fraction),
             other => other.virtual_player_priority(),
         }
     }
@@ -81,6 +95,30 @@ fn repair_priority_for_integrity(integrity_fraction: f32) -> u32 {
         60
     } else {
         PickupKind::Repair.virtual_player_priority()
+    }
+}
+
+/// Maps a team's durability fraction onto how hard its cars chase a shield.
+///
+/// The defensive mirror of [`repair_priority_for_integrity`]: a pristine team is
+/// not under pressure and barely detours (kept below cash so it never trades a
+/// cash grab for armour it does not need), while a battered team values the
+/// breather more and more, crossing the narrow detour threshold when worn and
+/// the wide one ([`crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY`])
+/// once it is genuinely battered. Capped below a wrecked team's repair value so
+/// a heal still wins the straight choice.
+#[must_use]
+fn shield_priority_for_integrity(integrity_fraction: f32) -> u32 {
+    if integrity_fraction <= 0.15 {
+        SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY
+    } else if integrity_fraction <= 0.35 {
+        150
+    } else if integrity_fraction <= 0.55 {
+        140
+    } else if integrity_fraction <= 0.75 {
+        120
+    } else {
+        90
     }
 }
 
@@ -126,22 +164,70 @@ mod tests {
     }
 
     #[test]
-    fn shield_keeps_its_flat_priority_regardless_of_integrity() {
-        for fraction in [1.0, 0.5, 0.0] {
-            assert_eq!(
-                PickupKind::Shield.virtual_player_priority_for_integrity(fraction),
-                PickupKind::Shield.virtual_player_priority(),
-                "only repairs should scale with durability"
+    fn shield_priority_rises_as_durability_drops() {
+        let fractions = [1.0, 0.7, 0.5, 0.3, 0.1, 0.0];
+        let priorities: Vec<u32> = fractions
+            .iter()
+            .map(|&fraction| PickupKind::Shield.virtual_player_priority_for_integrity(fraction))
+            .collect();
+
+        for pair in priorities.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "shield priority must not fall as a team wears down: {priorities:?}"
             );
         }
+        assert!(
+            priorities.last() > priorities.first(),
+            "a battered team must value a shield more than a healthy one: {priorities:?}"
+        );
+    }
+
+    #[test]
+    fn pristine_team_values_a_shield_below_cash() {
+        assert!(
+            PickupKind::Shield.virtual_player_priority_for_integrity(1.0)
+                < PickupKind::Cash.virtual_player_priority(),
+            "a healthy, unpressured team must not trade a cash grab for armour it does not need"
+        );
     }
 
     #[test]
     fn worn_team_will_detour_for_a_shield() {
         use crate::gameplay::virtual_player::ai::CTF_PICKUP_DETOUR_MIN_PRIORITY;
         assert!(
-            PickupKind::Shield.virtual_player_priority() >= CTF_PICKUP_DETOUR_MIN_PRIORITY,
-            "a shield must be worth at least a narrow CTF detour"
+            PickupKind::Shield.virtual_player_priority_for_integrity(0.6)
+                >= CTF_PICKUP_DETOUR_MIN_PRIORITY,
+            "a worn team must be willing to take at least a narrow detour for a shield"
+        );
+    }
+
+    #[test]
+    fn battered_team_takes_a_wide_detour_for_a_shield() {
+        use crate::gameplay::virtual_player::ai::{
+            CTF_PICKUP_DETOUR_MIN_PRIORITY, CTF_WIDE_DETOUR_MIN_PRIORITY,
+        };
+        let battered = PickupKind::Shield.virtual_player_priority_for_integrity(0.2);
+        assert!(
+            battered >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a battered team must commit a wide detour to grab a breather: {battered}"
+        );
+        assert!(battered > PickupKind::Cash.virtual_player_priority());
+        assert!(battered > CTF_PICKUP_DETOUR_MIN_PRIORITY);
+    }
+
+    #[test]
+    fn wrecked_team_still_prefers_a_repair_over_a_shield() {
+        let shield = PickupKind::Shield.virtual_player_priority_for_integrity(0.0);
+        let repair = PickupKind::Repair.virtual_player_priority_for_integrity(0.0);
+        assert_eq!(shield, SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY);
+        assert!(
+            shield < repair,
+            "a heal (repair={repair}) must still beat mere prevention (shield={shield})"
+        );
+        assert!(
+            shield > PickupKind::Nitro.virtual_player_priority(),
+            "a wrecked team must reach for the breather before raw speed: shield={shield}"
         );
     }
 
@@ -201,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn integrity_only_changes_the_repair_priority() {
+    fn integrity_does_not_change_cash_or_nitro_priority() {
         for fraction in [1.0, 0.5, 0.0] {
             assert_eq!(
                 PickupKind::Cash.virtual_player_priority_for_integrity(fraction),
