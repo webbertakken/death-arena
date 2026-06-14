@@ -154,13 +154,18 @@ impl VehicleIntegrity {
         integrity_speed_multiplier(self.opponent)
     }
 
-    /// Durability fraction (`0.0`..=`1.0`) of whichever team is more battered.
+    /// Durability fraction (`0.0`..=`1.0`) of the given team's own wear.
     ///
-    /// Virtual players use this to decide how hotly to contest repair pickups,
-    /// so a single worn-down team is enough to make a repair worth chasing.
+    /// Virtual players price repair pickups against their *own* team's wear: a
+    /// pristine team gains nothing from a patch-up (durability is capped at
+    /// [`MAX_INTEGRITY`]), so it must not chase one however battered the enemy is.
     #[must_use]
-    pub fn most_battered_fraction(self) -> f32 {
-        (self.player.min(self.opponent) / MAX_INTEGRITY).clamp(0.0, 1.0)
+    pub fn fraction_for_team(self, team: AiTeam) -> f32 {
+        let integrity = match team {
+            AiTeam::Blue => self.player,
+            AiTeam::Red => self.opponent,
+        };
+        (integrity / MAX_INTEGRITY).clamp(0.0, 1.0)
     }
 
     /// Speed multiplier for the given team's current wear.
@@ -989,32 +994,23 @@ mod tests {
     }
 
     #[test]
-    fn most_battered_fraction_tracks_the_worse_off_team() {
+    fn fraction_for_team_reports_each_team_against_its_own_wear() {
         let integrity = VehicleIntegrity {
             player: MAX_INTEGRITY,
             opponent: MAX_INTEGRITY / 4.0,
         };
-        assert_near(integrity.most_battered_fraction(), 0.25);
+        assert_near(integrity.fraction_for_team(AiTeam::Blue), 1.0);
+        assert_near(integrity.fraction_for_team(AiTeam::Red), 0.25);
     }
 
     #[test]
-    fn full_integrity_reports_a_pristine_fraction() {
-        assert_near(VehicleIntegrity::default().most_battered_fraction(), 1.0);
-    }
-
-    #[test]
-    fn most_battered_fraction_clamps_into_the_unit_range() {
-        let wrecked = VehicleIntegrity {
-            player: 0.0,
-            opponent: 0.0,
-        };
-        assert_near(wrecked.most_battered_fraction(), 0.0);
-
-        let overfilled = VehicleIntegrity {
-            player: MAX_INTEGRITY * 2.0,
+    fn fraction_for_team_clamps_into_the_unit_range() {
+        let extremes = VehicleIntegrity {
+            player: -MAX_INTEGRITY,
             opponent: MAX_INTEGRITY * 2.0,
         };
-        assert_near(overfilled.most_battered_fraction(), 1.0);
+        assert_near(extremes.fraction_for_team(AiTeam::Blue), 0.0);
+        assert_near(extremes.fraction_for_team(AiTeam::Red), 1.0);
     }
 
     #[test]

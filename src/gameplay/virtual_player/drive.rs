@@ -1,7 +1,7 @@
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
 use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::pickup::{NitroBoosts, Pickup};
+use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
@@ -56,10 +56,7 @@ pub fn virtual_player_drive_system(
         .map(|(entity, transform)| (entity, transform.translation.xy()));
     let player_position = player.map(|(_, position)| position);
     let threats = threat_targets(&query, player_position);
-    let repair_fraction = integrity
-        .as_ref()
-        .map_or(1.0, |integrity| integrity.most_battered_fraction());
-    let available_pickups = pickup_targets(&pickup_query, repair_fraction);
+    let visible_pickups = arena_pickups(&pickup_query);
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
@@ -67,7 +64,8 @@ pub fn virtual_player_drive_system(
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
         &assigned_ctf_targets,
-        &available_pickups,
+        &visible_pickups,
+        integrity.as_deref(),
         player_position,
     );
 
@@ -218,44 +216,66 @@ fn threat_targets(
     threats
 }
 
-fn pickup_targets(
+/// A trackside pickup visible to virtual players, tagged with its kind so each
+/// team can price it against its *own* wear when deciding whether to chase it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ArenaPickup {
+    position: Vec2,
+    kind: PickupKind,
+}
+
+fn arena_pickups(
     pickup_query: &Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
-    repair_fraction: f32,
-) -> Vec<PickupTarget> {
+) -> Vec<ArenaPickup> {
     pickup_query
         .iter()
-        .map(|(transform, pickup)| PickupTarget {
+        .map(|(transform, pickup)| ArenaPickup {
             position: transform.translation.xy(),
-            priority: pickup
-                .kind
-                .virtual_player_priority_for_integrity(repair_fraction),
+            kind: pickup.kind,
         })
         .collect()
+}
+
+/// Prices a pickup from `team`'s perspective: repairs scale with that team's own
+/// durability, every other kind keeps its flat priority. Without an integrity
+/// resource a team is treated as pristine, matching the unstarted-match default.
+fn price_pickup_for_team(
+    pickup: ArenaPickup,
+    integrity: Option<&VehicleIntegrity>,
+    team: AiTeam,
+) -> PickupTarget {
+    let fraction = integrity.map_or(1.0, |integrity| integrity.fraction_for_team(team));
+    PickupTarget {
+        position: pickup.position,
+        priority: pickup.kind.virtual_player_priority_for_integrity(fraction),
+    }
 }
 
 fn claimed_pickups_for_virtual_players(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
-    pickups: &[PickupTarget],
+    pickups: &[ArenaPickup],
+    integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
 ) -> Vec<(Entity, PickupTarget)> {
     let mut ordered_pickups = pickups.to_vec();
-    ordered_pickups.sort_by(compare_pickup_claim_priority);
+    ordered_pickups.sort_by(|a, b| compare_pickup_claim_priority(*a, *b, integrity));
 
     let mut claimed_entities = Vec::new();
     ordered_pickups
         .iter()
         .copied()
         .filter_map(|pickup| {
-            let entity = closest_eligible_pickup_claimant(
+            let (entity, team) = closest_eligible_pickup_claimant(
                 query,
                 assigned_ctf_targets,
                 pickup,
+                integrity,
                 player_position,
                 &claimed_entities,
             )?;
             claimed_entities.push(entity);
-            Some((entity, pickup))
+            Some((entity, price_pickup_for_team(pickup, integrity, team)))
         })
         .collect()
 }
@@ -263,12 +283,12 @@ fn claimed_pickups_for_virtual_players(
 fn closest_eligible_pickup_claimant(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
-    pickup: PickupTarget,
+    pickup: ArenaPickup,
+    integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
     claimed_entities: &[Entity],
-) -> Option<Entity> {
-    let pickup_candidates = [pickup];
-    let (entity, _, position) = query
+) -> Option<(Entity, AiTeam)> {
+    let (entity, team, _) = query
         .iter()
         .filter(|(entity, _, _)| !claimed_entities.contains(entity))
         .filter_map(|(entity, ai, transform)| {
@@ -277,6 +297,7 @@ fn closest_eligible_pickup_claimant(
                 .find(|(assigned_entity, _)| *assigned_entity == entity)
                 .and_then(|(_, target)| *target);
             let position = transform.translation.xy();
+            let pickup_candidates = [price_pickup_for_team(pickup, integrity, ai.team)];
             let target = choose_driving_target(
                 position,
                 DrivingChoices {
@@ -301,16 +322,35 @@ fn closest_eligible_pickup_claimant(
                 .then_with(|| compare_positions(*a_position, *b_position))
         })
         .filter(|(_, team, position)| {
-            !virtual_player_yields_player_pickup_claim(*team, player_position, pickup, *position)
+            !virtual_player_yields_player_pickup_claim(
+                *team,
+                player_position,
+                price_pickup_for_team(pickup, integrity, *team),
+                *position,
+            )
         })?;
 
-    Some(entity)
+    Some((entity, team))
 }
 
-fn compare_pickup_claim_priority(a: &PickupTarget, b: &PickupTarget) -> std::cmp::Ordering {
-    b.priority
-        .cmp(&a.priority)
+/// Orders pickups by the most any team would pay, so a repair that a battered
+/// team must have still earns early claim dibs even though the other team rates
+/// it worthless. Only the claim order is shared; each claimant still pursues the
+/// pickup at its own team's price.
+fn compare_pickup_claim_priority(
+    a: ArenaPickup,
+    b: ArenaPickup,
+    integrity: Option<&VehicleIntegrity>,
+) -> std::cmp::Ordering {
+    claim_priority(b, integrity)
+        .cmp(&claim_priority(a, integrity))
         .then_with(|| compare_positions(a.position, b.position))
+}
+
+fn claim_priority(pickup: ArenaPickup, integrity: Option<&VehicleIntegrity>) -> u32 {
+    price_pickup_for_team(pickup, integrity, AiTeam::Blue)
+        .priority
+        .max(price_pickup_for_team(pickup, integrity, AiTeam::Red).priority)
 }
 
 fn player_has_better_pickup_claim(
@@ -2628,6 +2668,82 @@ mod tests {
         assert!(
             wrecked_x > 5.0,
             "a wrecked attacker should peel off toward the repair, healthy={healthy_x}, wrecked={wrecked_x}"
+        );
+    }
+
+    /// Mirror of [`attacker_x_after_frames`] for a Blue (player-team) attacker, so
+    /// repair pursuit can be checked against the attacker's *own* team wear.
+    fn blue_attacker_x_after_frames(integrity: Option<VehicleIntegrity>, frames: u32) -> f32 {
+        let mut app = app_with_system();
+        if let Some(integrity) = integrity {
+            app.insert_resource(integrity);
+        }
+        // Blue attacker facing +Y, enemy (red) flag up the lane, own flag behind.
+        let ai = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, -600.0),
+            Vec3::new(0.0, -600.0, 1.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(0.0, 600.0),
+            Vec3::new(0.0, 600.0, 1.0),
+            None,
+        );
+        app.world.spawn((
+            Pickup {
+                kind: crate::gameplay::pickup::PickupKind::Repair,
+            },
+            Transform::from_translation(Vec3::new(80.0, 150.0, 2.0)),
+        ));
+
+        for _ in 0..frames {
+            app.update();
+        }
+
+        app.world.get::<Transform>(ai).unwrap().translation.x
+    }
+
+    #[test]
+    fn healthy_attacker_holds_lane_when_only_the_enemy_is_wrecked() {
+        // Blue is pristine, Red is wrecked. A repair is worthless to a full team
+        // (durability is capped), so a healthy attacker must keep pushing the flag
+        // rather than detour for a patch-up it cannot use: repairs are valued by
+        // your OWN wear, never the enemy's.
+        let healthy_x = blue_attacker_x_after_frames(
+            Some(VehicleIntegrity {
+                player: 100.0,
+                opponent: 0.0,
+            }),
+            15,
+        );
+
+        assert!(
+            healthy_x.abs() < 1.0,
+            "a pristine attacker should hold the flag lane even when the enemy is wrecked, x={healthy_x}"
+        );
+    }
+
+    #[test]
+    fn battered_blue_attacker_still_peels_off_for_a_repair() {
+        // The mirror case: when the Blue attacker's own team is wrecked it must
+        // chase the repair, proving per-team pricing scales repair pursuit for
+        // either side.
+        let wrecked_x = blue_attacker_x_after_frames(
+            Some(VehicleIntegrity {
+                player: 0.0,
+                opponent: 100.0,
+            }),
+            15,
+        );
+
+        assert!(
+            wrecked_x > 5.0,
+            "a wrecked blue attacker should peel off toward the repair, x={wrecked_x}"
         );
     }
 }
