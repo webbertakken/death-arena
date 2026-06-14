@@ -17,6 +17,9 @@ pub enum PickupKind {
     Repair,
     /// A nitro canister that pays out a small bounty.
     Nitro,
+    /// A shield that briefly blunts the ram damage a team takes, the defensive
+    /// counter to an otherwise all-offence combat loop. Also pays a small bounty.
+    Shield,
 }
 
 impl PickupKind {
@@ -26,7 +29,8 @@ impl PickupKind {
         match self {
             Self::Cash => 100,
             Self::Repair => 25,
-            Self::Nitro => 50,
+            // A nitro canister and a shield are both modest utility grabs.
+            Self::Nitro | Self::Shield => 50,
         }
     }
 
@@ -37,6 +41,10 @@ impl PickupKind {
             Self::Cash => 100,
             Self::Repair => 25,
             Self::Nitro => 150,
+            // Worth a narrow detour (> cash, crossing the CTF detour threshold)
+            // but not a wide one: grabbing a defensive edge should not pull a
+            // car off a committed flag run the way nitro can.
+            Self::Shield => 120,
         }
     }
 
@@ -95,6 +103,45 @@ mod tests {
         assert!(
             PickupKind::Cash.virtual_player_priority()
                 > PickupKind::Repair.virtual_player_priority()
+        );
+    }
+
+    #[test]
+    fn shield_pays_the_same_modest_bounty_as_nitro() {
+        assert_eq!(PickupKind::Shield.bounty(), PickupKind::Nitro.bounty());
+        assert!(PickupKind::Shield.bounty() < PickupKind::Cash.bounty());
+    }
+
+    #[test]
+    fn virtual_players_rate_shield_between_cash_and_nitro() {
+        let shield = PickupKind::Shield.virtual_player_priority();
+        assert!(
+            shield > PickupKind::Cash.virtual_player_priority(),
+            "a shield should outrank cash so a worn team detours for it: {shield}"
+        );
+        assert!(
+            shield < PickupKind::Nitro.virtual_player_priority(),
+            "a shield should not eclipse nitro's race pressure: {shield}"
+        );
+    }
+
+    #[test]
+    fn shield_keeps_its_flat_priority_regardless_of_integrity() {
+        for fraction in [1.0, 0.5, 0.0] {
+            assert_eq!(
+                PickupKind::Shield.virtual_player_priority_for_integrity(fraction),
+                PickupKind::Shield.virtual_player_priority(),
+                "only repairs should scale with durability"
+            );
+        }
+    }
+
+    #[test]
+    fn worn_team_will_detour_for_a_shield() {
+        use crate::gameplay::virtual_player::ai::CTF_PICKUP_DETOUR_MIN_PRIORITY;
+        assert!(
+            PickupKind::Shield.virtual_player_priority() >= CTF_PICKUP_DETOUR_MIN_PRIORITY,
+            "a shield must be worth at least a narrow CTF detour"
         );
     }
 

@@ -1,7 +1,8 @@
 use crate::gameplay::combat::VehicleIntegrity;
 use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::pickup::{
-    NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score, PICKUP_RADIUS,
+    ArmourBoosts, NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score,
+    PICKUP_RADIUS,
 };
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -15,6 +16,7 @@ pub struct PickupCollectionParams<'w, 's> {
     match_result: Option<Res<'w, CtfMatchResult>>,
     respawns: ResMut<'w, PickupRespawns>,
     nitro_boosts: ResMut<'w, NitroBoosts>,
+    armour_boosts: ResMut<'w, ArmourBoosts>,
     integrity: Option<ResMut<'w, VehicleIntegrity>>,
     score: ResMut<'w, Score>,
     opponent_score: ResMut<'w, OpponentScore>,
@@ -56,6 +58,7 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
                 &mut params.score,
                 &mut params.opponent_score,
                 &mut params.nitro_boosts,
+                &mut params.armour_boosts,
                 params.integrity.as_deref_mut(),
             );
             params.respawns.queue(kind, position);
@@ -146,12 +149,14 @@ fn collector_claim_distance_sq(
         .map(|(_, distance_sq)| distance_sq)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_for_team(
     team: AiTeam,
     kind: PickupKind,
     score: &mut Score,
     opponent_score: &mut OpponentScore,
     nitro_boosts: &mut NitroBoosts,
+    armour_boosts: &mut ArmourBoosts,
     integrity: Option<&mut VehicleIntegrity>,
 ) {
     match team {
@@ -160,11 +165,17 @@ fn collect_for_team(
             if kind == PickupKind::Nitro {
                 nitro_boosts.trigger_player();
             }
+            if kind == PickupKind::Shield {
+                armour_boosts.trigger_player();
+            }
         }
         AiTeam::Red => {
             opponent_score.collect(kind);
             if kind == PickupKind::Nitro {
                 nitro_boosts.trigger_opponent();
+            }
+            if kind == PickupKind::Shield {
+                armour_boosts.trigger_opponent();
             }
         }
     }
@@ -189,6 +200,21 @@ pub fn nitro_boost_decay_system(
     }
 
     nitro_boosts.tick();
+}
+
+/// Advances active shield armour timers by one fixed frame.
+pub fn armour_boost_decay_system(
+    match_result: Option<Res<CtfMatchResult>>,
+    mut armour_boosts: ResMut<ArmourBoosts>,
+) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
+    armour_boosts.tick();
 }
 
 fn advance_respawns(respawns: &mut PickupRespawns) -> Vec<(PickupKind, Vec2)> {
@@ -264,6 +290,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         app.world
             .spawn((test_player(), Transform::from_translation(position)));
@@ -348,6 +375,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::ZERO);
 
@@ -364,6 +392,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
@@ -390,6 +419,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
@@ -455,6 +485,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.insert_resource(VehicleIntegrity {
             player: 50.0,
             opponent: 50.0,
@@ -485,6 +516,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
@@ -506,6 +538,7 @@ mod tests {
         app.init_resource::<OpponentScore>();
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
@@ -524,6 +557,7 @@ mod tests {
     fn nitro_boost_decay_counts_down() {
         let mut app = App::new();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.add_system(nitro_boost_decay_system);
         app.world.resource_mut::<NitroBoosts>().trigger_player();
 
@@ -539,6 +573,7 @@ mod tests {
     fn finished_match_pauses_nitro_boost_decay() {
         let mut app = App::new();
         app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
         });
@@ -550,6 +585,86 @@ mod tests {
         assert_eq!(
             app.world.resource::<NitroBoosts>().player_frames,
             crate::gameplay::pickup::NITRO_BOOST_FRAMES
+        );
+    }
+
+    #[test]
+    fn shield_pickup_arms_player_armour() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Shield, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let boosts = app.world.resource::<ArmourBoosts>();
+        assert_eq!(
+            boosts.player_frames,
+            crate::gameplay::pickup::SHIELD_BOOST_FRAMES
+        );
+        assert_eq!(boosts.opponent_frames, 0);
+        assert_eq!(
+            app.world.resource::<NitroBoosts>(),
+            &NitroBoosts::default(),
+            "a shield must not arm nitro"
+        );
+    }
+
+    #[test]
+    fn shield_pickup_arms_opponent_armour() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
+        app.add_system(pickup_collection_system);
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Shield, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let boosts = app.world.resource::<ArmourBoosts>();
+        assert_eq!(boosts.player_frames, 0);
+        assert_eq!(
+            boosts.opponent_frames,
+            crate::gameplay::pickup::SHIELD_BOOST_FRAMES
+        );
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            PickupKind::Shield.bounty(),
+            "a shield should still pay its modest bounty"
+        );
+    }
+
+    #[test]
+    fn armour_boost_decay_counts_down() {
+        let mut app = App::new();
+        app.init_resource::<ArmourBoosts>();
+        app.add_system(armour_boost_decay_system);
+        app.world.resource_mut::<ArmourBoosts>().trigger_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<ArmourBoosts>().player_frames,
+            crate::gameplay::pickup::SHIELD_BOOST_FRAMES - 1
+        );
+    }
+
+    #[test]
+    fn finished_match_pauses_armour_boost_decay() {
+        let mut app = App::new();
+        app.init_resource::<ArmourBoosts>();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.add_system(armour_boost_decay_system);
+        app.world.resource_mut::<ArmourBoosts>().trigger_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<ArmourBoosts>().player_frames,
+            crate::gameplay::pickup::SHIELD_BOOST_FRAMES
         );
     }
 

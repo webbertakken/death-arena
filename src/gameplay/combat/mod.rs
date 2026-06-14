@@ -1,5 +1,5 @@
 use crate::gameplay::ctf::{CtfFlag, CtfMatchResult};
-use crate::gameplay::pickup::{NitroBoosts, OpponentScore, Score};
+use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
 use crate::gameplay::virtual_player::VirtualPlayer;
@@ -118,6 +118,20 @@ pub const AGGRESSOR_RAM_ALIGNMENT: f32 = 0.5;
 /// below the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted charge still
 /// bites hardest, yet above the base scrape so committing to a ram always pays.
 pub const AGGRESSOR_RAM_DAMAGE_PER_FRAME: f32 = 0.35;
+/// Fraction of incoming ram damage a shielded team still takes.
+///
+/// The defensive counter to the all-offence ramming loop: while a team's shield
+/// (from a [`crate::gameplay::pickup::PickupKind::Shield`] pickup) is up, every
+/// source of ram wear it would take, base scrape, nitro charge, aggressor hit,
+/// even the flag-carrier's own bleed, is halved. Strong enough to turn a losing
+/// scrum, short-lived enough (see [`crate::gameplay::pickup::SHIELD_BOOST_FRAMES`])
+/// that it is a window to exploit rather than a free pass.
+pub const SHIELD_DAMAGE_MULTIPLIER: f32 = 0.5;
+/// A shield must actually blunt damage, enforced at compile time.
+const _: () = assert!(SHIELD_DAMAGE_MULTIPLIER < 1.0);
+/// A shield must not heal (negative damage) or fully negate it, enforced at
+/// compile time, so a shielded team can still be worn down with enough pressure.
+const _: () = assert!(SHIELD_DAMAGE_MULTIPLIER > 0.0);
 
 /// Per-team vehicle durability, mirroring [`crate::gameplay::pickup::NitroBoosts`].
 ///
@@ -555,6 +569,48 @@ impl RamBoost {
     }
 }
 
+/// Which teams have their shield up this frame, for defensive damage mitigation.
+///
+/// The defensive mirror of [`RamBoost`]: where a boost makes a team's rams bite,
+/// a shield blunts the ram damage that team *takes*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RamShield {
+    pub player: bool,
+    pub opponent: bool,
+}
+
+impl RamShield {
+    /// Reads the live shield timers into the teams that are currently armoured.
+    #[must_use]
+    pub const fn from_armour(boosts: &ArmourBoosts) -> Self {
+        Self {
+            player: boosts.is_player_active(),
+            opponent: boosts.is_opponent_active(),
+        }
+    }
+}
+
+/// Blunts the ram damage a shielded team takes by [`SHIELD_DAMAGE_MULTIPLIER`].
+///
+/// Applied once to the already-summed frame damage, so a shield mitigates every
+/// ram source at once (base scrape, nitro charge, aggressor hit, carrier bleed).
+/// An unshielded team's damage passes through untouched.
+#[must_use]
+pub fn armour_mitigated_damage(damage: TeamDamage, shield: RamShield) -> TeamDamage {
+    TeamDamage {
+        player: if shield.player {
+            damage.player * SHIELD_DAMAGE_MULTIPLIER
+        } else {
+            damage.player
+        },
+        opponent: if shield.opponent {
+            damage.opponent * SHIELD_DAMAGE_MULTIPLIER
+        } else {
+            damage.opponent
+        },
+    }
+}
+
 /// Computes the ram damage each team takes from the current car positions.
 ///
 /// A car is "ramming" when an opposing car sits within [`RAM_RADIUS`]. Every
@@ -700,12 +756,50 @@ pub fn aggressor_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Drops every flag held by a team that was freshly wrecked this frame.
+///
+/// A spun-out wreck cannot keep its grip on a stolen flag, so the holder of any
+/// flag carried by a newly wrecked team is cleared, handing the wrecking team a
+/// scramble to recover it. A no-op on frames without a wreck.
+fn drop_wrecked_carriers_flags(
+    wrecks: WreckEvents,
+    car_teams: &[(Entity, AiTeam)],
+    flag_query: &mut Query<(Entity, &mut CtfFlag)>,
+) {
+    if !wrecks.any() {
+        return;
+    }
+
+    let team_of = |holder: Entity| {
+        car_teams
+            .iter()
+            .find(|(entity, _)| *entity == holder)
+            .map(|(_, team)| *team)
+    };
+    let carried: Vec<CarriedFlag> = flag_query
+        .iter()
+        .filter_map(|(flag_entity, flag)| {
+            Some(CarriedFlag {
+                flag: flag_entity,
+                carrier_team: team_of(flag.holder?)?,
+            })
+        })
+        .collect();
+    let dropped = flags_dropped_by_wrecks(&carried, wrecks);
+    for (flag_entity, mut flag) in flag_query.iter_mut() {
+        if dropped.contains(&flag_entity) {
+            flag.holder = None;
+        }
+    }
+}
+
 /// Wears down both teams whenever their cars are trading paint, and pays a
 /// wreck bounty to whichever team grinds an enemy down to zero this frame.
 #[allow(clippy::too_many_arguments)]
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
+    armour_boosts: Option<Res<ArmourBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
     mut wreck_streaks: Option<ResMut<WreckStreaks>>,
     mut wreck_stuns: Option<ResMut<WreckStuns>>,
@@ -755,10 +849,16 @@ pub fn ram_damage_system(
         .as_deref()
         .map(RamBoost::from_nitro)
         .unwrap_or_default();
-    let damage = ram_damage(&cars)
+    let shield = armour_boosts
+        .as_deref()
+        .map(RamShield::from_armour)
+        .unwrap_or_default();
+    let raw_damage = ram_damage(&cars)
         .combined(nitro_ram_damage(&cars, boost))
         .combined(carrier_ram_damage(&cars))
         .combined(aggressor_ram_damage(&cars));
+    // A team with its shield up shrugs off part of every ram it eats this frame.
+    let damage = armour_mitigated_damage(raw_damage, shield);
 
     let before = *integrity;
     integrity.apply_damage(damage);
@@ -779,29 +879,7 @@ pub fn ram_damage_system(
     // A spun-out wreck cannot keep its grip on a stolen flag: drop every flag a
     // freshly wrecked team was hauling so the wrecking team can scramble to
     // recover it.
-    if wrecks.any() {
-        let team_of = |holder: Entity| {
-            car_teams
-                .iter()
-                .find(|(entity, _)| *entity == holder)
-                .map(|(_, team)| *team)
-        };
-        let carried: Vec<CarriedFlag> = flag_query
-            .iter()
-            .filter_map(|(flag_entity, flag)| {
-                Some(CarriedFlag {
-                    flag: flag_entity,
-                    carrier_team: team_of(flag.holder?)?,
-                })
-            })
-            .collect();
-        let dropped = flags_dropped_by_wrecks(&carried, wrecks);
-        for (flag_entity, mut flag) in &mut flag_query {
-            if dropped.contains(&flag_entity) {
-                flag.holder = None;
-            }
-        }
-    }
+    drop_wrecked_carriers_flags(wrecks, &car_teams, &mut flag_query);
 
     let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
     let payout = resolve_wreck_streaks(before_streaks, wrecks);
@@ -1702,6 +1780,102 @@ mod tests {
         assert_near(
             integrity.player,
             MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - NITRO_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn armour_halves_only_a_shielded_teams_damage() {
+        let damage = TeamDamage {
+            player: 2.0,
+            opponent: 4.0,
+        };
+        let mitigated = armour_mitigated_damage(
+            damage,
+            RamShield {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(mitigated.player, 2.0 * SHIELD_DAMAGE_MULTIPLIER);
+        assert_near(mitigated.opponent, 4.0);
+    }
+
+    #[test]
+    fn armour_passes_unshielded_damage_through_untouched() {
+        let damage = TeamDamage {
+            player: 2.0,
+            opponent: 4.0,
+        };
+        let mitigated = armour_mitigated_damage(damage, RamShield::default());
+        assert_near(mitigated.player, 2.0);
+        assert_near(mitigated.opponent, 4.0);
+    }
+
+    #[test]
+    fn ram_shield_reads_active_armour_timers() {
+        let mut boosts = ArmourBoosts::default();
+        boosts.trigger_opponent();
+        let shield = RamShield::from_armour(&boosts);
+        assert!(!shield.player, "an idle team should not be shielded");
+        assert!(shield.opponent, "a triggered team should be shielded");
+    }
+
+    #[test]
+    fn system_halves_ram_damage_for_a_shielded_team() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        let mut armour = ArmourBoosts::default();
+        armour.trigger_player();
+        app.insert_resource(armour);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // The shielded player team eats only half the base scrape; the
+        // unshielded opponents take it in full.
+        assert_near(
+            integrity.player,
+            RAM_DAMAGE_PER_FRAME.mul_add(-SHIELD_DAMAGE_MULTIPLIER, MAX_INTEGRITY),
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_shield_blunts_every_ram_source_at_once() {
+        // Reds are boosting (a nitro-ram bonus on the player) and the player is
+        // shielded: the player should eat half of base + nitro combined, proving
+        // the shield mitigates the whole frame's damage, not just the base scrape.
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        let mut boosts = NitroBoosts::default();
+        boosts.trigger_opponent();
+        app.insert_resource(boosts);
+        let mut armour = ArmourBoosts::default();
+        armour.trigger_player();
+        app.insert_resource(armour);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert_near(
+            integrity.player,
+            (RAM_DAMAGE_PER_FRAME + NITRO_RAM_DAMAGE_PER_FRAME)
+                .mul_add(-SHIELD_DAMAGE_MULTIPLIER, MAX_INTEGRITY),
         );
         assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
     }

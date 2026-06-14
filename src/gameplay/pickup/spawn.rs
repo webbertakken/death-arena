@@ -26,6 +26,8 @@ pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
         (PickupKind::Repair, Vec2::new(x, -y)),
         (PickupKind::Nitro, Vec2::new(0.0, y)),
         (PickupKind::Nitro, Vec2::new(0.0, -y)),
+        (PickupKind::Shield, Vec2::new(x * 0.45, y)),
+        (PickupKind::Shield, Vec2::new(-x * 0.45, -y)),
     ]
 }
 
@@ -111,6 +113,18 @@ mod tests {
         assert!(
             lane_pickups >= 2,
             "expected mirrored pickups on the central capture lane"
+        );
+    }
+
+    #[test]
+    fn layout_scatters_a_mirrored_shield_pair() {
+        let shields = pickup_layout()
+            .into_iter()
+            .filter(|(kind, _)| *kind == PickupKind::Shield)
+            .count();
+        assert!(
+            shields >= 2,
+            "expected at least one mirrored shield pair, found {shields}"
         );
     }
 

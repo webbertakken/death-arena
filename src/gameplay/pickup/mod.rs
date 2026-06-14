@@ -15,6 +15,15 @@ pub const PICKUP_RESPAWN_FRAMES: u32 = 600;
 pub const NITRO_BOOST_FRAMES: u32 = 180;
 /// Speed multiplier applied while a nitro boost is active.
 pub const NITRO_SPEED_MULTIPLIER: f32 = 1.5;
+/// Number of fixed update frames a shield pickup armours a team.
+///
+/// Longer than the nitro window (5s at 60 FPS) so a defensive grab buys a real
+/// breather to limp home or trade paint on the front foot, the counter-play to
+/// the all-offence ramming loop.
+pub const SHIELD_BOOST_FRAMES: u32 = 300;
+/// A shield must outlast a nitro burst to feel like a real breather, enforced at
+/// compile time.
+const _: () = assert!(SHIELD_BOOST_FRAMES > NITRO_BOOST_FRAMES);
 
 /// A trackside collectible the player drives over to bank a bounty.
 #[derive(Component, Debug)]
@@ -86,6 +95,43 @@ impl NitroBoosts {
 
     pub const fn trigger_opponent(&mut self) {
         self.opponent_frames = NITRO_BOOST_FRAMES;
+    }
+
+    pub const fn tick(&mut self) {
+        self.player_frames = self.player_frames.saturating_sub(1);
+        self.opponent_frames = self.opponent_frames.saturating_sub(1);
+    }
+}
+
+/// Timed shield armour currently active for the player and opponent team.
+///
+/// The defensive mirror of [`NitroBoosts`]: where nitro makes a team's rams
+/// bite, a shield blunts the ram damage that team takes. Same per-team frame
+/// timer, armed by collecting a [`PickupKind::Shield`], wound down each frame by
+/// the decay system, and read by combat to mitigate incoming wear.
+#[derive(Resource, Default, Debug, PartialEq, Eq)]
+pub struct ArmourBoosts {
+    pub player_frames: u32,
+    pub opponent_frames: u32,
+}
+
+impl ArmourBoosts {
+    /// Whether the player team's shield is currently up.
+    pub const fn is_player_active(&self) -> bool {
+        self.player_frames > 0
+    }
+
+    /// Whether the opponent team's shield is currently up.
+    pub const fn is_opponent_active(&self) -> bool {
+        self.opponent_frames > 0
+    }
+
+    pub const fn trigger_player(&mut self) {
+        self.player_frames = SHIELD_BOOST_FRAMES;
+    }
+
+    pub const fn trigger_opponent(&mut self) {
+        self.opponent_frames = SHIELD_BOOST_FRAMES;
     }
 
     pub const fn tick(&mut self) {
@@ -215,6 +261,7 @@ impl Plugin for PickupPlugin {
         app.init_resource::<Score>()
             .init_resource::<OpponentScore>()
             .init_resource::<NitroBoosts>()
+            .init_resource::<ArmourBoosts>()
             .init_resource::<PickupRespawns>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
@@ -222,6 +269,7 @@ impl Plugin for PickupPlugin {
                     .with_system(spawn::setup),
             );
         app.add_system(system::nitro_boost_decay_system.before(system::pickup_collection_system))
+            .add_system(system::armour_boost_decay_system.before(system::pickup_collection_system))
             .add_system(system::pickup_collection_system)
             .add_system(system::pickup_respawn_system.after(system::pickup_collection_system));
     }
@@ -231,11 +279,13 @@ fn reset_pickup_match_resources(
     mut score: ResMut<Score>,
     mut opponent_score: ResMut<OpponentScore>,
     mut nitro_boosts: ResMut<NitroBoosts>,
+    mut armour_boosts: ResMut<ArmourBoosts>,
     mut respawns: ResMut<PickupRespawns>,
 ) {
     *score = Score::default();
     *opponent_score = OpponentScore::default();
     *nitro_boosts = NitroBoosts::default();
+    *armour_boosts = ArmourBoosts::default();
     *respawns = PickupRespawns::default();
 }
 
@@ -538,6 +588,10 @@ mod tests {
             player_frames: 12,
             opponent_frames: 34,
         });
+        app.insert_resource(ArmourBoosts {
+            player_frames: 56,
+            opponent_frames: 78,
+        });
         let mut respawns = PickupRespawns::default();
         respawns.queue(PickupKind::Cash, Vec2::new(1.0, 2.0));
         app.insert_resource(respawns);
@@ -552,8 +606,33 @@ mod tests {
         );
         assert_eq!(*app.world.resource::<NitroBoosts>(), NitroBoosts::default());
         assert_eq!(
+            *app.world.resource::<ArmourBoosts>(),
+            ArmourBoosts::default()
+        );
+        assert_eq!(
             *app.world.resource::<PickupRespawns>(),
             PickupRespawns::default()
         );
+    }
+
+    #[test]
+    fn armour_boost_starts_up_and_expires() {
+        let mut boosts = ArmourBoosts::default();
+        assert!(!boosts.is_player_active());
+        assert!(!boosts.is_opponent_active());
+
+        boosts.trigger_player();
+        boosts.trigger_opponent();
+        assert!(boosts.is_player_active());
+        assert!(boosts.is_opponent_active());
+        assert_eq!(boosts.player_frames, SHIELD_BOOST_FRAMES);
+        assert_eq!(boosts.opponent_frames, SHIELD_BOOST_FRAMES);
+
+        for _ in 0..SHIELD_BOOST_FRAMES {
+            boosts.tick();
+        }
+
+        assert!(!boosts.is_player_active());
+        assert!(!boosts.is_opponent_active());
     }
 }
