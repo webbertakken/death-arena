@@ -146,6 +146,29 @@ jobs:
       - name: Cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bevy deps + LLD linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os }}-base
+
+      - name: Check Rust docs (no broken intra-doc links)
+        run: bash scripts/check_rust_docs.sh
+
   guards:
     name: Quality guards
     runs-on: ubuntu-latest

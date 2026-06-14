@@ -35,6 +35,15 @@ ERROR
   exit 1
 fi
 
+if ! grep -Fq "bash scripts/check_rust_docs.sh" "${workflow}"; then
+  cat >&2 <<'ERROR'
+CI must validate the crate documentation builds with rustdoc warnings denied, so
+a renamed or removed item cannot silently break an intra-doc link.
+Add a step that runs: bash scripts/check_rust_docs.sh
+ERROR
+  exit 1
+fi
+
 # The guard scripts that gate commits locally must also run in CI, so the same
 # integrity rules (no unsafe, strict shell scripts, intact workflows) are
 # enforced on every push and pull request, not just before a local commit.
