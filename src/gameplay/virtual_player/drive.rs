@@ -3987,6 +3987,25 @@ mod tests {
     }
 
     #[test]
+    fn carried_flag_pulls_a_disciplined_escort_onto_a_shield() {
+        // The defensive mirror of the getaway sabotage: while a teammate runs the
+        // enemy flag home (fragile, double ram bleed) a healthy escort-team would
+        // normally leave a flat-priced shield, but the getaway lift makes it break
+        // off to armour the run even under closing-time discipline.
+        let shield_y = disciplined_escort_detour_y(PickupKind::Shield);
+        let cash_y = disciplined_escort_detour_y(PickupKind::Cash);
+
+        assert!(
+            shield_y > 0.0,
+            "an escort must break off onto the shield to armour its carrier's run home, y={shield_y}"
+        );
+        assert!(
+            cash_y.abs() < 1e-3,
+            "a disciplined escort must leave a cash bag and hold its escort route, y={cash_y}"
+        );
+    }
+
+    #[test]
     fn nitro_boost_increases_virtual_player_distance() {
         let normal_y = one_frame_ai_y(AiTeam::Red, None);
         let boosted_y = one_frame_ai_y(AiTeam::Red, Some(NitroBoosts::trigger_opponent));

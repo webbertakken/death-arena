@@ -65,6 +65,34 @@ const _: () = assert!(
     SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY > PickupKind::Nitro.virtual_player_priority()
 );
 
+/// Tactical value a team places on a shield while one of its own cars is hauling
+/// the enemy flag home.
+///
+/// The defensive companion to [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`]: a
+/// flag carrier's team bleeds ram damage twice as fast
+/// ([`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]), so the run
+/// home is a real gauntlet. Where a getaway sabotage slows the *pursuers* closing
+/// on the carrier, a shield halves every ram the fragile carrier itself eats
+/// ([`crate::gameplay::combat::SHIELD_DAMAGE_MULTIPLIER`]), the more direct cover
+/// for the run. Pitched a notch above the getaway sabotage for that directness,
+/// yet below a wrecked team's shield panic so raw survival still wins, and folded
+/// in with `max` (see [`PickupKind::virtual_player_priority_for_context`]) so a
+/// battered carrier-team keeps its even higher integrity-scaled value.
+pub const SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY: u32 = 154;
+
+/// Armouring the carrier's run must edge out the getaway sabotage's pursuer-slow,
+/// enforced at compile time, so a carrying team reaches for the breather that
+/// protects the carrier directly before the one that only slows its chasers.
+const _: () = assert!(
+    SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY > SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY
+);
+
+/// A getaway shield must stay below a wrecked team's shield panic, enforced at
+/// compile time, so raw survival still tops covering a run while the integrity
+/// `max` keeps a battered carrier-team's higher value intact.
+const _: () =
+    assert!(SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY < SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY);
+
 /// The classic Death Rally trackside collectibles a car can drive over.
 ///
 /// Each kind awards a cash bounty when picked up; richer per-kind effects
@@ -139,16 +167,20 @@ impl PickupKind {
     /// durability and the two flag situations in flight.
     ///
     /// Folds the durability-driven pricing ([`Self::virtual_player_priority_for_integrity`])
-    /// together with the two flag threats that lift a sabotage above its own wear:
+    /// together with the two flag situations in flight:
     /// - `enemy_holds_our_flag`: a live steal turns a sabotage into a tool to
     ///   chase the thief down, so it jumps to
     ///   [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`];
     /// - `we_hold_enemy_flag`: our own carrier running the enemy flag home turns a
     ///   sabotage into getaway cover (slow the pursuers), so it jumps to
-    ///   [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`].
+    ///   [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`], and turns a shield into
+    ///   getaway armour for the fragile carrier, so it is raised to at least
+    ///   [`SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`] (folded in with `max` so a
+    ///   battered carrier-team keeps its higher integrity-scaled survival value).
     ///
     /// Defending an in-flight steal takes precedence over covering our own run, so
-    /// a team caught in a double steal prices the sabotage at the chase value.
+    /// a team caught in a double steal prices the sabotage at the chase value (a
+    /// shield still armours the run, since the carrier is fragile either way).
     /// Every other case keeps the integrity-scaled price.
     #[must_use]
     pub fn virtual_player_priority_for_context(
@@ -160,6 +192,13 @@ impl PickupKind {
         match self {
             Self::Sabotage if enemy_holds_our_flag => SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY,
             Self::Sabotage if we_hold_enemy_flag => SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            // Our own carrier running the enemy flag home is fragile (double ram
+            // bleed), so a shield becomes getaway armour: raise it to at least the
+            // getaway floor, but never below the higher value a battered team's own
+            // wear already prices it at.
+            Self::Shield if we_hold_enemy_flag => self
+                .virtual_player_priority_for_integrity(integrity_fraction)
+                .max(SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY),
             other => other.virtual_player_priority_for_integrity(integrity_fraction),
         }
     }
@@ -376,23 +415,114 @@ mod tests {
     }
 
     #[test]
-    fn stolen_flag_only_lifts_sabotage_not_other_pickups() {
-        for kind in [
-            PickupKind::Cash,
-            PickupKind::Repair,
-            PickupKind::Nitro,
-            PickupKind::Shield,
-        ] {
+    fn a_flag_in_flight_leaves_cash_repair_and_nitro_untouched() {
+        // Only the two contextual CTF tools (sabotage, shield) react to a flag in
+        // flight; the pure economy/speed grabs keep their plain pricing whatever is
+        // being stolen or carried.
+        for kind in [PickupKind::Cash, PickupKind::Repair, PickupKind::Nitro] {
             for fraction in [1.0, 0.5, 0.0] {
-                for we_carry in [false, true] {
-                    assert_eq!(
-                        kind.virtual_player_priority_for_context(fraction, true, we_carry),
-                        kind.virtual_player_priority_for_integrity(fraction),
-                        "a flag in flight only changes how a team values a sabotage, not a {kind:?}"
-                    );
+                for enemy_holds_our_flag in [false, true] {
+                    for we_carry in [false, true] {
+                        assert_eq!(
+                            kind.virtual_player_priority_for_context(
+                                fraction,
+                                enemy_holds_our_flag,
+                                we_carry
+                            ),
+                            kind.virtual_player_priority_for_integrity(fraction),
+                            "a flag in flight must not change how a team values a {kind:?}"
+                        );
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn carrying_the_enemy_flag_lifts_shield_into_getaway_armour() {
+        let calm = PickupKind::Shield.virtual_player_priority_for_context(1.0, false, false);
+        let armouring = PickupKind::Shield.virtual_player_priority_for_context(1.0, false, true);
+        assert_eq!(
+            calm,
+            PickupKind::Shield.virtual_player_priority_for_integrity(1.0),
+            "with no flag of ours in flight a shield keeps its integrity-scaled value"
+        );
+        assert_eq!(
+            armouring, SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "a healthy carrier-team prices a shield as getaway armour for the run home"
+        );
+        assert!(
+            armouring > calm,
+            "hauling the enemy flag home must make a shield more valuable: {calm} -> {armouring}"
+        );
+    }
+
+    #[test]
+    fn getaway_shield_justifies_a_wide_detour_above_nitro() {
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+        let armouring = PickupKind::Shield.virtual_player_priority_for_context(1.0, false, true);
+        assert!(
+            armouring >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a team must break off a committed run to armour the fragile carrier: {armouring}"
+        );
+        assert!(
+            armouring > PickupKind::Nitro.virtual_player_priority(),
+            "protecting the fragile carrier should edge out raw escort speed: {armouring}"
+        );
+    }
+
+    #[test]
+    fn getaway_shield_edges_out_the_getaway_sabotage() {
+        let shield = PickupKind::Shield.virtual_player_priority_for_context(1.0, false, true);
+        let sabotage = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false, true);
+        assert!(
+            shield > sabotage,
+            "armouring the carrier directly should edge out merely slowing its pursuers: \
+             shield={shield} sabotage={sabotage}"
+        );
+    }
+
+    #[test]
+    fn getaway_armour_never_lowers_a_battered_carrier_teams_panic_value() {
+        // The `max` fold means a battered carrier-team keeps its higher
+        // integrity-scaled survival value rather than being dragged down to the
+        // flat getaway floor: a wrecked team panics for the shield exactly as hard
+        // whether or not it happens to be carrying.
+        for fraction in [0.0, 0.1, 0.2, 0.3] {
+            let armouring =
+                PickupKind::Shield.virtual_player_priority_for_context(fraction, false, true);
+            let panic = PickupKind::Shield.virtual_player_priority_for_integrity(fraction);
+            assert!(
+                armouring >= panic,
+                "getaway armour must never price a battered carrier-team's shield below its \
+                 survival value: {armouring} < {panic}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stolen_flag_alone_does_not_lift_a_shield() {
+        // Defending against a steal (an enemy holds our flag) is a chase, not a run:
+        // the shield only becomes getaway armour once one of our own cars is hauling
+        // the enemy flag home.
+        for fraction in [1.0, 0.5, 0.0] {
+            assert_eq!(
+                PickupKind::Shield.virtual_player_priority_for_context(fraction, true, false),
+                PickupKind::Shield.virtual_player_priority_for_integrity(fraction),
+                "defending a steal leaves a shield at its integrity-scaled value"
+            );
+        }
+    }
+
+    #[test]
+    fn a_double_steal_still_armours_our_own_carrier() {
+        // In a double steal our carrier is fragile and running just the same, so the
+        // shield is still raised to getaway armour even while our flag is also stolen.
+        let armouring = PickupKind::Shield.virtual_player_priority_for_context(1.0, true, true);
+        assert_eq!(
+            armouring, SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "a double steal must still armour our own fragile carrier's run"
+        );
     }
 
     #[test]
