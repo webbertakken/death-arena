@@ -32,7 +32,7 @@ mod tests {
             .id()
     }
 
-    fn spawn_wheels(app: &mut App, player_entity: Entity) -> (Entity, Entity) {
+    fn spawn_wheels(app: &mut App, _player_entity: Entity) -> (Entity, Entity) {
         let left_wheel_id = app.world.spawn((FrontLeftWheel, Transform::default())).id();
         let right_wheel_id = app
             .world

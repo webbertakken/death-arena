@@ -39,14 +39,10 @@ pub fn car_movement_system(
     let Ok((player_entity, player, mut transform)) = query.get_single_mut() else {
         return;
     };
-    let Ok((front_left_wheel, mut front_left_wheel_transform)) =
-        front_left_wheel_query.get_single_mut()
-    else {
+    let Ok((_, mut front_left_wheel_transform)) = front_left_wheel_query.get_single_mut() else {
         return;
     };
-    let Ok((front_right_wheel, mut front_right_wheel_transform)) =
-        front_right_wheel_query.get_single_mut()
-    else {
+    let Ok((_, mut front_right_wheel_transform)) = front_right_wheel_query.get_single_mut() else {
         return;
     };
 

@@ -1,4 +1,3 @@
-use crate::gameplay::player::Player;
 use bevy::prelude::*;
 use bevy_kira_audio::prelude::*;
 use std::time::Duration;
@@ -6,12 +5,7 @@ use std::time::Duration;
 #[derive(Resource)]
 pub struct SfxEngineRevving(Handle<AudioInstance>);
 
-pub fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    audio: Res<Audio>,
-    player_query: Query<&Transform, With<Player>>,
-) {
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
     let engine_sound: Handle<AudioSource> = asset_server.load("sfx/car/engine.ogg");
     // Engine
     let engine_revving_handle = audio.play(engine_sound).with_volume(0.0).looped().handle();
@@ -20,7 +14,6 @@ pub fn setup(
 
 pub fn engine_revving_system(
     keyboard_input: Res<Input<KeyCode>>,
-    player_query: Query<&Transform, With<Player>>,
     handle: Res<SfxEngineRevving>,
     mut audio_instances: ResMut<Assets<AudioInstance>>,
 ) {

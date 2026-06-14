@@ -169,3 +169,6 @@ jobs:
 
       - name: Check Rust safety (no unsafe)
         run: bash scripts/check_rust_safety.sh
+
+      - name: Check Rust suppressions (no crate-wide unused/dead_code allow)
+        run: bash scripts/check_rust_suppressions.sh

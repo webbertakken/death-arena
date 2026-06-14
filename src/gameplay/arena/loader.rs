@@ -1,7 +1,6 @@
 use crate::gameplay::arena::scene::Scene;
 use bevy::prelude::*;
 
-use bevy_kira_audio::Audio;
 use rand::random;
 
 struct ArenaData {
@@ -11,7 +10,7 @@ struct ArenaData {
 #[derive(Component)]
 pub struct Arena;
 
-pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, audio: Res<Audio>) {
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let arenas = [ArenaData {
         path: "textures/church-ctf.2dtf".to_string(),
     }];
