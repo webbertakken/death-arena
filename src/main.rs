@@ -10,7 +10,6 @@ use app::{init::InitPlugin, AppPlugins};
 use bevy::prelude::*;
 
 use crate::app::init::default_plugins::Configure;
-// use bevy_inspector_egui::WorldInspectorPlugin;
 use gameplay::GameplayPlugins;
 
 pub mod app;
@@ -49,9 +48,6 @@ fn main() {
     game.add_plugins(AppPlugins);
     game.add_plugins(MenuPlugins);
     game.add_plugins(GameplayPlugins);
-
-    // Misc
-    // game.add_plugin(WorldInspectorPlugin::new());
 
     // Run the app
     game.run();
