@@ -185,9 +185,11 @@ pub struct DrivingChoices<'a> {
     pub player_pursuit_radius: f32,
     /// Closing-time clutch play: when set, a car on a CTF objective only breaks
     /// off for a pickup genuinely worth a wide detour (nitro or a battered team's
-    /// survival grab), never a mere cash bag, so a team racing the clock commits
-    /// to scoring instead of sightseeing. See [`closing_time_detour_min_priority`].
-    pub commit_to_objective: bool,
+    /// survival grab), never a mere cash bag. Holds for every team racing the
+    /// clock, whether it is committing to attack (not ahead) or protecting a lead
+    /// (ahead), so neither side sightsees for cash. See
+    /// [`closing_time_detour_min_priority`].
+    pub closing_time_discipline: bool,
 }
 
 #[must_use]
@@ -627,7 +629,7 @@ fn pickup_detour(
     }
 
     let target_distance_sq = position.distance_squared(target.position());
-    let min_priority = closing_time_detour_min_priority(choices.commit_to_objective);
+    let min_priority = closing_time_detour_min_priority(choices.closing_time_discipline);
     best_pickup(
         position,
         choices.pickups,
@@ -649,13 +651,13 @@ fn pickup_detour(
 /// Minimum pickup priority that still justifies a CTF detour this frame.
 ///
 /// In normal play a car breaks off its objective for any pickup worth the base
-/// [`CTF_PICKUP_DETOUR_MIN_PRIORITY`]. Once a team commits to the objective in
+/// [`CTF_PICKUP_DETOUR_MIN_PRIORITY`]. Once a team disciplines its detours in
 /// closing time the bar rises to [`CTF_WIDE_DETOUR_MIN_PRIORITY`], so only a
 /// pickup already worth a wide gamble (nitro's race pressure or a battered team's
 /// integrity-scaled repair/shield) is worth the time, while a mere cash bag is
 /// left on the track in favour of racing the flag home.
-const fn closing_time_detour_min_priority(commit_to_objective: bool) -> u32 {
-    if commit_to_objective {
+const fn closing_time_detour_min_priority(closing_time_discipline: bool) -> u32 {
+    if closing_time_discipline {
         CTF_WIDE_DETOUR_MIN_PRIORITY
     } else {
         CTF_PICKUP_DETOUR_MIN_PRIORITY
@@ -827,7 +829,7 @@ mod tests {
             pickup_pursuit_radius: 100.0,
             player_position,
             player_pursuit_radius,
-            commit_to_objective: false,
+            closing_time_discipline: false,
         }
     }
 
@@ -1275,7 +1277,7 @@ mod tests {
             choose_driving_target(
                 Vec2::ZERO,
                 DrivingChoices {
-                    commit_to_objective: true,
+                    closing_time_discipline: true,
                     ..choices(&waypoints, 0, Some(flag), &cash, None, 0.0)
                 },
             ),
@@ -1291,7 +1293,7 @@ mod tests {
             choose_driving_target(
                 Vec2::ZERO,
                 DrivingChoices {
-                    commit_to_objective: true,
+                    closing_time_discipline: true,
                     ..choices(&waypoints, 0, Some(flag), &nitro, None, 0.0)
                 },
             ),
@@ -1316,7 +1318,7 @@ mod tests {
             choose_driving_target(
                 Vec2::ZERO,
                 DrivingChoices {
-                    commit_to_objective: true,
+                    closing_time_discipline: true,
                     ..choices(&waypoints, 0, Some(flag), &repair, None, 0.0)
                 },
             ),

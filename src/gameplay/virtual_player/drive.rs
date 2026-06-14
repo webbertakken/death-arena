@@ -72,9 +72,10 @@ pub fn virtual_player_drive_system(
         return;
     }
     let captures = captures.as_deref().copied().unwrap_or_default();
-    // Closing-time clutch play: in the final stretch of a round each team that is
-    // not ahead on captures commits to the objective and stops chasing cash.
-    let commitment = objective_commitment(match_clock.as_deref(), captures);
+    // Closing-time discipline: in the final stretch of a round every team leaves
+    // cash bags on the track, whether it is committing to attack (not ahead) or
+    // protecting a lead (ahead). Only a real edge is worth breaking off for.
+    let discipline = closing_time_pickup_discipline(match_clock.as_deref(), captures);
 
     let player = player_query
         .get_single()
@@ -101,7 +102,7 @@ pub fn virtual_player_drive_system(
         &visible_pickups,
         integrity.as_deref(),
         player_position,
-        commitment,
+        discipline,
     );
 
     for (entity, mut ai, mut transform) in &mut query {
@@ -122,7 +123,7 @@ pub fn virtual_player_drive_system(
                 pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                 player_position: player_position_for_team(ai.team, player_position),
                 player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
-                commit_to_objective: commitment.for_team(ai.team),
+                closing_time_discipline: discipline.for_team(ai.team),
             },
         ) else {
             continue;
@@ -400,13 +401,52 @@ fn lead_protection(clock: Option<&MatchClock>, captures: CaptureScore) -> LeadPr
     }
 }
 
+/// Per-team flag for closing-time pickup discipline: should this team's cars
+/// leave cash bags on the track and only break off an objective for a real edge?
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ClosingTimePickupDiscipline {
+    blue: bool,
+    red: bool,
+}
+
+impl ClosingTimePickupDiscipline {
+    const fn for_team(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.blue,
+            AiTeam::Red => self.red,
+        }
+    }
+}
+
+/// Decides which teams discipline their pickup detours given the round clock and
+/// scoreline.
+///
+/// In the closing stretch every team is either committing to attack (not ahead,
+/// see [`objective_commitment`]) or protecting a lead (ahead, see
+/// [`lead_protection`]); with the clock running out a cash bag is a distraction
+/// either way, so the discipline is the union of the two complementary
+/// predicates and a closing-time leader stops farming cash just as a trailing
+/// team does. Outside the closing stretch neither holds, so no team disciplines
+/// and cash bags are fair game again.
+fn closing_time_pickup_discipline(
+    clock: Option<&MatchClock>,
+    captures: CaptureScore,
+) -> ClosingTimePickupDiscipline {
+    let commit = objective_commitment(clock, captures);
+    let protect = lead_protection(clock, captures);
+    ClosingTimePickupDiscipline {
+        blue: commit.for_team(AiTeam::Blue) || protect.for_team(AiTeam::Blue),
+        red: commit.for_team(AiTeam::Red) || protect.for_team(AiTeam::Red),
+    }
+}
+
 fn claimed_pickups_for_virtual_players(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
     pickups: &[ArenaPickup],
     integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
-    commitment: ObjectiveCommitment,
+    discipline: ClosingTimePickupDiscipline,
 ) -> Vec<(Entity, PickupTarget)> {
     let mut ordered_pickups = pickups.to_vec();
     ordered_pickups.sort_by(|a, b| compare_pickup_claim_priority(*a, *b, integrity));
@@ -423,7 +463,7 @@ fn claimed_pickups_for_virtual_players(
                 integrity,
                 player_position,
                 &claimed_entities,
-                commitment,
+                discipline,
             )?;
             claimed_entities.push(entity);
             Some((entity, price_pickup_for_team(pickup, integrity, team)))
@@ -439,7 +479,7 @@ fn closest_eligible_pickup_claimant(
     integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
     claimed_entities: &[Entity],
-    commitment: ObjectiveCommitment,
+    discipline: ClosingTimePickupDiscipline,
 ) -> Option<(Entity, AiTeam)> {
     let (entity, team, _) = query
         .iter()
@@ -461,7 +501,7 @@ fn closest_eligible_pickup_claimant(
                     pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                     player_position: player_position_for_team(ai.team, player_position),
                     player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
-                    commit_to_objective: commitment.for_team(ai.team),
+                    closing_time_discipline: discipline.for_team(ai.team),
                 },
             );
 
@@ -1324,6 +1364,71 @@ mod tests {
     }
 
     #[test]
+    fn a_leading_team_also_skips_a_cash_detour_in_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, MATCH_TIME_LIMIT_FRAMES};
+
+        // The mirror of the committing-team detour test for the side that is
+        // ahead. A lone red attacker, *leading* on captures, is assigned to steal
+        // the blue flag dead ahead, with a cash bag just inside the flag lane. A
+        // trailing team already leaves that bag (it commits); a leader running
+        // down the clock should too, rather than greedily farming cash on a lead
+        // it is about to win on. The lone car is never recalled to defend (the
+        // lead-defence guard never pulls a team's last car), so the only thing
+        // that can hold it off the bag is the broadened closing-time discipline.
+        fn attacker_x_after_one_frame(closing: bool) -> f32 {
+            let mut app = app_with_system();
+            // Red (opponents) leads, so it never "commits"; only the discipline
+            // that now also covers a protecting leader can leave the cash bag.
+            app.insert_resource(CaptureScore {
+                player: 0,
+                opponents: 1,
+            });
+            app.insert_resource(MatchClock {
+                frames_remaining: if closing { 10 } else { MATCH_TIME_LIMIT_FRAMES },
+                phase: MatchPhase::Regulation,
+            });
+
+            let attacker = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 2000.0)]);
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 800.0),
+                Vec3::new(0.0, 800.0, 0.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::new(0.0, -1000.0),
+                Vec3::new(0.0, -1000.0, 0.0),
+                None,
+            );
+            app.world.spawn((
+                Pickup {
+                    kind: PickupKind::Cash,
+                },
+                Transform::from_translation(Vec3::new(40.0, 80.0, 2.0)),
+            ));
+
+            app.update();
+
+            app.world.get::<Transform>(attacker).unwrap().translation.x
+        }
+
+        let detoured = attacker_x_after_one_frame(false);
+        let disciplined = attacker_x_after_one_frame(true);
+
+        assert!(
+            detoured > 0.1,
+            "outside closing time even a leader veers right for the free cash bag: {detoured}"
+        );
+        assert!(
+            disciplined.abs() < 1e-3,
+            "in closing time a leader leaves the cash and races the flag too: {disciplined}"
+        );
+    }
+
+    #[test]
     fn no_team_protects_a_lead_outside_closing_time() {
         use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
 
@@ -1408,6 +1513,88 @@ mod tests {
                     commit.for_team(team),
                     protect.for_team(team),
                     "in closing time a team either commits or protects, never both nor neither"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn closing_time_disciplines_both_the_leader_and_the_trailer() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        };
+        // Blue (player) leads Red (opponents): the leader protects, the trailer
+        // commits, yet in the closing stretch both leave cash bags on the track.
+        let discipline = closing_time_pickup_discipline(
+            Some(&clock),
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+        );
+        assert!(
+            discipline.for_team(AiTeam::Blue),
+            "the leader stops farming cash while it protects its lead"
+        );
+        assert!(
+            discipline.for_team(AiTeam::Red),
+            "the trailing team stops farming cash while it commits to attack"
+        );
+    }
+
+    #[test]
+    fn no_team_disciplines_its_detours_outside_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES + 1,
+            phase: MatchPhase::Regulation,
+        };
+        assert_eq!(
+            closing_time_pickup_discipline(
+                Some(&clock),
+                CaptureScore {
+                    player: 2,
+                    opponents: 1,
+                },
+            ),
+            ClosingTimePickupDiscipline::default(),
+            "with time to spare a cash bag is fair game for either side"
+        );
+        assert_eq!(
+            closing_time_pickup_discipline(
+                None,
+                CaptureScore {
+                    player: 2,
+                    opponents: 1,
+                },
+            ),
+            ClosingTimePickupDiscipline::default(),
+            "an unstarted match (no clock) plays the field as normal"
+        );
+    }
+
+    #[test]
+    fn closing_time_discipline_is_the_union_of_commitment_and_protection() {
+        use crate::gameplay::ctf::MatchPhase;
+
+        let clock = MatchClock {
+            frames_remaining: 1,
+            phase: MatchPhase::SuddenDeath,
+        };
+        for (player, opponents) in [(0, 0), (2, 1), (1, 2)] {
+            let captures = CaptureScore { player, opponents };
+            let commit = objective_commitment(Some(&clock), captures);
+            let protect = lead_protection(Some(&clock), captures);
+            let discipline = closing_time_pickup_discipline(Some(&clock), captures);
+            for team in [AiTeam::Blue, AiTeam::Red] {
+                assert_eq!(
+                    discipline.for_team(team),
+                    commit.for_team(team) || protect.for_team(team),
+                    "discipline must be the per-team union of commitment and protection"
                 );
             }
         }
