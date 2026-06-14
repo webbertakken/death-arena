@@ -50,6 +50,15 @@ pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
 /// Priority at which a pickup justifies the wider CTF detour lane.
 pub const CTF_WIDE_DETOUR_MIN_PRIORITY: u32 = 150;
 
+/// Team durability fraction (`0.0`..=`1.0`) at or below which a battered team
+/// breaks one car off the field and sends it home to pit-recover.
+///
+/// Sits in the same "actively battered" band the integrity-scaled repair and
+/// shield pickup tiers already react to (both treat `<= 0.35` as hard-pressed),
+/// so a team ground this low patches up at its own base even when no repair
+/// pickup is on its lane, the reliable recovery the home-base pit opened up.
+pub const PIT_RETREAT_INTEGRITY_FRACTION: f32 = 0.30;
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -229,6 +238,56 @@ pub fn choose_capture_the_flag_target(
 
 fn own_flag_is_dropped(own_flag: &FlagTarget) -> bool {
     own_flag.holder.is_none() && own_flag.position.distance_squared(own_flag.home) > f32::EPSILON
+}
+
+/// A virtual player a battered team could send home to pit-recover.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PitRetreatCandidate {
+    pub entity: Entity,
+    pub position: Vec2,
+    pub home: Vec2,
+    pub carries_enemy_flag: bool,
+}
+
+/// Picks the single car a battered team breaks off to its home-base pit, or
+/// `None` when no retreat is warranted.
+///
+/// Closes the loop the home-base pit recovery opened: rather than only healing
+/// passively when an objective happens to bring a car home, a team ground to
+/// [`PIT_RETREAT_INTEGRITY_FRACTION`] or below actively sends its home-most car
+/// to the pit to patch up while the rest keep playing. Stateless and
+/// deterministic: the car nearest its own base is chosen each frame (it is the
+/// cheapest to pull and, once it commits homeward, stays nearest, so the choice
+/// is stable), with `x` then `y` as the tie-breaker, mirroring the fallback-role
+/// coordination.
+///
+/// Two guards keep the retreat from backfiring:
+/// - a flag carrier is never pulled off its capture run (it already heals at
+///   home as it scores), so only non-carriers are eligible;
+/// - at least one car must stay on duty, so a lone car never abandons the field
+///   just to heal.
+#[must_use]
+pub fn pit_retreat_car(
+    integrity_fraction: f32,
+    candidates: &[PitRetreatCandidate],
+) -> Option<Entity> {
+    if integrity_fraction > PIT_RETREAT_INTEGRITY_FRACTION {
+        return None;
+    }
+    if candidates.len() < 2 {
+        return None;
+    }
+    candidates
+        .iter()
+        .filter(|candidate| !candidate.carries_enemy_flag)
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(a.home)
+                .partial_cmp(&b.position.distance_squared(b.home))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare_positions(a.position, b.position))
+        })
+        .map(|candidate| candidate.entity)
 }
 
 /// Nearest enemy threat to `anchor` within `radius`.
@@ -1857,5 +1916,116 @@ mod tests {
             target,
             Some(DrivingTarget::EnemyFlag(Vec2::new(-450.0, 20.0)))
         );
+    }
+
+    fn pit_candidate(entity: u32, position: Vec2, home: Vec2) -> PitRetreatCandidate {
+        PitRetreatCandidate {
+            entity: Entity::from_raw(entity),
+            position,
+            home,
+            carries_enemy_flag: false,
+        }
+    }
+
+    #[test]
+    fn pit_retreat_sends_no_one_when_the_team_is_healthy() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(450.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(pit_retreat_car(0.5, &candidates), None);
+    }
+
+    #[test]
+    fn pit_retreat_sends_the_home_most_car_when_battered() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(-200.0, 0.0), home),
+            pit_candidate(2, Vec2::new(450.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, &candidates),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn pit_retreat_triggers_exactly_at_the_threshold() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(450.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, &candidates),
+            Some(Entity::from_raw(1))
+        );
+        let just_above = PIT_RETREAT_INTEGRITY_FRACTION + 0.001;
+        assert_eq!(pit_retreat_car(just_above, &candidates), None);
+    }
+
+    #[test]
+    fn pit_retreat_never_pulls_a_flag_carrier() {
+        let home = Vec2::new(500.0, 0.0);
+        let carrier = PitRetreatCandidate {
+            entity: Entity::from_raw(1),
+            position: Vec2::new(480.0, 0.0),
+            home,
+            carries_enemy_flag: true,
+        };
+        let defender = pit_candidate(2, Vec2::new(-100.0, 0.0), home);
+
+        // The carrier is closer to home, but it keeps hauling: the non-carrier
+        // is the one sent to the pit.
+        assert_eq!(
+            pit_retreat_car(0.1, &[carrier, defender]),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn pit_retreat_keeps_the_last_car_on_duty() {
+        let home = Vec2::new(500.0, 0.0);
+        let lone = [pit_candidate(1, Vec2::new(480.0, 0.0), home)];
+
+        assert_eq!(pit_retreat_car(0.05, &lone), None);
+    }
+
+    #[test]
+    fn pit_retreat_returns_none_when_every_car_carries_a_flag() {
+        let home = Vec2::new(500.0, 0.0);
+        let carriers = [
+            PitRetreatCandidate {
+                entity: Entity::from_raw(1),
+                position: Vec2::new(480.0, 0.0),
+                home,
+                carries_enemy_flag: true,
+            },
+            PitRetreatCandidate {
+                entity: Entity::from_raw(2),
+                position: Vec2::new(-100.0, 0.0),
+                home,
+                carries_enemy_flag: true,
+            },
+        ];
+
+        assert_eq!(pit_retreat_car(0.05, &carriers), None);
+    }
+
+    #[test]
+    fn pit_retreat_breaks_distance_ties_deterministically() {
+        let home = Vec2::ZERO;
+        // Both cars sit the same distance from home; the lower `x` then `y`
+        // wins, matching `compare_positions`.
+        let candidates = [
+            pit_candidate(1, Vec2::new(100.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-100.0, 0.0), home),
+        ];
+
+        assert_eq!(pit_retreat_car(0.2, &candidates), Some(Entity::from_raw(2)));
     }
 }

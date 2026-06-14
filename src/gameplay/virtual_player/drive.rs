@@ -5,7 +5,8 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    next_waypoint, AiTeam, DrivingChoices, DrivingTarget, FlagTarget, PickupTarget, ThreatTarget,
+    next_waypoint, pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget, FlagTarget,
+    PickupTarget, PitRetreatCandidate, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -60,6 +61,7 @@ pub fn virtual_player_drive_system(
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
+    let pit_retreats = pit_retreat_targets(&query, &flags, integrity.as_deref());
     let teammate_positions = virtual_player_positions(&query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
@@ -72,10 +74,18 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target = assigned_ctf_targets
+        // A battered team's home-most car retreats to its pit, overriding
+        // whatever CTF role it would otherwise take.
+        let ctf_target = pit_retreats
             .iter()
-            .find(|(assigned_entity, _)| *assigned_entity == entity)
-            .and_then(|(_, target)| *target);
+            .find(|(retreat_entity, _)| *retreat_entity == entity)
+            .map(|(_, target)| *target)
+            .or_else(|| {
+                assigned_ctf_targets
+                    .iter()
+                    .find(|(assigned_entity, _)| *assigned_entity == entity)
+                    .and_then(|(_, target)| *target)
+            });
         let entity_pickups: Vec<PickupTarget> = claimed_pickups
             .iter()
             .filter_map(|(assigned_entity, pickup)| (*assigned_entity == entity).then_some(*pickup))
@@ -450,6 +460,48 @@ fn assigned_ctf_targets(
     assign_ctf_targets(&candidates, flags)
 }
 
+/// Resolves which battered teams send a car home to pit-recover this frame.
+///
+/// Each team is priced against its own vehicle integrity: a team at or below
+/// [`crate::gameplay::virtual_player::ai::PIT_RETREAT_INTEGRITY_FRACTION`] breaks
+/// off its home-most non-carrier (see [`pit_retreat_car`]), which then drives
+/// home and parks in the base zone to recover. Without an integrity resource (no
+/// combat loaded) no team ever retreats.
+fn pit_retreat_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    integrity: Option<&VehicleIntegrity>,
+) -> Vec<(Entity, DrivingTarget)> {
+    let Some(integrity) = integrity else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    for team in [AiTeam::Blue, AiTeam::Red] {
+        let Some(home) = flags
+            .iter()
+            .find(|flag| flag.team == team)
+            .map(|flag| flag.home)
+        else {
+            continue;
+        };
+        let candidates: Vec<PitRetreatCandidate> = query
+            .iter()
+            .filter(|(_, virtual_player, _)| virtual_player.team == team)
+            .map(|(entity, _, transform)| PitRetreatCandidate {
+                entity,
+                position: transform.translation.xy(),
+                home,
+                carries_enemy_flag: carries_enemy_flag(entity, team, flags),
+            })
+            .collect();
+        if let Some(entity) = pit_retreat_car(integrity.fraction_for_team(team), &candidates) {
+            targets.push((entity, DrivingTarget::HomeBase(home)));
+        }
+    }
+    targets
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CtfTargetCandidate {
     entity: Entity,
@@ -758,6 +810,7 @@ const fn player_position_for_team(team: AiTeam, player_position: Option<Vec2>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::combat::MAX_INTEGRITY;
     use crate::gameplay::ctf::{CtfFlag, CtfMatchWinner, FlagTeam};
     use crate::gameplay::virtual_player::VirtualPlayer;
 
@@ -908,6 +961,97 @@ mod tests {
         assert!(
             (carrier_y - free_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
             "carrier should drive at the flag-carrier multiplier: free={free_y}, carrier={carrier_y}"
+        );
+    }
+
+    #[test]
+    fn a_battered_team_parks_its_home_most_car_in_the_pit() {
+        // Red home sits at the origin and the blue (enemy) flag straight ahead
+        // at +Y, so a healthy red car drives forward to attack it. One frame is
+        // run twice: once healthy, once battered.
+        fn run(opponent_integrity: f32) -> (f32, f32) {
+            let mut app = app_with_system();
+            app.insert_resource(VehicleIntegrity {
+                player: MAX_INTEGRITY,
+                opponent: opponent_integrity,
+            });
+            // The home-most car spawns exactly on its red base.
+            let near = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            // A distant second red car keeps the team above the lone-car guard.
+            let far = spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 1000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::ZERO,
+                Vec3::new(0.0, 0.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 1000.0),
+                Vec3::new(0.0, 1000.0, 4.0),
+                None,
+            );
+
+            app.update();
+
+            let near_y = app.world.get::<Transform>(near).unwrap().translation.y;
+            let far_y = app.world.get::<Transform>(far).unwrap().translation.y;
+            (near_y, far_y)
+        }
+
+        let (healthy_near, _) = run(MAX_INTEGRITY);
+        let (battered_near, battered_far) = run(20.0);
+
+        assert!(
+            healthy_near > 1.0,
+            "a healthy home car should attack, not idle: {healthy_near}"
+        );
+        assert!(
+            battered_near.abs() < 0.001,
+            "a battered home-most car should park in its pit: {battered_near}"
+        );
+        assert!(
+            (battered_far - 1500.0).abs() > 0.001,
+            "the distant car keeps playing rather than retreating: {battered_far}"
+        );
+    }
+
+    #[test]
+    fn a_lone_battered_car_keeps_playing_instead_of_retreating() {
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 10.0,
+        });
+        // A single red car on its own base, with the enemy flag straight ahead.
+        let lone = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::ZERO,
+            Vec3::new(0.0, 0.0, 4.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, 1000.0),
+            Vec3::new(0.0, 1000.0, 4.0),
+            None,
+        );
+
+        app.update();
+
+        let y = app.world.get::<Transform>(lone).unwrap().translation.y;
+        assert!(
+            y > 1.0,
+            "a lone battered car must keep attacking rather than abandon the field: {y}"
         );
     }
 
