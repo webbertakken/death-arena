@@ -219,12 +219,46 @@ pub const PINCER_RAM_DAMAGE_PER_FRAME: f32 = 0.3;
 /// A pincer must out-bite a lone scrape, enforced at compile time, so being
 /// ganged up on always beats trading paint with a single foe.
 const _: () = assert!(PINCER_RAM_DAMAGE_PER_FRAME > RAM_DAMAGE_PER_FRAME);
-/// Raw numbers must not out-bite an aimed charge, enforced at compile time, so a
-/// lined-up hit stays worth more than a mere mob with no commitment.
+/// The *minimum* (two-attacker) pincer must not out-bite an aimed charge,
+/// enforced at compile time, so a bare gang-up of two stays worth less than a
+/// lined-up hit. A larger swarm earns the right to surpass it via
+/// [`PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER`].
 const _: () = assert!(PINCER_RAM_DAMAGE_PER_FRAME < AGGRESSOR_RAM_DAMAGE_PER_FRAME);
 /// A pincer needs a genuine gang-up, enforced at compile time, so a single
 /// attacker never trips it.
 const _: () = assert!(PINCER_MIN_ATTACKERS >= 2);
+/// Extra durability a pincered car loses each frame for every enemy beyond the
+/// [`PINCER_MIN_ATTACKERS`]th piling in at once.
+///
+/// The base [`ram_damage`] scrape charges the *attacking* team once per attacker,
+/// so a three- or four-car swarm makes the attackers' own pool bleed more (three,
+/// four scrapes) while the lone victim bled a single flat pincer. A flat pincer
+/// therefore only partly rights the outnumbered asymmetry once a third car joins.
+/// Scaling the surrounded car's bite with the size of the swarm keeps its penalty
+/// in step: the more foes hem it in, the harder it is ground down, the classic
+/// Death Rally "they swarmed me" punishment deepening with every extra attacker.
+pub const PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER: f32 = 0.075;
+/// Most extra attackers (beyond [`PINCER_MIN_ATTACKERS`]) that still raise a
+/// pincer's bite.
+///
+/// Caps the swarm payday so a huge dogpile cannot deal unbounded wear, mirroring
+/// [`WRECK_STREAK_BONUS_CAP`]: attackers past this point still pincer, just at the
+/// capped top rate. With the per-extra step this tops a pincer out at
+/// [`PINCER_MAX_RAM_DAMAGE_PER_FRAME`].
+pub const PINCER_MAX_EXTRA_ATTACKERS: usize = 2;
+/// Most durability a single pincered car can lose per frame to the pincer bonus,
+/// reached once [`PINCER_MAX_EXTRA_ATTACKERS`] extra foes have piled in.
+pub const PINCER_MAX_RAM_DAMAGE_PER_FRAME: f32 =
+    pincer_ram_bonus(PINCER_MIN_ATTACKERS + PINCER_MAX_EXTRA_ATTACKERS);
+/// The swarm must actually scale the bite, enforced at compile time.
+const _: () = assert!(PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER > 0.0);
+/// There must be room for at least one extra attacker to matter, enforced at
+/// compile time, so the scaling is never a dead knob.
+const _: () = assert!(PINCER_MAX_EXTRA_ATTACKERS >= 1);
+/// Even a maxed-out swarm must stay under the earned nitro charge, enforced at
+/// compile time, so a boosted ram remains the single hardest source of wear and
+/// the swarm bonus stays bounded.
+const _: () = assert!(PINCER_MAX_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
 /// Fraction of incoming ram damage a shielded team still takes.
 ///
 /// The defensive counter to the all-offence ramming loop: while a team's shield
@@ -1026,17 +1060,55 @@ pub fn rear_end_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// The pincer bite a single surrounded car takes from `attacker_count` enemies
+/// hemming it in at once.
+///
+/// Below [`PINCER_MIN_ATTACKERS`] there is no pincer (just a ram, covered by the
+/// base scrape), so the bonus is zero. At the minimum it is
+/// [`PINCER_RAM_DAMAGE_PER_FRAME`]; every further attacker adds
+/// [`PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER`] up to [`PINCER_MAX_EXTRA_ATTACKERS`]
+/// extra, topping out at [`PINCER_MAX_RAM_DAMAGE_PER_FRAME`]. The single charge
+/// scales with the swarm but never stacks into one hit per attacker, mirroring
+/// the per-victim model of [`broadside_ram_damage`].
+///
+/// Accumulates the per-extra step without a `usize`-to-`f32` count cast (the
+/// pedantic clippy gate forbids it), keeping the module's near-zero-cast
+/// convention.
+#[must_use]
+pub const fn pincer_ram_bonus(attacker_count: usize) -> f32 {
+    if attacker_count < PINCER_MIN_ATTACKERS {
+        return 0.0;
+    }
+    let extra = attacker_count - PINCER_MIN_ATTACKERS;
+    let capped = if extra > PINCER_MAX_EXTRA_ATTACKERS {
+        PINCER_MAX_EXTRA_ATTACKERS
+    } else {
+        extra
+    };
+    // Accumulate the per-extra step by repeated addition: a small bounded loop
+    // that avoids a `usize`-to-`f32` count cast the pedantic clippy gate forbids.
+    let mut bonus = PINCER_RAM_DAMAGE_PER_FRAME;
+    let mut step = 0;
+    while step < capped {
+        bonus += PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER;
+        step += 1;
+    }
+    bonus
+}
+
 /// Computes the bonus ram damage cars hemmed in by a pincer of enemies take.
 ///
 /// A car is "pincered" when at least [`PINCER_MIN_ATTACKERS`] opposing cars sit
 /// within [`RAM_RADIUS`] at once: a gang-up with no lane left to escape. Every
-/// such car bleeds [`PINCER_RAM_DAMAGE_PER_FRAME`] into its *own* team's pool on
-/// top of the base [`ram_damage`] scrape, so being outnumbered at a point wears
-/// the surrounded team down faster, the Death Rally "they swarmed me" punishment.
-/// Charged once per surrounded car however many enemies pile in, mirroring
-/// [`broadside_ram_damage`]; the bonus rewards the converging team coordination
-/// the virtual-player brain already drives (massing defenders, the finish-off
-/// hunter) without needing the aim the directional bonuses demand.
+/// such car bleeds [`pincer_ram_bonus`] for the size of its swarm into its *own*
+/// team's pool on top of the base [`ram_damage`] scrape, so being outnumbered at
+/// a point wears the surrounded team down faster, and the more foes pile in the
+/// harder it is ground down, the Death Rally "they swarmed me" punishment.
+/// Charged once per surrounded car (the single charge scales with the swarm but
+/// never stacks per attacker), mirroring [`broadside_ram_damage`]; the bonus
+/// rewards the converging team coordination the virtual-player brain already
+/// drives (massing defenders, the finish-off hunter) without needing the aim the
+/// directional bonuses demand.
 #[must_use]
 pub fn pincer_ram_damage(cars: &[RamCar]) -> TeamDamage {
     let radius_sq = RAM_RADIUS * RAM_RADIUS;
@@ -1055,10 +1127,11 @@ pub fn pincer_ram_damage(cars: &[RamCar]) -> TeamDamage {
                     && other.position.distance_squared(victim.position) <= radius_sq
             })
             .count();
-        if attackers >= PINCER_MIN_ATTACKERS {
+        let bonus = pincer_ram_bonus(attackers);
+        if bonus > 0.0 {
             match victim.team {
-                AiTeam::Blue => damage.player += PINCER_RAM_DAMAGE_PER_FRAME,
-                AiTeam::Red => damage.opponent += PINCER_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Blue => damage.player += bonus,
+                AiTeam::Red => damage.opponent += bonus,
             }
         }
     }
@@ -2292,9 +2365,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pincer_lands_once_however_many_enemies_pile_in() {
-        // Three reds swarm one blue: the struck car bleeds a single pincer, not
-        // one per attacker (the per-victim model, mirroring the broadside bonus).
+    fn a_bigger_swarm_bites_harder_but_still_lands_once() {
+        // Three reds swarm one blue: the struck car bleeds a single, swarm-scaled
+        // pincer (the three-attacker bite), not one charge per attacker. The
+        // per-victim model holds (mirroring the broadside bonus), it just scales.
         let cars = [
             blue(Vec2::ZERO),
             red(Vec2::new(50.0, 0.0)),
@@ -2302,8 +2376,85 @@ mod tests {
             red(Vec2::new(0.0, 50.0)),
         ];
         let damage = pincer_ram_damage(&cars);
-        assert_near(damage.player, PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.player, pincer_ram_bonus(3));
+        assert!(
+            damage.player > PINCER_RAM_DAMAGE_PER_FRAME,
+            "a three-car swarm must out-bite a two-car pincer: {}",
+            damage.player
+        );
+        assert!(
+            damage.player < 3.0 * PINCER_RAM_DAMAGE_PER_FRAME,
+            "the scaled charge must not stack one full pincer per attacker: {}",
+            damage.player
+        );
         assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn pincer_bonus_is_zero_below_the_minimum_gang_up() {
+        assert_near(pincer_ram_bonus(0), 0.0);
+        assert_near(pincer_ram_bonus(PINCER_MIN_ATTACKERS - 1), 0.0);
+        assert_near(
+            pincer_ram_bonus(PINCER_MIN_ATTACKERS),
+            PINCER_RAM_DAMAGE_PER_FRAME,
+        );
+    }
+
+    #[test]
+    fn pincer_bonus_rises_with_every_extra_attacker() {
+        let two = pincer_ram_bonus(2);
+        let three = pincer_ram_bonus(3);
+        let four = pincer_ram_bonus(4);
+        assert_near(two, PINCER_RAM_DAMAGE_PER_FRAME);
+        // Each extra attacker adds exactly one per-extra step to the bite.
+        assert_near(two - PINCER_RAM_DAMAGE_PER_FRAME, 0.0);
+        assert_near(three - two, PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER);
+        assert_near(four - three, PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER);
+        assert!(three > two && four > three, "swarm bite must escalate");
+    }
+
+    #[test]
+    fn pincer_bonus_caps_at_the_swarm_ceiling() {
+        let max = PINCER_MAX_RAM_DAMAGE_PER_FRAME;
+        // One past the cap and a huge dogpile both land at the ceiling, no more.
+        let beyond_cap = PINCER_MIN_ATTACKERS + PINCER_MAX_EXTRA_ATTACKERS + 1;
+        assert_near(pincer_ram_bonus(beyond_cap), max);
+        assert_near(pincer_ram_bonus(64), max);
+        assert!(
+            max < NITRO_RAM_DAMAGE_PER_FRAME,
+            "even a maxed swarm must stay under the earned nitro charge: {max}"
+        );
+    }
+
+    #[test]
+    fn a_growing_swarm_grinds_the_victim_down_harder() {
+        // The same lone blue, hemmed in by two then three then four reds, bleeds a
+        // strictly heavier pincer each time another foe piles in.
+        let two = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ])
+        .player;
+        let three = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+        ])
+        .player;
+        let four = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+            red(Vec2::new(0.0, -50.0)),
+        ])
+        .player;
+        assert!(
+            three > two && four > three,
+            "the surrounded team must bleed more as the swarm grows: {two} {three} {four}"
+        );
     }
 
     #[test]
