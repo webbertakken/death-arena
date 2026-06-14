@@ -1,5 +1,6 @@
 use crate::gameplay::ctf::{
     CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, CAPTURES_TO_WIN, CAPTURE_CASH_BOUNTY,
+    FLAG_RETURN_CASH_BOUNTY,
 };
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
@@ -76,6 +77,27 @@ pub const MOST_WANTED_MAX_CAPTURE_LEAD: u32 = CAPTURES_TO_WIN - 1;
 const _: () = assert!(
     MOST_WANTED_MAX_CAPTURE_LEAD * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD < CAPTURE_CASH_BOUNTY
 );
+/// Extra cash a team banks for wrecking an enemy car that was hauling a flag.
+///
+/// The marquee defensive play in capture-the-flag: grinding down the car running
+/// a stolen flag home is the single most valuable wreck on the board, because it
+/// does double duty, it denies the imminent capture *and* knocks the flag loose
+/// for a turnover (the carrier already drops it on a wreck). The base
+/// [`WRECK_CASH_BOUNTY`] pays for any kill; this rewards aiming that kill at the
+/// runner who actually matters, so defending the run home is worth real money
+/// rather than a thankless chore. Paid on top of the base bounty, any rampage
+/// [`WRECK_STREAK_BONUS`], and the [`most_wanted_wreck_bonus`] leader bonus, and
+/// only when the wrecked car was carrying a flag the frame it fell. Priced above
+/// a [`FLAG_RETURN_CASH_BOUNTY`] (the next-best way to undo a steal) so cutting
+/// the carrier down out-earns mopping up the loose flag afterwards, yet below a
+/// [`CAPTURE_CASH_BOUNTY`] so denying a capture never out-pays scoring one.
+pub const CARRIER_TAKEDOWN_WRECK_BONUS: u32 = 100;
+/// A carrier takedown must out-earn a flag return, enforced at compile time, so
+/// cutting the runner down beats merely tidying up the flag it drops.
+const _: () = assert!(CARRIER_TAKEDOWN_WRECK_BONUS > FLAG_RETURN_CASH_BOUNTY);
+/// Denying a capture must never out-earn scoring one, enforced at compile time,
+/// so the takedown rewards defence without eclipsing the objective.
+const _: () = assert!(CARRIER_TAKEDOWN_WRECK_BONUS < CAPTURE_CASH_BOUNTY);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -546,6 +568,96 @@ pub const fn most_wanted_wreck_bonus(victim_captures: u32, dealer_captures: u32)
         lead
     };
     capped * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD
+}
+
+/// Cash bonus a team banks for wrecking an enemy car that was carrying a flag.
+///
+/// `victim_was_carrying` is whether the wrecked team had a car hauling the enemy
+/// flag on the frame it fell. A carrier takedown both denies the capture and
+/// forces a turnover, so it pays the [`CARRIER_TAKEDOWN_WRECK_BONUS`] on top of
+/// every other wreck reward; wrecking an empty-handed car adds nothing.
+#[must_use]
+pub const fn carrier_takedown_wreck_bonus(victim_was_carrying: bool) -> u32 {
+    if victim_was_carrying {
+        CARRIER_TAKEDOWN_WRECK_BONUS
+    } else {
+        0
+    }
+}
+
+/// Every cash reward a frame's wrecks pay each team, with the bonus breakdown
+/// preserved for logging.
+///
+/// `player`/`opponent` are the totals each team banks; the `_most_wanted` and
+/// `_carrier_takedown` fields are the bonuses already folded into those totals,
+/// kept separate only so the wreck log can attribute the payout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WreckBounties {
+    /// Each team's rampage streak after this frame's wrecks.
+    pub streaks: WreckStreaks,
+    /// Total cash the player team banks for wrecks it dealt this frame.
+    pub player: u32,
+    /// Total cash the opponent team banks for wrecks it dealt this frame.
+    pub opponent: u32,
+    /// Most-wanted leader bonus folded into `player`.
+    pub player_most_wanted: u32,
+    /// Most-wanted leader bonus folded into `opponent`.
+    pub opponent_most_wanted: u32,
+    /// Carrier-takedown bonus folded into `player`.
+    pub player_carrier_takedown: u32,
+    /// Carrier-takedown bonus folded into `opponent`.
+    pub opponent_carrier_takedown: u32,
+}
+
+/// Resolves every cash reward a frame's wrecks pay: the rampage streak payout,
+/// the most-wanted leader bonus, and the carrier-takedown bonus.
+///
+/// The player team deals a wreck when the opponents fall (and vice versa), so it
+/// collects on the opponents' capture lead and on a wrecked opponent carrier.
+/// `player_was_carrying`/`opponent_was_carrying` say whether each team had a car
+/// hauling the enemy flag the frame it fell. Bonuses are folded into the per-team
+/// totals and also returned individually for the wreck log.
+#[must_use]
+pub const fn resolve_wreck_bounties(
+    before_streaks: WreckStreaks,
+    wrecks: WreckEvents,
+    captures: CaptureScore,
+    player_was_carrying: bool,
+    opponent_was_carrying: bool,
+) -> WreckBounties {
+    let payout = resolve_wreck_streaks(before_streaks, wrecks);
+
+    let player_most_wanted = if wrecks.opponent {
+        most_wanted_wreck_bonus(captures.opponents, captures.player)
+    } else {
+        0
+    };
+    let opponent_most_wanted = if wrecks.player {
+        most_wanted_wreck_bonus(captures.player, captures.opponents)
+    } else {
+        0
+    };
+
+    let player_carrier_takedown = if wrecks.opponent {
+        carrier_takedown_wreck_bonus(opponent_was_carrying)
+    } else {
+        0
+    };
+    let opponent_carrier_takedown = if wrecks.player {
+        carrier_takedown_wreck_bonus(player_was_carrying)
+    } else {
+        0
+    };
+
+    WreckBounties {
+        streaks: payout.streaks,
+        player: payout.player_bounty + player_most_wanted + player_carrier_takedown,
+        opponent: payout.opponent_bounty + opponent_most_wanted + opponent_carrier_takedown,
+        player_most_wanted,
+        opponent_most_wanted,
+        player_carrier_takedown,
+        opponent_carrier_takedown,
+    }
 }
 
 /// Brief spin-out each team suffers the instant its cars are wrecked.
@@ -1185,6 +1297,15 @@ pub fn base_repair(cars: &[(AiTeam, Vec2)], blue_home: Vec2, red_home: Vec2) -> 
     }
 }
 
+/// Whether the given team has any car hauling the enemy flag this frame.
+///
+/// Read before a wreck knocks flags loose so the carrier-takedown bonus can tell
+/// whether the team it just wrecked was actually running a flag home.
+#[must_use]
+fn team_was_carrying(cars: &[RamCar], team: AiTeam) -> bool {
+    cars.iter().any(|car| car.team == team && car.carrying_flag)
+}
+
 /// Drops every flag held by a team that was freshly wrecked this frame.
 ///
 /// A spun-out wreck cannot keep its grip on a stolen flag, so the holder of any
@@ -1314,57 +1435,51 @@ pub fn ram_damage_system(
     // recover it.
     drop_wrecked_carriers_flags(wrecks, &car_teams, &mut flag_query);
 
+    // Resolve every cash reward this frame's wrecks pay: the rampage streak
+    // payout, the most-wanted leader bonus, and the carrier-takedown bonus. The
+    // carrying flags were read into `cars` before the wreck knocked them loose,
+    // so they still reflect who was actually hauling when the wreck landed.
     let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
-    let payout = resolve_wreck_streaks(before_streaks, wrecks);
-    if let Some(streaks) = wreck_streaks.as_deref_mut() {
-        *streaks = payout.streaks;
-    }
-
-    // The "most wanted" comeback bonus: taking down a car of the team that leads
-    // on captures pays the trailing side extra. The player team deals a wreck
-    // when the opponents fall, so it collects on the opponents' capture lead, and
-    // vice versa. A level or trailing victim adds nothing.
     let captures = captures.as_deref().copied().unwrap_or_default();
-    let player_most_wanted_bonus = if wrecks.opponent {
-        most_wanted_wreck_bonus(captures.opponents, captures.player)
-    } else {
-        0
-    };
-    let opponent_most_wanted_bonus = if wrecks.player {
-        most_wanted_wreck_bonus(captures.player, captures.opponents)
-    } else {
-        0
-    };
-    let player_bounty = payout.player_bounty + player_most_wanted_bonus;
-    let opponent_bounty = payout.opponent_bounty + opponent_most_wanted_bonus;
+    let bounties = resolve_wreck_bounties(
+        before_streaks,
+        wrecks,
+        captures,
+        team_was_carrying(&cars, AiTeam::Blue),
+        team_was_carrying(&cars, AiTeam::Red),
+    );
+    if let Some(streaks) = wreck_streaks.as_deref_mut() {
+        *streaks = bounties.streaks;
+    }
 
     if wrecks.any() {
         info!(
             "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
-             most-wanted bonus player={} opponent={}; banking player_bounty={} opponent_bounty={}",
+             most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
+             opponent={}; banking player_bounty={} opponent_bounty={}",
             wrecks.player,
             wrecks.opponent,
-            payout.streaks.player,
-            payout.streaks.opponent,
-            player_most_wanted_bonus,
-            opponent_most_wanted_bonus,
-            player_bounty,
-            opponent_bounty,
+            bounties.streaks.player,
+            bounties.streaks.opponent,
+            bounties.player_most_wanted,
+            bounties.opponent_most_wanted,
+            bounties.player_carrier_takedown,
+            bounties.opponent_carrier_takedown,
+            bounties.player,
+            bounties.opponent,
         );
     }
 
     // The wrecking team banks the bounty: a wrecked opponent pays the player
-    // team, a wrecked player team pays the opponents. Each consecutive wreck in
-    // a rampage pays more, up to the streak cap, plus the most-wanted bonus for
-    // taking down the capture leader.
-    if player_bounty > 0 {
+    // team, a wrecked player team pays the opponents.
+    if bounties.player > 0 {
         if let Some(score) = score.as_deref_mut() {
-            score.bank_wreck_bounty(player_bounty);
+            score.bank_wreck_bounty(bounties.player);
         }
     }
-    if opponent_bounty > 0 {
+    if bounties.opponent > 0 {
         if let Some(opponent_score) = opponent_score.as_deref_mut() {
-            opponent_score.bank_wreck_bounty(opponent_bounty);
+            opponent_score.bank_wreck_bounty(bounties.opponent);
         }
     }
 }
@@ -3217,6 +3332,88 @@ mod tests {
     }
 
     #[test]
+    fn system_pays_a_carrier_takedown_bonus_for_wrecking_a_flag_carrier() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips the carrier to a wreck.
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        // The red car is hauling the blue flag, so wrecking it both denies the
+        // capture and forces a turnover: the marquee defensive takedown.
+        let carrier = app
+            .world
+            .spawn((
+                virtual_player_stub(AiTeam::Red),
+                Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+            ))
+            .id();
+        app.world.spawn((
+            CtfFlag {
+                team: crate::gameplay::ctf::FlagTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                holder: Some(carrier),
+            },
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + carrier_takedown_wreck_bonus(true),
+            "wrecking the enemy flag carrier must add the carrier-takedown bonus"
+        );
+        assert_eq!(
+            score.wrecks, 1,
+            "the takedown bonus rides the same wreck, not a phantom second one"
+        );
+    }
+
+    #[test]
+    fn system_pays_no_carrier_takedown_bonus_for_wrecking_an_empty_handed_car() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        // The red car carries nothing, so wrecking it pays only the base bounty
+        // even though a loose flag sits elsewhere on the board.
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: crate::gameplay::ctf::FlagTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-500.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash, WRECK_CASH_BOUNTY,
+            "wrecking an empty-handed car must not earn the carrier-takedown bonus"
+        );
+        assert_eq!(score.wrecks, 1);
+    }
+
+    #[test]
     fn system_pays_no_bounty_while_both_teams_stay_operational() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
@@ -3378,6 +3575,91 @@ mod tests {
             most_wanted_wreck_bonus(u32::MAX, 0) < CAPTURE_CASH_BOUNTY,
             "the comeback lever must stay below the value of a capture"
         );
+    }
+
+    #[test]
+    fn carrier_takedown_pays_nothing_for_wrecking_an_empty_handed_car() {
+        assert_eq!(
+            carrier_takedown_wreck_bonus(false),
+            0,
+            "wrecking a car that was not running a flag earns no takedown bonus"
+        );
+    }
+
+    #[test]
+    fn carrier_takedown_pays_the_bonus_for_wrecking_a_flag_carrier() {
+        assert_eq!(
+            carrier_takedown_wreck_bonus(true),
+            CARRIER_TAKEDOWN_WRECK_BONUS,
+            "cutting down the enemy flag carrier must pay the takedown bonus"
+        );
+    }
+
+    #[test]
+    fn taking_a_carrier_down_out_earns_a_return_but_not_a_capture() {
+        let takedown = carrier_takedown_wreck_bonus(true);
+        assert!(
+            takedown > FLAG_RETURN_CASH_BOUNTY,
+            "cutting the carrier down must beat merely returning the flag it drops: {takedown}"
+        );
+        assert!(
+            takedown < CAPTURE_CASH_BOUNTY,
+            "denying a capture must never out-earn scoring one: {takedown}"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_stacks_streak_leader_and_carrier_rewards() {
+        // The player team wrecks the opponents, who lead by two captures and were
+        // hauling a flag: the base bounty, the most-wanted comeback bonus, and the
+        // carrier-takedown bonus all ride the same wreck.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 2,
+            },
+            false,
+            true,
+        );
+
+        assert_eq!(bounties.player_most_wanted, most_wanted_wreck_bonus(2, 0));
+        assert_eq!(
+            bounties.player_carrier_takedown,
+            CARRIER_TAKEDOWN_WRECK_BONUS
+        );
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + most_wanted_wreck_bonus(2, 0) + CARRIER_TAKEDOWN_WRECK_BONUS,
+            "every reward the player team earns this frame must fold into its total"
+        );
+        assert_eq!(bounties.opponent, 0, "the side that fell banks nothing");
+        assert_eq!(
+            bounties.streaks.player, 1,
+            "dealing the wreck extends the player team's rampage"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_an_empty_handed_wreck_only_the_base_bounty() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+        );
+
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+        assert_eq!(bounties.player_most_wanted, 0);
+        assert_eq!(bounties.player_carrier_takedown, 0);
     }
 
     #[test]
