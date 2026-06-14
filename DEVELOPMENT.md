@@ -16,6 +16,15 @@ choco install -y `
 ```
 
 - Restart terminal
+
+> **Toolchain pin:** this repo pins the exact Rust toolchain in
+> [`rust-toolchain.toml`](rust-toolchain.toml). The first `cargo` or `rustup`
+> command run inside the checkout auto-installs the pinned version together with
+> its `rustfmt` and `clippy` components and the `wasm32-unknown-unknown` target,
+> so the manual `rustup target add` / `rustup component add` steps for those are
+> not needed. `rustup` selects the pin per directory, regardless of your global
+> default toolchain.
+
 - Install Bevy (game engine) prerequisites ([docs](https://bevyengine.org/learn/book/getting-started/setup/))
 
 ### Linux (Ubuntu/Debian)
@@ -55,8 +64,10 @@ rustup component add llvm-tools-preview
 
 ```powershell
 cargo install --locked trunk
-rustup target add wasm32-unknown-unknown
 ```
+
+(the `wasm32-unknown-unknown` target is installed automatically by the
+[`rust-toolchain.toml`](rust-toolchain.toml) pin.)
 
 - Run the tests.
   - This will install dependencies and dev-dependencies. 

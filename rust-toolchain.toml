@@ -1,0 +1,14 @@
+# Pin the exact Rust toolchain so local, pre-commit and CI builds all use the
+# same compiler. Without a pin every build floats on "latest stable", and a new
+# release can fail the build with no code change: most sharply through the
+# `-D warnings` clippy gate (nursery + pedantic), which trips the moment a fresh
+# lint lands, and through rustfmt, whose formatting can shift between releases.
+# rustup reads this file and selects (auto-installing if needed) the pinned
+# toolchain, its components and the wasm target the web build needs, so a fresh
+# checkout is ready without the manual `rustup` steps in DEVELOPMENT.md.
+# Bumping this version is a deliberate, reviewed step (see the upgrades rule).
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

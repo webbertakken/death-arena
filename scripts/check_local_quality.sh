@@ -4,6 +4,7 @@ set -euo pipefail
 bash scripts/check_pages_workflow.sh
 bash scripts/check_ci_workflow.sh
 bash scripts/check_scheduled_audit_workflow.sh
+bash scripts/check_toolchain_pin.sh
 bash scripts/check_shell_scripts.sh
 bash scripts/check_rust_safety.sh
 bash scripts/check_rust_suppressions.sh

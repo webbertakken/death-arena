@@ -34,7 +34,7 @@ jobs:
           sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache
         uses: swatinem/rust-cache@v2
@@ -70,7 +70,7 @@ jobs:
           sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache
         uses: swatinem/rust-cache@v2
@@ -101,7 +101,7 @@ jobs:
         run: git lfs pull
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
 
@@ -134,7 +134,7 @@ jobs:
           sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
 
@@ -159,7 +159,7 @@ jobs:
           sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache
         uses: swatinem/rust-cache@v2
@@ -177,7 +177,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
@@ -207,6 +207,9 @@ jobs:
 
       - name: Validate scheduled audit workflow
         run: bash scripts/check_scheduled_audit_workflow.sh
+
+      - name: Check toolchain pin
+        run: bash scripts/check_toolchain_pin.sh
 
       - name: Check shell scripts
         run: bash scripts/check_shell_scripts.sh
