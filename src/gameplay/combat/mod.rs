@@ -198,6 +198,33 @@ const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_F
 /// A flank T-bone must stay the hardest positional hit, enforced at compile
 /// time, so a clean broadside always out-bites a rear-end run-down.
 const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME < BROADSIDE_RAM_DAMAGE_PER_FRAME);
+/// Simultaneous enemy cars within ram range for a car to count as pincered.
+///
+/// A lone attacker is just a ram, already covered by the base scrape and the
+/// directional bonuses; it takes a *second* enemy piling on at once to spring the
+/// classic Death Rally pincer, a car hemmed in with no lane left to escape.
+pub const PINCER_MIN_ATTACKERS: usize = 2;
+/// Extra durability a car hemmed in by a pincer of enemies loses each frame.
+///
+/// The classic Death Rally gang-up: a car surrounded by two or more foes at once
+/// cannot escape and is ground down faster than one trading paint with a single
+/// enemy. The base [`ram_damage`] scrape charges each car in contact into its own
+/// pool, which perversely makes a lone car's team bleed *less* than the pack
+/// bracketing it (one scrape against the pack's several); this rights that,
+/// bleeding into the surrounded car's *own* pool so being outnumbered at a point
+/// is the disadvantage it should be. Needs no aim commitment, only numbers,
+/// unlike the aggressor/broadside/rear-end charges, so it is priced below them,
+/// yet above the lone base scrape so a pincer always out-bites a solo ram.
+pub const PINCER_RAM_DAMAGE_PER_FRAME: f32 = 0.3;
+/// A pincer must out-bite a lone scrape, enforced at compile time, so being
+/// ganged up on always beats trading paint with a single foe.
+const _: () = assert!(PINCER_RAM_DAMAGE_PER_FRAME > RAM_DAMAGE_PER_FRAME);
+/// Raw numbers must not out-bite an aimed charge, enforced at compile time, so a
+/// lined-up hit stays worth more than a mere mob with no commitment.
+const _: () = assert!(PINCER_RAM_DAMAGE_PER_FRAME < AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+/// A pincer needs a genuine gang-up, enforced at compile time, so a single
+/// attacker never trips it.
+const _: () = assert!(PINCER_MIN_ATTACKERS >= 2);
 /// Fraction of incoming ram damage a shielded team still takes.
 ///
 /// The defensive counter to the all-offence ramming loop: while a team's shield
@@ -999,6 +1026,46 @@ pub fn rear_end_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage cars hemmed in by a pincer of enemies take.
+///
+/// A car is "pincered" when at least [`PINCER_MIN_ATTACKERS`] opposing cars sit
+/// within [`RAM_RADIUS`] at once: a gang-up with no lane left to escape. Every
+/// such car bleeds [`PINCER_RAM_DAMAGE_PER_FRAME`] into its *own* team's pool on
+/// top of the base [`ram_damage`] scrape, so being outnumbered at a point wears
+/// the surrounded team down faster, the Death Rally "they swarmed me" punishment.
+/// Charged once per surrounded car however many enemies pile in, mirroring
+/// [`broadside_ram_damage`]; the bonus rewards the converging team coordination
+/// the virtual-player brain already drives (massing defenders, the finish-off
+/// hunter) without needing the aim the directional bonuses demand.
+#[must_use]
+pub fn pincer_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, victim) in cars.iter().enumerate() {
+        let attackers = cars
+            .iter()
+            .enumerate()
+            .filter(|&(other_index, other)| {
+                other_index != index
+                    && other.team != victim.team
+                    && other.position.distance_squared(victim.position) <= radius_sq
+            })
+            .count();
+        if attackers >= PINCER_MIN_ATTACKERS {
+            match victim.team {
+                AiTeam::Blue => damage.player += PINCER_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += PINCER_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Durability each team regains from home-base pit recovery in a single frame.
 ///
 /// The recovery mirror of [`TeamDamage`]: where ram wear is subtracted from a
@@ -1148,7 +1215,8 @@ pub fn ram_damage_system(
         .combined(carrier_ram_damage(&cars))
         .combined(aggressor_ram_damage(&cars))
         .combined(broadside_ram_damage(&cars))
-        .combined(rear_end_ram_damage(&cars));
+        .combined(rear_end_ram_damage(&cars))
+        .combined(pincer_ram_damage(&cars));
     // A team with its shield up shrugs off part of every ram it eats this frame.
     let damage = armour_mitigated_damage(raw_damage, shield);
 
@@ -2198,6 +2266,121 @@ mod tests {
         let damage = rear_end_ram_damage(&cars);
         assert_near(damage.player, 0.0);
         assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_lone_ram_is_no_pincer() {
+        // A single enemy in contact is just a ram, not a gang-up.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(50.0, 0.0))];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn two_enemies_pincer_the_surrounded_team() {
+        // Two reds bracket a lone blue: the blue is hemmed in by a pincer, while
+        // each red faces only the single blue, so only the blue team bleeds.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_pincer_lands_once_however_many_enemies_pile_in() {
+        // Three reds swarm one blue: the struck car bleeds a single pincer, not
+        // one per attacker (the per-victim model, mirroring the broadside bonus).
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn friendly_crowding_is_no_pincer() {
+        // A car flanked by its own teammates is not pincered: only enemies count.
+        let cars = [
+            blue(Vec2::ZERO),
+            blue(Vec2::new(50.0, 0.0)),
+            blue(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_pincer_needs_contact() {
+        // Two reds bracket a blue but both sit out of ram range: no pincer.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS + 1.0, 0.0)),
+            red(Vec2::new(-(RAM_RADIUS + 1.0), 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_mutual_pincer_wears_both_teams() {
+        // Two blues and two reds bunch together so every car has both enemies in
+        // range: each of the four is pincered, so each team bleeds two pincers.
+        let cars = [
+            blue(Vec2::ZERO),
+            blue(Vec2::new(20.0, 0.0)),
+            red(Vec2::new(0.0, 20.0)),
+            red(Vec2::new(20.0, 20.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 2.0 * PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 2.0 * PINCER_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_adds_pincer_ram_bonus_when_two_cars_gang_up() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        // The player and both reds keep their default +Y facing, placed along the
+        // X-axis so no car charges another: only the base scrape and the pincer
+        // land, never the aggressor/broadside/rear-end bonuses.
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(-30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // The player is bracketed by two reds, so it eats the base scrape and the
+        // pincer bonus on top; each red faces only the lone player, so the
+        // opponents take a base scrape per car and no pincer.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - PINCER_RAM_DAMAGE_PER_FRAME,
+        );
+        // Each of the two reds takes a base scrape from the lone player.
+        assert_near(
+            integrity.opponent,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - RAM_DAMAGE_PER_FRAME,
+        );
     }
 
     #[test]
