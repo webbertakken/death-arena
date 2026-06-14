@@ -1,4 +1,15 @@
 #![warn(clippy::nursery, clippy::pedantic)]
+// Never-ship lints (clippy::restriction, not covered by nursery/pedantic): a
+// stray debug print runs every frame inside an ECS system, flooding the console
+// and bypassing Bevy's structured logging, and a placeholder panic hard-crashes
+// the WASM canvas. Denied so the existing clippy gate catches them at the door.
+#![deny(
+    clippy::dbg_macro,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::todo,
+    clippy::unimplemented
+)]
 #![allow(
     clippy::module_name_repetitions,
     clippy::needless_pass_by_value,
