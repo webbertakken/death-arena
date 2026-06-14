@@ -221,6 +221,35 @@ const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_F
 /// A flank T-bone must stay the hardest positional hit, enforced at compile
 /// time, so a clean broadside always out-bites a rear-end run-down.
 const _: () = assert!(REAR_END_RAM_DAMAGE_PER_FRAME < BROADSIDE_RAM_DAMAGE_PER_FRAME);
+/// Extra durability each car in a nose-to-nose head-on meeting loses every frame
+/// the two are trading paint.
+///
+/// The classic Death Rally game of chicken: when two enemy cars both commit a
+/// nose-first charge straight into each other (each inside the other's
+/// [`AGGRESSOR_RAM_ALIGNMENT`] cone) the smash wears *both* teams down at once,
+/// on top of the base [`ram_damage`] scrape and the mutual
+/// [`aggressor_ram_damage`] charge a head-on already trades. Where the one-sided
+/// flank ([`BROADSIDE_RAM_DAMAGE_PER_FRAME`]) and rear-end
+/// ([`REAR_END_RAM_DAMAGE_PER_FRAME`]) hits concentrate their punishment on a
+/// victim that cannot retaliate, a head-on shares it: the cost of meeting a foe
+/// nose-to-nose is that you pay it too, so out-positioning into a T-bone or a
+/// run-down always beats blinking into a head-on. Priced at the same shared-bite
+/// floor as the no-aim [`PINCER_RAM_DAMAGE_PER_FRAME`] gang-up, below even the
+/// one-sided aggressor charge it stacks on, since the smash's bite is that both
+/// pay rather than that either out-trades the other. A battered car feels it
+/// hardest: the same absolute bite eats a larger slice of its thinner pool, so a
+/// reeling car should duck a head-on while a healthy one can use it to finish a
+/// foe off.
+pub const HEAD_ON_RAM_DAMAGE_PER_FRAME: f32 = 0.3;
+/// A head-on smash must be a real bite, enforced at compile time.
+const _: () = assert!(HEAD_ON_RAM_DAMAGE_PER_FRAME > 0.0);
+/// The shared head-on smash must never out-bite the one-sided charge it stacks
+/// on, enforced at compile time, so meeting a foe nose-to-nose costs the mutual
+/// jolt rather than a bigger hit than you deal back.
+const _: () = assert!(HEAD_ON_RAM_DAMAGE_PER_FRAME < AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+/// A head-on smash must stay under the earned nitro charge, enforced at compile
+/// time, so a boosted ram remains the single hardest source of wear.
+const _: () = assert!(HEAD_ON_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
 /// Simultaneous enemy cars within ram range for a car to count as pincered.
 ///
 /// A lone attacker is just a ram, already covered by the base scrape and the
@@ -1203,6 +1232,66 @@ pub fn rear_end_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage two cars meeting nose-to-nose inflict on both
+/// teams.
+///
+/// A car is in a "head-on" when an opposing car within [`RAM_RADIUS`] is charging
+/// it nose-first (the other car's heading inside the [`AGGRESSOR_RAM_ALIGNMENT`]
+/// cone) *while this car is charging straight back the same way*: both noses on
+/// each other, the Death Rally game of chicken neither side flinched from. Every
+/// car caught in such a meeting bleeds [`HEAD_ON_RAM_DAMAGE_PER_FRAME`] into its
+/// *own* team's pool on top of the base [`ram_damage`] scrape and the mutual
+/// [`aggressor_ram_damage`] charge, so a smash wears *both* teams down at once.
+/// Unlike the one-sided [`broadside_ram_damage`] flank and
+/// [`rear_end_ram_damage`] run-down, whose punishment falls on a victim that
+/// cannot retaliate, a head-on shares the cost, which is why out-positioning a
+/// foe into a T-bone or a tail charge beats meeting it head-on. Charged once per
+/// car however many enemies it is trading noses with, mirroring the per-victim
+/// model of [`broadside_ram_damage`].
+#[must_use]
+pub fn head_on_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, car) in cars.iter().enumerate() {
+        let Some(heading) = car.forward.try_normalize() else {
+            continue;
+        };
+
+        let is_head_on = cars.iter().enumerate().any(|(other_index, other)| {
+            if other_index == index || other.team == car.team {
+                return false;
+            }
+            let to_other = other.position - car.position;
+            if to_other.length_squared() > radius_sq {
+                return false;
+            }
+            let Some(approach) = to_other.try_normalize() else {
+                return false;
+            };
+            // This car is committing nose-first into the other.
+            if heading.dot(approach) < AGGRESSOR_RAM_ALIGNMENT {
+                return false;
+            }
+            // The other car is charging straight back, nose on this one.
+            other.forward.try_normalize().is_some_and(|other_heading| {
+                other_heading.dot(-approach) >= AGGRESSOR_RAM_ALIGNMENT
+            })
+        });
+        if is_head_on {
+            match car.team {
+                AiTeam::Blue => damage.player += HEAD_ON_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += HEAD_ON_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// The pincer bite a single surrounded car takes from `attacker_count` enemies
 /// hemming it in at once.
 ///
@@ -1516,6 +1605,7 @@ pub fn ram_damage_system(
         .combined(aggressor_ram_damage(&cars))
         .combined(broadside_ram_damage(&cars))
         .combined(rear_end_ram_damage(&cars))
+        .combined(head_on_ram_damage(&cars))
         .combined(pincer_ram_damage(&cars))
         .combined(wall_crush_ram_damage(&cars, BOUNDS / 2.0));
     // A team with its shield up shrugs off part of every ram it eats this frame.
@@ -2564,6 +2654,103 @@ mod tests {
     }
 
     #[test]
+    fn a_head_on_smash_wears_both_teams() {
+        // Nose to nose: both cars commit a charge straight into each other, so
+        // the smash bites both teams at once.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_one_sided_charge_is_no_head_on() {
+        // The blue car charges nose-first while the red car keeps its +Y facing,
+        // so the red is not charging back: a head-on needs both noses committed.
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, red_pos), red(red_pos)];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_scrape_is_no_head_on() {
+        // Both cars face +Y while touching along the X axis: neither nose is on
+        // the other, so a parallel scrape earns no head-on smash.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_smash_needs_contact() {
+        // A perfect nose-to-nose pair just out of ram range deals nothing.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn charging_a_teammate_is_no_head_on() {
+        // Two friendly cars meeting nose-to-nose are not enemies, so no smash.
+        let a = Vec2::ZERO;
+        let b = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(a, b), blue_facing(b, a)];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_is_no_head_on() {
+        // One car has no facing, so the mutual-charge condition cannot hold and
+        // neither side eats the smash.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(blue_pos)
+            },
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charges_a_car_once_however_many_noses_it_meets() {
+        // A lone blue noses into a wedge of two reds, both charging straight
+        // back: the blue eats a single smash (the per-victim model) while each
+        // red bleeds its own, so the two-car team takes twice the lone blue's.
+        let blue_pos = Vec2::ZERO;
+        let red_one = Vec2::new(100.0, 8.0);
+        let red_two = Vec2::new(100.0, -8.0);
+        let cars = [
+            blue_facing(blue_pos, Vec2::new(100.0, 0.0)),
+            red_facing(red_one, blue_pos),
+            red_facing(red_two, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 2.0 * HEAD_ON_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
     fn a_lone_ram_is_no_pincer() {
         // A single enemy in contact is just a ram, not a gang-up.
         let cars = [blue(Vec2::ZERO), red(Vec2::new(50.0, 0.0))];
@@ -2842,16 +3029,22 @@ mod tests {
         app.update();
 
         let integrity = app.world.resource::<VehicleIntegrity>();
-        // Base scrape wears both teams 0.25; the head-on charge adds the
-        // aggressor bonus to each, and a dead-on hit triggers neither the flank
-        // nor the rear bonus.
+        // Base scrape wears both teams 0.25; a nose-to-nose meeting adds the
+        // mutual aggressor charge and the shared head-on smash to each, while a
+        // dead-on hit triggers neither the flank nor the rear bonus.
         assert_near(
             integrity.player,
-            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - HEAD_ON_RAM_DAMAGE_PER_FRAME,
         );
         assert_near(
             integrity.opponent,
-            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - HEAD_ON_RAM_DAMAGE_PER_FRAME,
         );
     }
 
@@ -4325,9 +4518,10 @@ mod tests {
         app.init_resource::<VehicleIntegrity>();
         app.add_system(ram_damage_system);
         // Nose to nose against the +X wall: the player (blue) charges +X into the
-        // red car, which charges -X straight back. Both eat the base scrape and
-        // the head-on aggressor charge, but only the red is pinned against the
-        // wall, so the wall-crush bonus is the sole extra wear it takes.
+        // red car, which charges -X straight back. Both eat the base scrape, the
+        // mutual head-on aggressor charge and the shared head-on smash, but only
+        // the red is pinned against the wall, so the wall-crush bonus is the sole
+        // extra wear it takes beyond the shared smash.
         app.world.spawn((
             player_stub(),
             Transform::from_translation(Vec3::new(810.0, 0.0, 0.0))
@@ -4342,17 +4536,22 @@ mod tests {
         app.update();
 
         let integrity = app.world.resource::<VehicleIntegrity>();
-        // The unpinned player eats only the base scrape and the aggressor charge.
+        // The unpinned player eats the base scrape, the aggressor charge and the
+        // shared head-on smash.
         assert_near(
             integrity.player,
-            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - HEAD_ON_RAM_DAMAGE_PER_FRAME,
         );
-        // The wall-pinned red eats the wall-crush bonus on top of the same two.
+        // The wall-pinned red eats the wall-crush bonus on top of the same three.
         assert_near(
             integrity.opponent,
             MAX_INTEGRITY
                 - RAM_DAMAGE_PER_FRAME
                 - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - HEAD_ON_RAM_DAMAGE_PER_FRAME
                 - WALL_CRUSH_RAM_DAMAGE_PER_FRAME,
         );
     }
