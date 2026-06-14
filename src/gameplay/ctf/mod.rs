@@ -49,6 +49,15 @@ pub const SUDDEN_DEATH_TIME_LIMIT_FRAMES: u32 = 3_600;
 /// enough that a clean break still rewards a daring grab. Pairs with ram
 /// damage and integrity wear, so a battered carrier crawls home.
 pub const FLAG_CARRIER_SPEED_MULTIPLIER: f32 = 0.8;
+/// Fixed-update frames a dropped flag lies loose before it auto-returns home.
+///
+/// The classic capture-the-flag safeguard: a flag knocked loose (a wrecked or
+/// despawned carrier drops it) and then left untouched by both teams resets to
+/// its home base instead of stranding the objective in a dead corner. The timer
+/// counts only frames the flag is genuinely loose; the instant any car grabs or
+/// returns it the count clears. At the game's 60 FPS convention this is ten
+/// seconds, long enough that only a truly abandoned flag ever resets.
+pub const FLAG_RESET_FRAMES: u32 = 600;
 
 type HumanPlayerOnly = (With<Player>, Without<CtfFlag>);
 type VirtualPlayerOnly = (With<VirtualPlayer>, Without<Player>, Without<CtfFlag>);
@@ -91,6 +100,66 @@ pub struct CtfFlag {
     pub team: FlagTeam,
     pub home: Vec2,
     pub holder: Option<Entity>,
+}
+
+/// Per-team countdown tracking how long each side's flag has lain loose.
+///
+/// Mirrors [`crate::gameplay::combat::WreckStuns`]: a per-team frame counter,
+/// here advanced each frame by [`capture_the_flag_system`] and read to
+/// auto-return a flag abandoned past [`FLAG_RESET_FRAMES`]. Cleared the moment a
+/// flag is held or sitting home, so only a genuinely loose flag ever counts up.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LooseFlagTimers {
+    /// Frames the blue flag has lain loose.
+    pub blue_frames: u32,
+    /// Frames the red flag has lain loose.
+    pub red_frames: u32,
+}
+
+impl LooseFlagTimers {
+    /// Frames the given team's flag has lain loose.
+    const fn frames_for(self, team: FlagTeam) -> u32 {
+        match team {
+            FlagTeam::Blue => self.blue_frames,
+            FlagTeam::Red => self.red_frames,
+        }
+    }
+
+    /// Sets the loose-frame count for the given team's flag.
+    const fn set_for(&mut self, team: FlagTeam, frames: u32) {
+        match team {
+            FlagTeam::Blue => self.blue_frames = frames,
+            FlagTeam::Red => self.red_frames = frames,
+        }
+    }
+}
+
+/// What a flag's loose timer dictates for the current frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LooseFlagOutcome {
+    /// Held or already home: clear the timer.
+    Settled,
+    /// Loose and still inside the grace window: keep counting at this value.
+    Counting(u32),
+    /// Loose past [`FLAG_RESET_FRAMES`]: return the flag to its home base.
+    ResetHome,
+}
+
+/// Advances a flag's loose timer by one fixed-update frame.
+///
+/// A held or home flag clears the timer ([`LooseFlagOutcome::Settled`]); a loose
+/// flag counts up until it crosses [`FLAG_RESET_FRAMES`], when it is sent home.
+#[must_use]
+pub const fn advance_loose_flag(is_held: bool, is_at_home: bool, frames: u32) -> LooseFlagOutcome {
+    if is_held || is_at_home {
+        return LooseFlagOutcome::Settled;
+    }
+    let next = frames + 1;
+    if next >= FLAG_RESET_FRAMES {
+        LooseFlagOutcome::ResetHome
+    } else {
+        LooseFlagOutcome::Counting(next)
+    }
 }
 
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +387,28 @@ fn advance_capture_the_flag(
     sync_carried_flags_to_holders(flags, collectors);
 }
 
+/// Auto-returns any flag left loose past [`FLAG_RESET_FRAMES`] to its base.
+///
+/// Advances every flag's per-team loose timer: a held or home flag clears it, a
+/// loose flag counts up, and one abandoned past the limit is sent home (holder
+/// cleared, position reset) with its timer wiped. Runs after the steal/return
+/// pass so a flag a car grabbed this frame is never yanked out from under it.
+fn auto_return_loose_flags(flags: &mut [FlagState], timers: &mut LooseFlagTimers) {
+    for flag in flags {
+        let is_held = flag.holder.is_some();
+        let is_at_home = flag.position.distance_squared(flag.home) <= f32::EPSILON;
+        match advance_loose_flag(is_held, is_at_home, timers.frames_for(flag.team)) {
+            LooseFlagOutcome::Settled => timers.set_for(flag.team, 0),
+            LooseFlagOutcome::Counting(next) => timers.set_for(flag.team, next),
+            LooseFlagOutcome::ResetHome => {
+                flag.holder = None;
+                flag.position = flag.home;
+                timers.set_for(flag.team, 0);
+            }
+        }
+    }
+}
+
 fn drop_flags_with_missing_holders(flags: &mut [FlagState], collectors: &[CollectorState]) {
     for flag in flags {
         if let Some(holder) = flag.holder {
@@ -486,6 +577,7 @@ pub fn capture_the_flag_system(
     mut flag_query: Query<(Entity, &mut CtfFlag, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
+    mut loose_timers: Option<ResMut<LooseFlagTimers>>,
 ) {
     let (
         mut score,
@@ -538,6 +630,11 @@ pub fn capture_the_flag_system(
         &mut returns,
         &mut result,
     );
+    if result.winner.is_none() {
+        if let Some(timers) = loose_timers.as_deref_mut() {
+            auto_return_loose_flags(&mut flags, timers);
+        }
+    }
     award_golden_goal(clock.is_sudden_death(), previous_score, *score, &mut result);
     award_capture_bounties(
         previous_score,
@@ -773,6 +870,7 @@ impl Plugin for CtfPlugin {
             .init_resource::<CtfMatchResult>()
             .init_resource::<MatchPursePaid>()
             .init_resource::<MatchClock>()
+            .init_resource::<LooseFlagTimers>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame).with_system(reset_ctf_match_resources),
             )
@@ -792,6 +890,7 @@ fn reset_ctf_match_resources(
     mut result: ResMut<CtfMatchResult>,
     mut purse_paid: ResMut<MatchPursePaid>,
     mut clock: ResMut<MatchClock>,
+    mut loose_timers: ResMut<LooseFlagTimers>,
 ) {
     *captures = CaptureScore::default();
     *steals = FlagStealScore::default();
@@ -799,6 +898,7 @@ fn reset_ctf_match_resources(
     *result = CtfMatchResult::default();
     *purse_paid = MatchPursePaid::default();
     *clock = MatchClock::default();
+    *loose_timers = LooseFlagTimers::default();
 }
 
 #[cfg(test)]
@@ -860,6 +960,10 @@ mod tests {
             frames_remaining: 7,
             phase: MatchPhase::SuddenDeath,
         });
+        app.insert_resource(LooseFlagTimers {
+            blue_frames: 120,
+            red_frames: 240,
+        });
         app.add_system(reset_ctf_match_resources);
 
         app.update();
@@ -886,6 +990,169 @@ mod tests {
             "a fresh match must clear the purse latch so the next win pays out"
         );
         assert_eq!(*app.world.resource::<MatchClock>(), MatchClock::default());
+        assert_eq!(
+            *app.world.resource::<LooseFlagTimers>(),
+            LooseFlagTimers::default(),
+            "a fresh match must clear loose-flag timers so a stale count never resets a flag"
+        );
+    }
+
+    #[test]
+    fn a_held_flag_clears_its_loose_timer() {
+        assert_eq!(
+            advance_loose_flag(true, false, 123),
+            LooseFlagOutcome::Settled,
+            "a carried flag is not loose, so its timer must reset"
+        );
+    }
+
+    #[test]
+    fn a_home_flag_clears_its_loose_timer() {
+        assert_eq!(
+            advance_loose_flag(false, true, 123),
+            LooseFlagOutcome::Settled,
+            "a flag sitting at base is not loose, so its timer must reset"
+        );
+    }
+
+    #[test]
+    fn a_loose_flag_counts_up_inside_the_grace_window() {
+        assert_eq!(
+            advance_loose_flag(false, false, 0),
+            LooseFlagOutcome::Counting(1)
+        );
+        assert_eq!(
+            advance_loose_flag(false, false, FLAG_RESET_FRAMES - 2),
+            LooseFlagOutcome::Counting(FLAG_RESET_FRAMES - 1)
+        );
+    }
+
+    #[test]
+    fn a_loose_flag_returns_home_at_the_reset_limit() {
+        assert_eq!(
+            advance_loose_flag(false, false, FLAG_RESET_FRAMES - 1),
+            LooseFlagOutcome::ResetHome,
+            "a flag loose for the full grace window must auto-return"
+        );
+    }
+
+    #[test]
+    fn auto_return_sends_an_abandoned_flag_home() {
+        let home = Vec2::new(500.0, 0.0);
+        let mut red = flag(1, FlagTeam::Red, home);
+        red.position = Vec2::new(120.0, -40.0);
+        let mut flags = [red];
+        let mut timers = LooseFlagTimers {
+            red_frames: FLAG_RESET_FRAMES - 1,
+            ..Default::default()
+        };
+
+        auto_return_loose_flags(&mut flags, &mut timers);
+
+        assert_eq!(
+            flags[0].position, home,
+            "an abandoned flag must reset to base"
+        );
+        assert_eq!(flags[0].holder, None);
+        assert_eq!(timers.red_frames, 0, "the reset must clear the loose timer");
+    }
+
+    #[test]
+    fn auto_return_keeps_counting_a_still_loose_flag() {
+        let mut blue = flag(2, FlagTeam::Blue, Vec2::ZERO);
+        blue.position = Vec2::new(80.0, 80.0);
+        let mut flags = [blue];
+        let mut timers = LooseFlagTimers::default();
+
+        auto_return_loose_flags(&mut flags, &mut timers);
+
+        assert_eq!(timers.blue_frames, 1, "a loose flag must keep counting");
+        assert_eq!(
+            flags[0].position,
+            Vec2::new(80.0, 80.0),
+            "a flag inside the grace window must stay put"
+        );
+    }
+
+    #[test]
+    fn auto_return_clears_the_timer_when_a_flag_is_recovered() {
+        let mut red = flag(3, FlagTeam::Red, Vec2::new(500.0, 0.0));
+        red.position = Vec2::new(200.0, 0.0);
+        red.holder = Some(entity(9));
+        let mut flags = [red];
+        let mut timers = LooseFlagTimers {
+            red_frames: 300,
+            ..Default::default()
+        };
+
+        auto_return_loose_flags(&mut flags, &mut timers);
+
+        assert_eq!(
+            timers.red_frames, 0,
+            "grabbing a loose flag must reset its abandonment timer"
+        );
+        assert_eq!(
+            flags[0].position,
+            Vec2::new(200.0, 0.0),
+            "a recovered flag stays where its carrier holds it"
+        );
+    }
+
+    #[test]
+    fn system_auto_returns_a_flag_left_loose_too_long() {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagStealScore>();
+        app.init_resource::<FlagReturnScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
+        app.insert_resource(LooseFlagTimers {
+            red_frames: FLAG_RESET_FRAMES - 1,
+            ..Default::default()
+        });
+        app.add_system(capture_the_flag_system);
+        // Player far from every flag so nobody touches the loose red flag.
+        app.world.spawn((
+            test_player(),
+            Transform::from_translation(Vec3::new(-2000.0, 0.0, 5.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-1000.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-1000.0, 0.0, 2.0)),
+        ));
+        let red_home = Vec2::new(500.0, 0.0);
+        let red_flag = app
+            .world
+            .spawn((
+                CtfFlag {
+                    team: FlagTeam::Red,
+                    home: red_home,
+                    holder: None,
+                },
+                Transform::from_translation(Vec3::new(200.0, 0.0, 2.0)),
+            ))
+            .id();
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(red_flag).unwrap();
+        assert_eq!(
+            transform.translation.xy(),
+            red_home,
+            "a flag abandoned past the reset limit must auto-return to base"
+        );
+        assert_eq!(
+            app.world.resource::<LooseFlagTimers>().red_frames,
+            0,
+            "the auto-return must clear the loose timer"
+        );
     }
 
     #[test]
