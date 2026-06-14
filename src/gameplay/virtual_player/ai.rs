@@ -70,7 +70,9 @@ pub const PIT_RETREAT_INTEGRITY_FRACTION: f32 = 0.30;
 /// "actively battered" band the retreat and the integrity-scaled repair/shield
 /// tiers already react to, so the press begins exactly when the enemy is on the
 /// ropes. The "we must be healthier" guard keeps a team that is itself reeling
-/// from over-committing into a mutual wreck instead of recovering.
+/// from over-committing into a mutual wreck instead of recovering, though a team
+/// *trailing on captures* relaxes it to an even-health gamble (see
+/// [`finish_off_car`]) to hunt the leader it is paid extra to wreck.
 pub const FINISH_OFF_ENEMY_INTEGRITY_FRACTION: f32 = 0.30;
 
 /// Normalised driving intent produced by the virtual player brain.
@@ -330,14 +332,23 @@ pub struct FinishOffCandidate {
 /// - the enemy must be reeling but not already wrecked: above zero yet at or
 ///   below [`FINISH_OFF_ENEMY_INTEGRITY_FRACTION`]. A wreck already paid out and
 ///   a stunned enemy has no pool left to grind;
-/// - the hunting team must be the healthier of the two, so a team that is itself
-///   battered recovers (it pit-retreats) instead of trading into a mutual wreck;
+/// - the hunting team must be healthy enough relative to its prey. Normally it
+///   must be the *healthier* of the two, so a team that is itself battered
+///   recovers (it pit-retreats) instead of trading into a mutual wreck. A team
+///   `behind_on_captures`, however, relaxes this to an *even-health* gamble: the
+///   leader has a price on its head
+///   ([`crate::gameplay::combat::most_wanted_wreck_bonus`] pays the trailing
+///   team extra for wrecking it), so taking the even trade to bank the
+///   bounty, the flag turnover and slow the leader's snowball is worth it. The
+///   team is never the *more battered* side regardless, so the relaxation never
+///   tips into a suicidal chase;
 /// - a flag carrier is never pulled off its capture run, and at least one car
 ///   must stay on the objective, so a lone car never abandons the field for a kill.
 #[must_use]
 pub fn finish_off_car(
     own_integrity_fraction: f32,
     enemy_integrity_fraction: f32,
+    behind_on_captures: bool,
     candidates: &[FinishOffCandidate],
     enemy_positions: &[Vec2],
 ) -> Option<(Entity, Vec2)> {
@@ -346,7 +357,15 @@ pub fn finish_off_car(
     {
         return None;
     }
-    if own_integrity_fraction <= enemy_integrity_fraction {
+    // A trailing team takes the even-health gamble to hunt the reeling leader; a
+    // level or leading team holds out for a clear durability edge. Neither ever
+    // presses while it is the more battered side.
+    let healthy_enough = if behind_on_captures {
+        own_integrity_fraction >= enemy_integrity_fraction
+    } else {
+        own_integrity_fraction > enemy_integrity_fraction
+    };
+    if !healthy_enough {
         return None;
     }
     if candidates.len() < 2 || enemy_positions.is_empty() {
@@ -2136,7 +2155,7 @@ mod tests {
         let enemies = [Vec2::new(500.0, 0.0)];
 
         // Enemy above the reeling band: nothing to finish off yet.
-        assert_eq!(finish_off_car(1.0, 0.6, &candidates, &enemies), None);
+        assert_eq!(finish_off_car(1.0, 0.6, false, &candidates, &enemies), None);
     }
 
     #[test]
@@ -2148,7 +2167,7 @@ mod tests {
         let enemies = [Vec2::new(500.0, 0.0)];
 
         // A wreck already paid out; a stunned enemy has no pool left to grind.
-        assert_eq!(finish_off_car(1.0, 0.0, &candidates, &enemies), None);
+        assert_eq!(finish_off_car(1.0, 0.0, false, &candidates, &enemies), None);
     }
 
     #[test]
@@ -2159,10 +2178,14 @@ mod tests {
         ];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        // Both reeling and level: we recover instead of trading into a mutual wreck.
-        assert_eq!(finish_off_car(0.2, 0.2, &candidates, &enemies), None);
-        // We are the more battered: pressing would be suicidal.
-        assert_eq!(finish_off_car(0.1, 0.25, &candidates, &enemies), None);
+        // Both reeling and level: a team that is not behind recovers instead of
+        // trading into a mutual wreck.
+        assert_eq!(finish_off_car(0.2, 0.2, false, &candidates, &enemies), None);
+        // We are the more battered: pressing would be suicidal, behind or not.
+        assert_eq!(
+            finish_off_car(0.1, 0.25, false, &candidates, &enemies),
+            None
+        );
     }
 
     #[test]
@@ -2175,7 +2198,7 @@ mod tests {
 
         // Car 2 is closest to the prey, so it breaks off to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, &candidates, &enemies),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -2190,7 +2213,7 @@ mod tests {
 
         // The closest hunter (car 1) targets the nearer of the two enemy cars.
         assert_eq!(
-            finish_off_car(0.9, 0.15, &candidates, &enemies),
+            finish_off_car(0.9, 0.15, false, &candidates, &enemies),
             Some((Entity::from_raw(1), Vec2::new(-50.0, 0.0)))
         );
     }
@@ -2206,12 +2229,16 @@ mod tests {
         assert!(finish_off_car(
             0.9,
             FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+            false,
             &candidates,
             &enemies,
         )
         .is_some());
         let just_above = FINISH_OFF_ENEMY_INTEGRITY_FRACTION + 0.001;
-        assert_eq!(finish_off_car(0.9, just_above, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(0.9, just_above, false, &candidates, &enemies),
+            None
+        );
     }
 
     #[test]
@@ -2227,7 +2254,7 @@ mod tests {
         // The carrier is nearest the prey, but it keeps hauling: the non-carrier
         // is the one sent to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, &[carrier, hunter], &enemies),
+            finish_off_car(0.8, 0.2, false, &[carrier, hunter], &enemies),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -2237,7 +2264,7 @@ mod tests {
         let lone = [finish_off_candidate(1, Vec2::new(100.0, 0.0))];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        assert_eq!(finish_off_car(0.8, 0.2, &lone, &enemies), None);
+        assert_eq!(finish_off_car(0.8, 0.2, false, &lone, &enemies), None);
     }
 
     #[test]
@@ -2247,7 +2274,7 @@ mod tests {
             finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
         ];
 
-        assert_eq!(finish_off_car(0.8, 0.2, &candidates, &[]), None);
+        assert_eq!(finish_off_car(0.8, 0.2, false, &candidates, &[]), None);
     }
 
     #[test]
@@ -2266,7 +2293,7 @@ mod tests {
         ];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        assert_eq!(finish_off_car(0.8, 0.2, &carriers, &enemies), None);
+        assert_eq!(finish_off_car(0.8, 0.2, false, &carriers, &enemies), None);
     }
 
     #[test]
@@ -2280,8 +2307,57 @@ mod tests {
         let enemies = [Vec2::ZERO];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, &candidates, &enemies),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies),
             Some((Entity::from_raw(2), Vec2::ZERO))
         );
+    }
+
+    #[test]
+    fn finish_off_presses_an_even_match_when_behind_on_captures() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(380.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+
+        // Level on durability and both reeling: a team that is not behind holds
+        // station, but a team chasing the leader takes the even-health gamble to
+        // wreck the car it is paid extra to take down.
+        assert_eq!(finish_off_car(0.2, 0.2, false, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(0.2, 0.2, true, &candidates, &enemies),
+            Some((Entity::from_raw(1), Vec2::new(500.0, 0.0))),
+            "a trailing team should hunt the reeling leader at even health"
+        );
+    }
+
+    #[test]
+    fn finish_off_never_over_commits_when_more_battered_even_if_behind() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(100.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+
+        // Behind on captures but the more battered side: the comeback relaxation
+        // never tips into a suicidal chase, so the team still recovers instead.
+        assert_eq!(
+            finish_off_car(0.15, 0.25, true, &candidates, &enemies),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_still_needs_a_reeling_enemy_when_behind() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(100.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+
+        // Being behind relaxes only the health margin, never the requirement that
+        // the enemy be reeling: a healthy or already-wrecked leader is no target.
+        assert_eq!(finish_off_car(0.2, 0.6, true, &candidates, &enemies), None);
+        assert_eq!(finish_off_car(0.2, 0.0, true, &candidates, &enemies), None);
     }
 }

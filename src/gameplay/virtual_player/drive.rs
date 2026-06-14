@@ -1,5 +1,7 @@
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
-use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult, FlagTeam};
+use crate::gameplay::ctf::{
+    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam,
+};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
 use crate::gameplay::player::Player;
@@ -47,6 +49,7 @@ type VirtualPlayerDriveContext<'w> = (
     Option<Res<'w, WreckStuns>>,
     Option<Res<'w, WreckSurges>>,
     Option<Res<'w, CtfMatchResult>>,
+    Option<Res<'w, CaptureScore>>,
 );
 
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
@@ -58,13 +61,14 @@ pub fn virtual_player_drive_system(
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     context: VirtualPlayerDriveContext,
 ) {
-    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result) = context;
+    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
     {
         return;
     }
+    let captures = captures.as_deref().copied().unwrap_or_default();
 
     let player = player_query
         .get_single()
@@ -77,7 +81,7 @@ pub fn virtual_player_drive_system(
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
     let pit_retreats = pit_retreat_targets(&query, &flags, integrity.as_deref());
-    let finish_offs = finish_off_targets(&query, &flags, &threats, integrity.as_deref());
+    let finish_offs = finish_off_targets(&query, &flags, &threats, integrity.as_deref(), captures);
     let teammate_positions = virtual_player_positions(&query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
@@ -549,12 +553,15 @@ fn pit_retreat_targets(
 /// [`finish_off_car`]) to hunt the nearest enemy car and grind out the wreck.
 /// Enemy positions come from the same threat list the defensive roles use, so a
 /// hunter will press an enemy virtual player or the human flag-runner alike.
+/// A team trailing on `captures` presses at even health (the comeback gamble),
+/// mirroring the [`crate::gameplay::combat::most_wanted_wreck_bonus`] economy.
 /// Without an integrity resource (no combat loaded) no team ever presses.
 fn finish_off_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     flags: &[FlagTarget],
     threats: &[ThreatTarget],
     integrity: Option<&VehicleIntegrity>,
+    captures: CaptureScore,
 ) -> Vec<(Entity, DrivingTarget)> {
     let Some(integrity) = integrity else {
         return Vec::new();
@@ -576,9 +583,12 @@ fn finish_off_targets(
             .filter(|threat| threat.team == team.enemy())
             .map(|threat| threat.position)
             .collect();
+        let behind_on_captures =
+            captures_for_team(captures, team.enemy()) > captures_for_team(captures, team);
         if let Some((entity, prey)) = finish_off_car(
             integrity.fraction_for_team(team),
             integrity.fraction_for_team(team.enemy()),
+            behind_on_captures,
             &candidates,
             &enemy_positions,
         ) {
@@ -586,6 +596,15 @@ fn finish_off_targets(
         }
     }
     targets
+}
+
+/// Captures banked by `team`, reading the player tally for blue and the opponent
+/// tally for red so the trailing team can be told apart from the leader.
+const fn captures_for_team(captures: CaptureScore, team: AiTeam) -> u32 {
+    match team {
+        AiTeam::Blue => captures.player,
+        AiTeam::Red => captures.opponents,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1239,6 +1258,61 @@ mod tests {
         assert!(
             y > 1.0,
             "a team that is no healthier than its enemy keeps playing the objective: {y}"
+        );
+    }
+
+    #[test]
+    fn a_team_trailing_on_captures_hunts_the_reeling_leader_at_even_health() {
+        // Both teams are equally battered, so durability alone keeps the red car
+        // on its objective (see `a_reeling_team_does_not_over_commit_to_a_kill`).
+        // The capture scoreline is the variable: once red trails blue it takes
+        // the even-health gamble and breaks off to hunt the blue car behind it,
+        // the AI mirror of the most-wanted comeback bounty.
+        fn run(blue_captures: u32, red_captures: u32) -> f32 {
+            let mut app = app_with_system();
+            app.insert_resource(VehicleIntegrity {
+                player: 20.0,
+                opponent: 20.0,
+            });
+            app.insert_resource(CaptureScore {
+                player: blue_captures,
+                opponents: red_captures,
+            });
+            let red = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            // A second red car keeps the team above the lone-car guard and sits
+            // far from the prey so the origin car is the one chosen to hunt.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 1000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            // The reeling blue prey, straight behind the red hunter.
+            app.world.spawn((
+                VirtualPlayer {
+                    team: AiTeam::Blue,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints: vec![Vec2::new(0.0, -2000.0)],
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
+            ));
+
+            app.update();
+
+            app.world.get::<Transform>(red).unwrap().translation.y
+        }
+
+        let level = run(0, 0);
+        let trailing = run(2, 0);
+
+        assert!(
+            level > 1.0,
+            "level on captures the even-health red car keeps to its objective: {level}"
+        );
+        assert!(
+            trailing < -0.001,
+            "trailing on captures the red car breaks off to hunt the leader down: {trailing}"
         );
     }
 
