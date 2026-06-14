@@ -5,8 +5,8 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    next_waypoint, pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget, FlagTarget,
-    PickupTarget, PitRetreatCandidate, ThreatTarget,
+    finish_off_car, next_waypoint, pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget,
+    FinishOffCandidate, FlagTarget, PickupTarget, PitRetreatCandidate, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -62,6 +62,7 @@ pub fn virtual_player_drive_system(
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
     let pit_retreats = pit_retreat_targets(&query, &flags, integrity.as_deref());
+    let finish_offs = finish_off_targets(&query, &flags, &threats, integrity.as_deref());
     let teammate_positions = virtual_player_positions(&query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
@@ -74,18 +75,8 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        // A battered team's home-most car retreats to its pit, overriding
-        // whatever CTF role it would otherwise take.
-        let ctf_target = pit_retreats
-            .iter()
-            .find(|(retreat_entity, _)| *retreat_entity == entity)
-            .map(|(_, target)| *target)
-            .or_else(|| {
-                assigned_ctf_targets
-                    .iter()
-                    .find(|(assigned_entity, _)| *assigned_entity == entity)
-                    .and_then(|(_, target)| *target)
-            });
+        let ctf_target =
+            resolve_overlay_target(entity, &pit_retreats, &finish_offs, &assigned_ctf_targets);
         let entity_pickups: Vec<PickupTarget> = claimed_pickups
             .iter()
             .filter_map(|(assigned_entity, pickup)| (*assigned_entity == entity).then_some(*pickup))
@@ -153,6 +144,34 @@ pub fn virtual_player_drive_system(
         transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
         transform.translation.z = 4.0;
     }
+}
+
+/// Resolves the highest-priority driving target an entity has this frame.
+///
+/// A battered team's home-most car retreats to its pit (survival first);
+/// otherwise a healthier team's keenest car breaks off to finish a reeling
+/// enemy. Either overlay overrides the CTF role the car would otherwise take,
+/// so the assigned role is only used when neither overlay claims the entity.
+fn resolve_overlay_target(
+    entity: Entity,
+    pit_retreats: &[(Entity, DrivingTarget)],
+    finish_offs: &[(Entity, DrivingTarget)],
+    assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
+) -> Option<DrivingTarget> {
+    let overlay = |targets: &[(Entity, DrivingTarget)]| {
+        targets
+            .iter()
+            .find(|(candidate, _)| *candidate == entity)
+            .map(|(_, target)| *target)
+    };
+    overlay(pit_retreats)
+        .or_else(|| overlay(finish_offs))
+        .or_else(|| {
+            assigned_ctf_targets
+                .iter()
+                .find(|(assigned_entity, _)| *assigned_entity == entity)
+                .and_then(|(_, target)| *target)
+        })
 }
 
 fn virtual_player_positions(
@@ -497,6 +516,53 @@ fn pit_retreat_targets(
             .collect();
         if let Some(entity) = pit_retreat_car(integrity.fraction_for_team(team), &candidates) {
             targets.push((entity, DrivingTarget::HomeBase(home)));
+        }
+    }
+    targets
+}
+
+/// Resolves which healthier teams break a car off to finish a reeling enemy.
+///
+/// The offensive counterpart to [`pit_retreat_targets`]: each team is priced
+/// against both integrity pools, and a team that is the healthier of the two
+/// while its enemy is reeling sends its keenest non-carrier (see
+/// [`finish_off_car`]) to hunt the nearest enemy car and grind out the wreck.
+/// Enemy positions come from the same threat list the defensive roles use, so a
+/// hunter will press an enemy virtual player or the human flag-runner alike.
+/// Without an integrity resource (no combat loaded) no team ever presses.
+fn finish_off_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    threats: &[ThreatTarget],
+    integrity: Option<&VehicleIntegrity>,
+) -> Vec<(Entity, DrivingTarget)> {
+    let Some(integrity) = integrity else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    for team in [AiTeam::Blue, AiTeam::Red] {
+        let candidates: Vec<FinishOffCandidate> = query
+            .iter()
+            .filter(|(_, virtual_player, _)| virtual_player.team == team)
+            .map(|(entity, _, transform)| FinishOffCandidate {
+                entity,
+                position: transform.translation.xy(),
+                carries_enemy_flag: carries_enemy_flag(entity, team, flags),
+            })
+            .collect();
+        let enemy_positions: Vec<Vec2> = threats
+            .iter()
+            .filter(|threat| threat.team == team.enemy())
+            .map(|threat| threat.position)
+            .collect();
+        if let Some((entity, prey)) = finish_off_car(
+            integrity.fraction_for_team(team),
+            integrity.fraction_for_team(team.enemy()),
+            &candidates,
+            &enemy_positions,
+        ) {
+            targets.push((entity, DrivingTarget::FinishWreck(prey)));
         }
     }
     targets
@@ -1052,6 +1118,93 @@ mod tests {
         assert!(
             y > 1.0,
             "a lone battered car must keep attacking rather than abandon the field: {y}"
+        );
+    }
+
+    #[test]
+    fn a_healthier_team_hunts_a_reeling_enemy() {
+        // A red hunter sits at the origin facing +Y with its patrol waypoint
+        // straight ahead, while a lone blue car sits straight behind it. The
+        // blue team's wear is the variable: healthy blue and the red car drives
+        // forward to its waypoint; reeling blue and the red car breaks off,
+        // reversing to hunt the battered enemy down.
+        fn run(player_integrity: f32) -> f32 {
+            let mut app = app_with_system();
+            app.insert_resource(VehicleIntegrity {
+                player: player_integrity,
+                opponent: MAX_INTEGRITY,
+            });
+            let hunter = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            // A second red car keeps the team above the lone-car guard and sits
+            // far from the prey so the origin car is the one chosen to hunt.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 1000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            // The blue prey, straight behind the red hunter.
+            app.world.spawn((
+                VirtualPlayer {
+                    team: AiTeam::Blue,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints: vec![Vec2::new(0.0, -2000.0)],
+                    current_waypoint: 0,
+                },
+                Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
+            ));
+
+            app.update();
+
+            app.world.get::<Transform>(hunter).unwrap().translation.y
+        }
+
+        let healthy = run(MAX_INTEGRITY);
+        let reeling = run(20.0);
+
+        assert!(
+            healthy > 1.0,
+            "against a healthy enemy the red car attacks forward: {healthy}"
+        );
+        assert!(
+            reeling < -0.001,
+            "against a reeling enemy the red car breaks off to hunt it down behind: {reeling}"
+        );
+    }
+
+    #[test]
+    fn a_reeling_team_does_not_over_commit_to_a_kill() {
+        // Both teams are battered but level. Neither is the healthier side, so
+        // the red car keeps attacking its waypoint rather than trading itself
+        // into a mutual wreck chasing the blue car behind it.
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: 20.0,
+        });
+        let red = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 1500.0, 4.0),
+        );
+        app.world.spawn((
+            VirtualPlayer {
+                team: AiTeam::Blue,
+                movement_speed: 500.0,
+                rotation_speed: f32::to_radians(360.0),
+                waypoints: vec![Vec2::new(0.0, -2000.0)],
+                current_waypoint: 0,
+            },
+            Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
+        ));
+
+        app.update();
+
+        let y = app.world.get::<Transform>(red).unwrap().translation.y;
+        assert!(
+            y > 1.0,
+            "a team that is no healthier than its enemy keeps playing the objective: {y}"
         );
     }
 
