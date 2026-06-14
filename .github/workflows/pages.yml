@@ -58,7 +58,9 @@ jobs:
           shared-key: ${{ runner.os }}-build-web
 
       - name: Install Bevy deps + LLD linker
-        run: sudo apt-get install g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev lld
 
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@stable
