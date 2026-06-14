@@ -1,0 +1,43 @@
+name: Scheduled audit 🛡️
+
+# The push/pull-request `audit` job in ci.yml only scans Cargo.lock when the code
+# changes. RustSec advisories, however, are disclosed continuously against crates
+# that are already pinned, so a vulnerability filed against an unchanged lockfile
+# would stay invisible until the next push, possibly weeks away on an idle repo.
+# This standalone workflow runs the same advisory scan on a weekly timer to close
+# that gap. It is deliberately tiny: cargo-audit only reads Cargo.lock, so there
+# is no LFS pull, no system dependencies, and no project build to pay for.
+#
+# A failing scheduled run turns the workflow red and triggers GitHub's default
+# failed-run notification to the repository owner. workflow_dispatch keeps a
+# manual trigger available and revives the schedule if GitHub disables it after a
+# long idle stretch.
+
+on:
+  schedule:
+    # 06:17 UTC every Monday. Off the top of the hour so the run is not queued
+    # behind the cron congestion GitHub warns about at minute zero.
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Scan dependencies for known vulnerabilities
+        run: bash scripts/check_security_advisories.sh

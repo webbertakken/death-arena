@@ -205,6 +205,9 @@ jobs:
       - name: Validate CI workflow
         run: bash scripts/check_ci_workflow.sh
 
+      - name: Validate scheduled audit workflow
+        run: bash scripts/check_scheduled_audit_workflow.sh
+
       - name: Check shell scripts
         run: bash scripts/check_shell_scripts.sh
 
