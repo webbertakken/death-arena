@@ -145,3 +145,27 @@ jobs:
 
       - name: Cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+  guards:
+    name: Quality guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Validate Pages workflow
+        run: bash scripts/check_pages_workflow.sh
+
+      - name: Validate CI workflow
+        run: bash scripts/check_ci_workflow.sh
+
+      - name: Check shell scripts
+        run: bash scripts/check_shell_scripts.sh
+
+      - name: Check Rust safety (no unsafe)
+        run: bash scripts/check_rust_safety.sh

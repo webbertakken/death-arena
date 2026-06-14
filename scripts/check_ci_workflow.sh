@@ -34,3 +34,24 @@ Use: cargo clippy --all-targets --all-features -- -D warnings
 ERROR
   exit 1
 fi
+
+# The guard scripts that gate commits locally must also run in CI, so the same
+# integrity rules (no unsafe, strict shell scripts, intact workflows) are
+# enforced on every push and pull request, not just before a local commit.
+required_guards=(
+  "bash scripts/check_pages_workflow.sh"
+  "bash scripts/check_ci_workflow.sh"
+  "bash scripts/check_shell_scripts.sh"
+  "bash scripts/check_rust_safety.sh"
+)
+for guard in "${required_guards[@]}"; do
+  if ! grep -Fq "${guard}" "${workflow}"; then
+    cat >&2 <<ERROR
+CI workflow must run the local quality guard: ${guard}
+The guards enforced before a local commit must also run in CI so a bypassed
+hook cannot land unsafe code, a lax shell script, or a regressed workflow.
+Add a step that runs: ${guard}
+ERROR
+    exit 1
+  fi
+done
