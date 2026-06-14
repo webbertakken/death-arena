@@ -118,6 +118,38 @@ pub const AGGRESSOR_RAM_ALIGNMENT: f32 = 0.5;
 /// below the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted charge still
 /// bites hardest, yet above the base scrape so committing to a ram always pays.
 pub const AGGRESSOR_RAM_DAMAGE_PER_FRAME: f32 = 0.35;
+/// Heading alignment off a victim's own facing within which a ram counts as
+/// catching its exposed flank rather than its nose or tail.
+///
+/// Measured as the absolute dot product between the victim's facing and the
+/// direction to the car striking it, so `0.0` is a dead-square broadside and
+/// `1.0` a pure head-on or rear-end. At `0.5` the striker must come from within
+/// the victim's side arc (60-120 degrees off its nose), the spread of a genuine
+/// T-bone rather than a glancing front-quarter clip.
+pub const BROADSIDE_RAM_FLANK_THRESHOLD: f32 = 0.5;
+/// Extra durability a car caught side-on by a charging enemy loses each frame
+/// the two are trading paint.
+///
+/// The classic Death Rally T-bone: catching an enemy square in the flank with a
+/// committed charge punishes it harder than a head-on meeting, because the
+/// struck car cannot trade the hit back, its own nose is pointed elsewhere. A
+/// broadside only lands when the striker is *also* charging (the same nose-on
+/// commitment [`AGGRESSOR_RAM_ALIGNMENT`] demands), so it stacks on the
+/// [`AGGRESSOR_RAM_DAMAGE_PER_FRAME`] hit a clean cut-off already earns and
+/// rewards lining up the kill shot on a fleeing or turning foe. Priced a notch
+/// above the head-on aggressor bite, since a flank hit is the more punishing
+/// angle, yet kept under the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted
+/// charge stays the single hardest source of wear.
+pub const BROADSIDE_RAM_DAMAGE_PER_FRAME: f32 = 0.4;
+/// A flank hit must out-bite the head-on aggressor charge, enforced at compile
+/// time, so catching a foe side-on always beats meeting it nose-to-nose.
+const _: () = assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+/// A flank hit must stay under the earned nitro charge, enforced at compile
+/// time, so a boosted ram remains the hardest single hit a car can land.
+const _: () = assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
+/// The flank arc must be a real wedge, enforced at compile time: a positive
+/// threshold opens the side window, below `1.0` keeps a pure head-on out of it.
+const _: () = assert!(BROADSIDE_RAM_FLANK_THRESHOLD > 0.0 && BROADSIDE_RAM_FLANK_THRESHOLD < 1.0);
 /// Fraction of incoming ram damage a shielded team still takes.
 ///
 /// The defensive counter to the all-offence ramming loop: while a team's shield
@@ -787,6 +819,61 @@ pub fn aggressor_ram_damage(cars: &[RamCar]) -> TeamDamage {
     damage
 }
 
+/// Computes the bonus ram damage cars caught side-on by a charging enemy take.
+///
+/// A car is "broadsided" when an opposing car is within [`RAM_RADIUS`], is
+/// charging it (the striker's nose inside the [`AGGRESSOR_RAM_ALIGNMENT`] cone,
+/// the same commitment the aggressor bonus demands) and strikes from the
+/// victim's flank (the approach falling inside the side arc set by
+/// [`BROADSIDE_RAM_FLANK_THRESHOLD`]). Every broadsided car bleeds
+/// [`BROADSIDE_RAM_DAMAGE_PER_FRAME`] into its *own* team's pool on top of the
+/// base [`ram_damage`] scrape, so a clean T-bone wears the struck team down
+/// faster than a head-on meeting. Charged once per struck car however many
+/// enemies pile into its flank, mirroring [`carrier_ram_damage`].
+#[must_use]
+pub fn broadside_ram_damage(cars: &[RamCar]) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, victim) in cars.iter().enumerate() {
+        let Some(victim_heading) = victim.forward.try_normalize() else {
+            continue;
+        };
+
+        let is_broadsided = cars.iter().enumerate().any(|(other_index, striker)| {
+            if other_index == index || striker.team == victim.team {
+                return false;
+            }
+            let to_striker = striker.position - victim.position;
+            if to_striker.length_squared() > radius_sq {
+                return false;
+            }
+            let Some(approach) = to_striker.try_normalize() else {
+                return false;
+            };
+            // The striker is committing to the hit: its nose is on the victim.
+            let charging = striker
+                .forward
+                .try_normalize()
+                .is_some_and(|heading| heading.dot(-approach) >= AGGRESSOR_RAM_ALIGNMENT);
+            // The victim is caught square: the strike falls on its side arc.
+            let flanked = victim_heading.dot(approach).abs() <= BROADSIDE_RAM_FLANK_THRESHOLD;
+            charging && flanked
+        });
+        if is_broadsided {
+            match victim.team {
+                AiTeam::Blue => damage.player += BROADSIDE_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.opponent += BROADSIDE_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
 /// Durability each team regains from home-base pit recovery in a single frame.
 ///
 /// The recovery mirror of [`TeamDamage`]: where ram wear is subtracted from a
@@ -933,7 +1020,8 @@ pub fn ram_damage_system(
     let raw_damage = ram_damage(&cars)
         .combined(nitro_ram_damage(&cars, boost))
         .combined(carrier_ram_damage(&cars))
-        .combined(aggressor_ram_damage(&cars));
+        .combined(aggressor_ram_damage(&cars))
+        .combined(broadside_ram_damage(&cars));
     // A team with its shield up shrugs off part of every ram it eats this frame.
     let damage = armour_mitigated_damage(raw_damage, shield);
 
@@ -1748,6 +1836,149 @@ mod tests {
     }
 
     #[test]
+    fn a_side_on_charge_broadsides_the_struck_team() {
+        // A red car charges in from the blue car's flank: blue faces +Y while
+        // the red striker comes from +X with its nose on blue's door.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_flank_charge_wears_the_red_team_it_t_bones() {
+        // The mirror: a blue car charges a red car square in the side.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(-(RAM_RADIUS - 10.0), 0.0);
+        let cars = [red(victim), blue_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.opponent, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.player, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charge_is_no_broadside() {
+        // Nose to nose: each car is hit on its front, not its flank, so the
+        // broadside bonus stays silent and only the aggressor charge applies.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_parallel_scrape_is_no_broadside() {
+        // Two cars running side by side, both facing +Y: a flank position alone
+        // earns no broadside without a striker charging into it.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_glancing_front_quarter_charge_is_no_broadside() {
+        // The striker charges from 30 degrees off the victim's nose: inside the
+        // aggressor cone but short of the side arc, a frontal clip not a T-bone.
+        let victim = Vec2::ZERO;
+        let angle = std::f32::consts::FRAC_PI_6;
+        let striker = Vec2::new(angle.sin(), angle.cos()) * (RAM_RADIUS - 10.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_broadside_needs_contact() {
+        // A perfect side-on charge just out of ram range deals nothing.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_double_flank_charges_the_victim_once() {
+        // Two reds T-bone a lone blue from both flanks: the struck car bleeds a
+        // single broadside, not one per striker (the per-victim model).
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            red_facing(Vec2::new(50.0, 0.0), victim),
+            red_facing(Vec2::new(-50.0, 0.0), victim),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_broadside() {
+        // A victim with no facing cannot be judged side-on, so it is skipped.
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red_facing(striker, Vec2::ZERO),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_flank_hit_out_bites_a_head_on_charge_but_not_a_nitro_ram() {
+        // The pricing ladder: a T-bone is the most punishing positional hit, yet
+        // an earned nitro charge stays the single hardest source of wear.
+        assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME > AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert!(BROADSIDE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_adds_broadside_ram_bonus_on_a_flank_charge() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        app.add_system(ram_damage_system);
+        // The player keeps its default +Y facing, exposing its flank along +X.
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        // The red car sits on the player's flank and charges -X into its door
+        // (a quarter-turn from its default +Y heading).
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0))
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; the red charges the player's exposed
+        // flank, so the player also eats the aggressor charge and the broadside
+        // bonus on top, while the red car only takes the base scrape back.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY
+                - RAM_DAMAGE_PER_FRAME
+                - AGGRESSOR_RAM_DAMAGE_PER_FRAME
+                - BROADSIDE_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
     fn system_adds_aggressor_ram_bonus_when_a_car_charges() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
@@ -1758,11 +1989,14 @@ mod tests {
             Transform::from_translation(Vec3::ZERO)
                 .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
         ));
-        // The red car faces +Y by default, so it only takes the charge, it does
-        // not deal one back.
+        // The red car faces +X too (driving away), so the player rear-ends it:
+        // it takes the head-on charge without dealing one back, and the strike
+        // lands on its tail rather than its flank, isolating the aggressor bonus
+        // from the broadside one.
         app.world.spawn((
             virtual_player_stub(AiTeam::Red),
-            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0))
+                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
         ));
 
         app.update();
