@@ -387,6 +387,14 @@ pub struct FinishOffCandidate {
 /// shared `x`-then-`y` [`compare_positions`] tie-break; it is aimed at whichever
 /// enemy car is nearest to *it*.
 ///
+/// When `enemy_flag_carrier` is set, a reeling enemy is hauling this team's flag
+/// away, the single most valuable wreck on the board: cutting it down denies the
+/// capture, forces the turnover, and banks the
+/// [`crate::gameplay::combat::carrier_takedown_wreck_bonus`]. The hunt then
+/// redirects to the thief, the keenest non-carrier nearest *it* is sent (same
+/// `x`-then-`y` tie-break), so a kill press on a reeling team that has just
+/// stolen the flag chases the runner home instead of the merely-nearest foe.
+///
 /// Guards keep the press from backfiring:
 /// - the enemy must be reeling but not already wrecked: above zero yet at or
 ///   below [`FINISH_OFF_ENEMY_INTEGRITY_FRACTION`]. A wreck already paid out and
@@ -410,6 +418,7 @@ pub fn finish_off_car(
     behind_on_captures: bool,
     candidates: &[FinishOffCandidate],
     enemy_positions: &[Vec2],
+    enemy_flag_carrier: Option<Vec2>,
 ) -> Option<(Entity, Vec2)> {
     if enemy_integrity_fraction <= 0.0
         || enemy_integrity_fraction > FINISH_OFF_ENEMY_INTEGRITY_FRACTION
@@ -429,6 +438,22 @@ pub fn finish_off_car(
     }
     if candidates.len() < 2 || enemy_positions.is_empty() {
         return None;
+    }
+
+    // A reeling enemy hauling our flag is the most valuable kill on the board:
+    // redirect the hunt to the thief, sending the keenest non-carrier nearest it.
+    if let Some(carrier) = enemy_flag_carrier {
+        return candidates
+            .iter()
+            .filter(|candidate| !candidate.carries_enemy_flag)
+            .min_by(|a, b| {
+                a.position
+                    .distance_squared(carrier)
+                    .partial_cmp(&b.position.distance_squared(carrier))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| compare_positions(a.position, b.position))
+            })
+            .map(|candidate| (candidate.entity, carrier));
     }
 
     candidates
@@ -2418,7 +2443,10 @@ mod tests {
         let enemies = [Vec2::new(500.0, 0.0)];
 
         // Enemy above the reeling band: nothing to finish off yet.
-        assert_eq!(finish_off_car(1.0, 0.6, false, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(1.0, 0.6, false, &candidates, &enemies, None),
+            None
+        );
     }
 
     #[test]
@@ -2430,7 +2458,10 @@ mod tests {
         let enemies = [Vec2::new(500.0, 0.0)];
 
         // A wreck already paid out; a stunned enemy has no pool left to grind.
-        assert_eq!(finish_off_car(1.0, 0.0, false, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(1.0, 0.0, false, &candidates, &enemies, None),
+            None
+        );
     }
 
     #[test]
@@ -2443,10 +2474,13 @@ mod tests {
 
         // Both reeling and level: a team that is not behind recovers instead of
         // trading into a mutual wreck.
-        assert_eq!(finish_off_car(0.2, 0.2, false, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None),
+            None
+        );
         // We are the more battered: pressing would be suicidal, behind or not.
         assert_eq!(
-            finish_off_car(0.1, 0.25, false, &candidates, &enemies),
+            finish_off_car(0.1, 0.25, false, &candidates, &enemies, None),
             None
         );
     }
@@ -2461,7 +2495,7 @@ mod tests {
 
         // Car 2 is closest to the prey, so it breaks off to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -2476,7 +2510,7 @@ mod tests {
 
         // The closest hunter (car 1) targets the nearer of the two enemy cars.
         assert_eq!(
-            finish_off_car(0.9, 0.15, false, &candidates, &enemies),
+            finish_off_car(0.9, 0.15, false, &candidates, &enemies, None),
             Some((Entity::from_raw(1), Vec2::new(-50.0, 0.0)))
         );
     }
@@ -2495,11 +2529,12 @@ mod tests {
             false,
             &candidates,
             &enemies,
+            None,
         )
         .is_some());
         let just_above = FINISH_OFF_ENEMY_INTEGRITY_FRACTION + 0.001;
         assert_eq!(
-            finish_off_car(0.9, just_above, false, &candidates, &enemies),
+            finish_off_car(0.9, just_above, false, &candidates, &enemies, None),
             None
         );
     }
@@ -2517,7 +2552,7 @@ mod tests {
         // The carrier is nearest the prey, but it keeps hauling: the non-carrier
         // is the one sent to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &[carrier, hunter], &enemies),
+            finish_off_car(0.8, 0.2, false, &[carrier, hunter], &enemies, None),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -2527,7 +2562,7 @@ mod tests {
         let lone = [finish_off_candidate(1, Vec2::new(100.0, 0.0))];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        assert_eq!(finish_off_car(0.8, 0.2, false, &lone, &enemies), None);
+        assert_eq!(finish_off_car(0.8, 0.2, false, &lone, &enemies, None), None);
     }
 
     #[test]
@@ -2537,7 +2572,10 @@ mod tests {
             finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
         ];
 
-        assert_eq!(finish_off_car(0.8, 0.2, false, &candidates, &[]), None);
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &candidates, &[], None),
+            None
+        );
     }
 
     #[test]
@@ -2556,7 +2594,10 @@ mod tests {
         ];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        assert_eq!(finish_off_car(0.8, 0.2, false, &carriers, &enemies), None);
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &carriers, &enemies, None),
+            None
+        );
     }
 
     #[test]
@@ -2570,7 +2611,7 @@ mod tests {
         let enemies = [Vec2::ZERO];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
             Some((Entity::from_raw(2), Vec2::ZERO))
         );
     }
@@ -2586,9 +2627,12 @@ mod tests {
         // Level on durability and both reeling: a team that is not behind holds
         // station, but a team chasing the leader takes the even-health gamble to
         // wreck the car it is paid extra to take down.
-        assert_eq!(finish_off_car(0.2, 0.2, false, &candidates, &enemies), None);
         assert_eq!(
-            finish_off_car(0.2, 0.2, true, &candidates, &enemies),
+            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None),
+            None
+        );
+        assert_eq!(
+            finish_off_car(0.2, 0.2, true, &candidates, &enemies, None),
             Some((Entity::from_raw(1), Vec2::new(500.0, 0.0))),
             "a trailing team should hunt the reeling leader at even health"
         );
@@ -2605,7 +2649,7 @@ mod tests {
         // Behind on captures but the more battered side: the comeback relaxation
         // never tips into a suicidal chase, so the team still recovers instead.
         assert_eq!(
-            finish_off_car(0.15, 0.25, true, &candidates, &enemies),
+            finish_off_car(0.15, 0.25, true, &candidates, &enemies, None),
             None
         );
     }
@@ -2620,7 +2664,134 @@ mod tests {
 
         // Being behind relaxes only the health margin, never the requirement that
         // the enemy be reeling: a healthy or already-wrecked leader is no target.
-        assert_eq!(finish_off_car(0.2, 0.6, true, &candidates, &enemies), None);
-        assert_eq!(finish_off_car(0.2, 0.0, true, &candidates, &enemies), None);
+        assert_eq!(
+            finish_off_car(0.2, 0.6, true, &candidates, &enemies, None),
+            None
+        );
+        assert_eq!(
+            finish_off_car(0.2, 0.0, true, &candidates, &enemies, None),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_hunts_a_reeling_enemy_carrier_over_a_nearer_foe() {
+        // An empty-handed foe sits right on top of car 1, while our stolen flag is
+        // hauled away far to the left. Cutting the carrier down denies the capture,
+        // forces the turnover, and banks the carrier-takedown bounty, so the hunter
+        // chases the carrier rather than the nearer, less valuable kill.
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(0.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(600.0, 0.0)),
+        ];
+        let nearer_foe = Vec2::new(40.0, 0.0);
+        let carrier = Vec2::new(-500.0, 0.0);
+        let enemies = [nearer_foe, carrier];
+
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            Some((Entity::from_raw(1), carrier)),
+            "a reeling carrier is the most valuable kill, even when a nearer foe beckons"
+        );
+    }
+
+    #[test]
+    fn finish_off_sends_the_hunter_nearest_the_carrier() {
+        // Car 1 is closest to a stray enemy on the right; car 2 is closest to the
+        // flag thief fleeing left. Without our flag in flight the nearer-kill rule
+        // would pick car 1; with it stolen the carrier is the prize, so the
+        // carrier-side hunter (car 2) is committed instead.
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(450.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-400.0, 0.0)),
+        ];
+        let stray = Vec2::new(500.0, 0.0);
+        let carrier = Vec2::new(-500.0, 0.0);
+        let enemies = [stray, carrier];
+
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
+            Some((Entity::from_raw(1), stray)),
+            "with no flag stolen the nearer kill still wins"
+        );
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            Some((Entity::from_raw(2), carrier)),
+            "a stolen flag redirects the hunt to the thief"
+        );
+    }
+
+    #[test]
+    fn finish_off_carrier_hunt_still_spares_our_own_carrier() {
+        // The car nearest the thief is itself running the enemy flag home, so it
+        // keeps its capture run; the next-nearest non-carrier gives chase instead.
+        let our_carrier = FinishOffCandidate {
+            entity: Entity::from_raw(1),
+            position: Vec2::new(-480.0, 0.0),
+            carries_enemy_flag: true,
+        };
+        let hunter = finish_off_candidate(2, Vec2::new(-200.0, 0.0));
+        let carrier = Vec2::new(-500.0, 0.0);
+        let enemies = [Vec2::new(300.0, 0.0), carrier];
+
+        assert_eq!(
+            finish_off_car(
+                0.8,
+                0.2,
+                false,
+                &[our_carrier, hunter],
+                &enemies,
+                Some(carrier),
+            ),
+            Some((Entity::from_raw(2), carrier))
+        );
+    }
+
+    #[test]
+    fn finish_off_carrier_hunt_breaks_ties_deterministically() {
+        // Two hunters equidistant from the thief: the lower `x` then `y` wins,
+        // matching `compare_positions`.
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(100.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-100.0, 0.0)),
+        ];
+        let carrier = Vec2::ZERO;
+        let enemies = [carrier];
+
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            Some((Entity::from_raw(2), Vec2::ZERO))
+        );
+    }
+
+    #[test]
+    fn finish_off_ignores_a_carrier_when_the_enemy_is_not_reeling() {
+        // The reeling and health guards run before the carrier branch: a healthy
+        // enemy team is no target even while it hauls our flag.
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(0.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let carrier = Vec2::new(-500.0, 0.0);
+        let enemies = [carrier];
+
+        assert_eq!(
+            finish_off_car(0.8, 0.6, false, &candidates, &enemies, Some(carrier)),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_carrier_hunt_keeps_the_last_car_on_duty() {
+        // Even with our flag stolen, a lone car never abandons the field just to
+        // chase: the stolen-flag defensive role already covers the solo case.
+        let lone = [finish_off_candidate(1, Vec2::new(0.0, 0.0))];
+        let carrier = Vec2::new(-500.0, 0.0);
+        let enemies = [carrier];
+
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &lone, &enemies, Some(carrier)),
+            None
+        );
     }
 }

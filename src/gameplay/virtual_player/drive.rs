@@ -770,6 +770,9 @@ fn pit_retreat_targets(
 /// [`finish_off_car`]) to hunt the nearest enemy car and grind out the wreck.
 /// Enemy positions come from the same threat list the defensive roles use, so a
 /// hunter will press an enemy virtual player or the human flag-runner alike.
+/// When the enemy is reeling *and* hauling this team's flag away, the hunt
+/// redirects to that thief (the most valuable wreck on the board), read from the
+/// team's own stolen flag, which sits at its carrier.
 /// A team trailing on `captures` presses at even health (the comeback gamble),
 /// mirroring the [`crate::gameplay::combat::most_wanted_wreck_bonus`] economy.
 /// Without an integrity resource (no combat loaded) no team ever presses.
@@ -800,6 +803,14 @@ fn finish_off_targets(
             .filter(|threat| threat.team == team.enemy())
             .map(|threat| threat.position)
             .collect();
+        // An enemy hauling this team's flag away is the single most valuable kill
+        // on the board: a held flag sits at its carrier, so the team's own stolen
+        // flag marks where the thief is. Hand it to the hunter so the kill press
+        // chases the carrier rather than the merely-nearest foe.
+        let enemy_flag_carrier = flags
+            .iter()
+            .find(|flag| flag.team == team && flag.holder.is_some())
+            .map(|flag| flag.position);
         let behind_on_captures =
             captures_for_team(captures, team.enemy()) > captures_for_team(captures, team);
         if let Some((entity, prey)) = finish_off_car(
@@ -808,6 +819,7 @@ fn finish_off_targets(
             behind_on_captures,
             &candidates,
             &enemy_positions,
+            enemy_flag_carrier,
         ) {
             targets.push((entity, DrivingTarget::FinishWreck(prey)));
         }
