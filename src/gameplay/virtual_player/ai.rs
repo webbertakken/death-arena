@@ -313,6 +313,58 @@ pub fn pit_retreat_car(
         .map(|candidate| candidate.entity)
 }
 
+/// A virtual player a leading team could recall to guard a closing-time lead.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeadDefenceCandidate {
+    pub entity: Entity,
+    pub position: Vec2,
+    pub home: Vec2,
+    pub carries_enemy_flag: bool,
+}
+
+/// Picks the single car a team protecting a closing-time lead recalls to guard
+/// its own base, or `None` when no lead defence is warranted.
+///
+/// The defensive mirror of the trailing team's closing-time objective
+/// commitment: where a side that is *not* ahead races the flag in the final
+/// stretch, a side that *is* ahead stops over-extending and stations its
+/// home-most non-carrier on the defensive lane, so the equalising capture has to
+/// get through a dug-in defender. The classic "protect the lead, run down the
+/// clock" play, and the completion of the closing-time arc.
+///
+/// Stateless and deterministic, mirroring [`pit_retreat_car`]: the car nearest
+/// its own base is chosen (cheapest to recall and, once it commits homeward,
+/// stays nearest, so the pick is stable), with `x` then `y` as the tie-break.
+///
+/// Two guards keep the recall from backfiring:
+/// - a flag carrier is never pulled off its run, since a capture would seal the
+///   match outright, the strongest lead protection of all;
+/// - at least one car must stay free, so a lone car never abandons the field
+///   just to camp its own base.
+#[must_use]
+pub fn lead_defence_car(
+    protecting_lead: bool,
+    candidates: &[LeadDefenceCandidate],
+) -> Option<Entity> {
+    if !protecting_lead {
+        return None;
+    }
+    if candidates.len() < 2 {
+        return None;
+    }
+    candidates
+        .iter()
+        .filter(|candidate| !candidate.carries_enemy_flag)
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(a.home)
+                .partial_cmp(&b.position.distance_squared(b.home))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare_positions(a.position, b.position))
+        })
+        .map(|candidate| candidate.entity)
+}
+
 /// A virtual player a healthier team could send to hunt down a reeling enemy.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FinishOffCandidate {
@@ -2247,6 +2299,104 @@ mod tests {
         ];
 
         assert_eq!(pit_retreat_car(0.2, &candidates), Some(Entity::from_raw(2)));
+    }
+
+    fn lead_defence_candidate(entity: u32, position: Vec2, home: Vec2) -> LeadDefenceCandidate {
+        LeadDefenceCandidate {
+            entity: Entity::from_raw(entity),
+            position,
+            home,
+            carries_enemy_flag: false,
+        }
+    }
+
+    #[test]
+    fn lead_defence_recalls_no_one_when_not_protecting_a_lead() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            lead_defence_candidate(1, Vec2::new(450.0, 0.0), home),
+            lead_defence_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(lead_defence_car(false, &candidates), None);
+    }
+
+    #[test]
+    fn lead_defence_recalls_the_home_most_car_when_protecting_a_lead() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            lead_defence_candidate(1, Vec2::new(-200.0, 0.0), home),
+            lead_defence_candidate(2, Vec2::new(450.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            lead_defence_car(true, &candidates),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn lead_defence_never_pulls_a_flag_carrier() {
+        let home = Vec2::new(500.0, 0.0);
+        let carrier = LeadDefenceCandidate {
+            entity: Entity::from_raw(1),
+            position: Vec2::new(480.0, 0.0),
+            home,
+            carries_enemy_flag: true,
+        };
+        let defender = lead_defence_candidate(2, Vec2::new(-100.0, 0.0), home);
+
+        // The carrier sits closer to home, but it keeps hauling toward a sealing
+        // capture: the non-carrier is the one recalled to guard.
+        assert_eq!(
+            lead_defence_car(true, &[carrier, defender]),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    #[test]
+    fn lead_defence_keeps_the_last_car_on_duty() {
+        let home = Vec2::new(500.0, 0.0);
+        let lone = [lead_defence_candidate(1, Vec2::new(480.0, 0.0), home)];
+
+        assert_eq!(lead_defence_car(true, &lone), None);
+    }
+
+    #[test]
+    fn lead_defence_returns_none_when_every_car_carries_a_flag() {
+        let home = Vec2::new(500.0, 0.0);
+        let carriers = [
+            LeadDefenceCandidate {
+                entity: Entity::from_raw(1),
+                position: Vec2::new(480.0, 0.0),
+                home,
+                carries_enemy_flag: true,
+            },
+            LeadDefenceCandidate {
+                entity: Entity::from_raw(2),
+                position: Vec2::new(-100.0, 0.0),
+                home,
+                carries_enemy_flag: true,
+            },
+        ];
+
+        assert_eq!(lead_defence_car(true, &carriers), None);
+    }
+
+    #[test]
+    fn lead_defence_breaks_distance_ties_deterministically() {
+        let home = Vec2::ZERO;
+        // Both cars sit the same distance from home; the lower `x` then `y`
+        // wins, matching `compare_positions`.
+        let candidates = [
+            lead_defence_candidate(1, Vec2::new(100.0, 0.0), home),
+            lead_defence_candidate(2, Vec2::new(-100.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            lead_defence_car(true, &candidates),
+            Some(Entity::from_raw(2))
+        );
     }
 
     fn finish_off_candidate(entity: u32, position: Vec2) -> FinishOffCandidate {

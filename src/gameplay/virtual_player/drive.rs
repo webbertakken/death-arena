@@ -7,8 +7,9 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    finish_off_car, next_waypoint, pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget,
-    FinishOffCandidate, FlagTarget, PickupTarget, PitRetreatCandidate, ThreatTarget,
+    finish_off_car, lead_defence_car, next_waypoint, pit_retreat_car, AiTeam, DrivingChoices,
+    DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget,
+    PitRetreatCandidate, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -85,8 +86,14 @@ pub fn virtual_player_drive_system(
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
-    let pit_retreats = pit_retreat_targets(&query, &flags, integrity.as_deref());
-    let finish_offs = finish_off_targets(&query, &flags, &threats, integrity.as_deref(), captures);
+    let overlays = overlay_targets(
+        &query,
+        &flags,
+        &threats,
+        integrity.as_deref(),
+        captures,
+        match_clock.as_deref(),
+    );
     let teammate_positions = virtual_player_positions(&query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
@@ -100,8 +107,7 @@ pub fn virtual_player_drive_system(
     for (entity, mut ai, mut transform) in &mut query {
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
-        let ctf_target =
-            resolve_overlay_target(entity, &pit_retreats, &finish_offs, &assigned_ctf_targets);
+        let ctf_target = resolve_overlay_target(entity, &overlays, &assigned_ctf_targets);
         let entity_pickups: Vec<PickupTarget> = claimed_pickups
             .iter()
             .filter_map(|(assigned_entity, pickup)| (*assigned_entity == entity).then_some(*pickup))
@@ -168,26 +174,45 @@ pub fn virtual_player_drive_system(
     }
 }
 
+/// Gathers every per-entity driving overlay for the frame, in precedence order.
+///
+/// Survival comes first (a battered team's [`pit_retreat_targets`]), then offence
+/// (a healthier team's [`finish_off_targets`]), then closing-time lead defence
+/// (a leading team's [`lead_defence_targets`]). [`resolve_overlay_target`] takes
+/// the first entry that claims a given entity, so an earlier overlay wins when
+/// several would lay claim to the same car. Each overlay overrides the CTF role
+/// the car would otherwise take.
+fn overlay_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    threats: &[ThreatTarget],
+    integrity: Option<&VehicleIntegrity>,
+    captures: CaptureScore,
+    clock: Option<&MatchClock>,
+) -> Vec<(Entity, DrivingTarget)> {
+    pit_retreat_targets(query, flags, integrity)
+        .into_iter()
+        .chain(finish_off_targets(
+            query, flags, threats, integrity, captures,
+        ))
+        .chain(lead_defence_targets(query, flags, clock, captures))
+        .collect()
+}
+
 /// Resolves the highest-priority driving target an entity has this frame.
 ///
-/// A battered team's home-most car retreats to its pit (survival first);
-/// otherwise a healthier team's keenest car breaks off to finish a reeling
-/// enemy. Either overlay overrides the CTF role the car would otherwise take,
-/// so the assigned role is only used when neither overlay claims the entity.
+/// The [`overlay_targets`] are listed in precedence order, so the first overlay
+/// that claims this entity wins; the assigned CTF role is used only when no
+/// overlay does.
 fn resolve_overlay_target(
     entity: Entity,
-    pit_retreats: &[(Entity, DrivingTarget)],
-    finish_offs: &[(Entity, DrivingTarget)],
+    overlays: &[(Entity, DrivingTarget)],
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
 ) -> Option<DrivingTarget> {
-    let overlay = |targets: &[(Entity, DrivingTarget)]| {
-        targets
-            .iter()
-            .find(|(candidate, _)| *candidate == entity)
-            .map(|(_, target)| *target)
-    };
-    overlay(pit_retreats)
-        .or_else(|| overlay(finish_offs))
+    overlays
+        .iter()
+        .find(|(candidate, _)| *candidate == entity)
+        .map(|(_, target)| *target)
         .or_else(|| {
             assigned_ctf_targets
                 .iter()
@@ -333,6 +358,45 @@ fn objective_commitment(clock: Option<&MatchClock>, captures: CaptureScore) -> O
     ObjectiveCommitment {
         blue: captures.player <= captures.opponents,
         red: captures.opponents <= captures.player,
+    }
+}
+
+/// Per-team flag for closing-time lead protection: should this team, ahead on
+/// captures with the clock running down, recall a car to guard its lead?
+///
+/// The exact complement of [`ObjectiveCommitment`]: in the closing stretch every
+/// team is either committing to attack (not ahead) or protecting a lead (ahead),
+/// so the trailing/level side races the flag while the leading side digs in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LeadProtection {
+    blue: bool,
+    red: bool,
+}
+
+impl LeadProtection {
+    const fn for_team(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.blue,
+            AiTeam::Red => self.red,
+        }
+    }
+}
+
+/// Decides which teams protect a lead given the round clock and the scoreline.
+///
+/// Outside the closing stretch no team protects. Within it a team strictly ahead
+/// on captures recalls a car to guard (see
+/// [`crate::gameplay::virtual_player::ai::lead_defence_car`]); a trailing or
+/// level side does not, since it is busy committing to the objective. A missing
+/// clock (an unstarted match) never forces protection. Mirrors and complements
+/// [`objective_commitment`]: a team protects exactly when it is *not* committing.
+fn lead_protection(clock: Option<&MatchClock>, captures: CaptureScore) -> LeadProtection {
+    if !clock.is_some_and(|clock| clock.is_closing_time()) {
+        return LeadProtection::default();
+    }
+    LeadProtection {
+        blue: captures.player > captures.opponents,
+        red: captures.opponents > captures.player,
     }
 }
 
@@ -630,6 +694,50 @@ fn finish_off_targets(
             &enemy_positions,
         ) {
             targets.push((entity, DrivingTarget::FinishWreck(prey)));
+        }
+    }
+    targets
+}
+
+/// Resolves which leading teams recall a car to guard a closing-time lead.
+///
+/// The defensive counterpart to [`pit_retreat_targets`] and the mirror of the
+/// trailing team's objective commitment: a team strictly ahead on captures in
+/// the closing stretch (see [`lead_protection`]) recalls its home-most
+/// non-carrier (see [`lead_defence_car`]) to its own home defensive lane, the
+/// same well-worn [`DrivingTarget::DefendHomeBase`] role a threatened team already
+/// takes, only stationed pre-emptively to protect the lead. Without a match clock
+/// (an unstarted match) no team ever protects a lead.
+fn lead_defence_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    clock: Option<&MatchClock>,
+    captures: CaptureScore,
+) -> Vec<(Entity, DrivingTarget)> {
+    let protection = lead_protection(clock, captures);
+
+    let mut targets = Vec::new();
+    for team in [AiTeam::Blue, AiTeam::Red] {
+        let Some(own_flag) = flags.iter().find(|flag| flag.team == team) else {
+            continue;
+        };
+        let enemy_home = flags
+            .iter()
+            .find(|flag| flag.team == team.enemy())
+            .map_or(own_flag.home, |enemy_flag| enemy_flag.home);
+        let candidates: Vec<LeadDefenceCandidate> = query
+            .iter()
+            .filter(|(_, virtual_player, _)| virtual_player.team == team)
+            .map(|(entity, _, transform)| LeadDefenceCandidate {
+                entity,
+                position: transform.translation.xy(),
+                home: own_flag.home,
+                carries_enemy_flag: carries_enemy_flag(entity, team, flags),
+            })
+            .collect();
+        if let Some(entity) = lead_defence_car(protection.for_team(team), &candidates) {
+            let guard = home_lane_guard_point(own_flag.home, enemy_home);
+            targets.push((entity, DrivingTarget::DefendHomeBase(guard)));
         }
     }
     targets
@@ -1212,6 +1320,216 @@ mod tests {
         assert!(
             committed.abs() < 1e-3,
             "closing-time commitment drives straight at the flag, ignoring the cash: {committed}"
+        );
+    }
+
+    #[test]
+    fn no_team_protects_a_lead_outside_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES + 1,
+            phase: MatchPhase::Regulation,
+        };
+        assert_eq!(
+            lead_protection(
+                Some(&clock),
+                CaptureScore {
+                    player: 2,
+                    opponents: 0,
+                },
+            ),
+            LeadProtection::default(),
+            "a round with time to spare must not pull the leader back to defend"
+        );
+    }
+
+    #[test]
+    fn closing_time_protects_only_the_team_that_is_ahead() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        };
+        // Blue (player) leads Red (opponents) on captures.
+        let protection = lead_protection(
+            Some(&clock),
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+        );
+        assert!(
+            protection.for_team(AiTeam::Blue),
+            "the leader digs in to guard its lead"
+        );
+        assert!(
+            !protection.for_team(AiTeam::Red),
+            "the trailing team commits to attack, it does not protect"
+        );
+    }
+
+    #[test]
+    fn a_level_sudden_death_protects_no_team() {
+        use crate::gameplay::ctf::MatchPhase;
+
+        let clock = MatchClock {
+            frames_remaining: 1,
+            phase: MatchPhase::SuddenDeath,
+        };
+        assert_eq!(
+            lead_protection(
+                Some(&clock),
+                CaptureScore {
+                    player: 2,
+                    opponents: 2,
+                },
+            ),
+            LeadProtection::default(),
+            "golden goal: no one is ahead, so both sides race the decider"
+        );
+    }
+
+    #[test]
+    fn protection_is_the_exact_complement_of_commitment_in_closing_time() {
+        use crate::gameplay::ctf::MatchPhase;
+
+        let clock = MatchClock {
+            frames_remaining: 1,
+            phase: MatchPhase::SuddenDeath,
+        };
+        for (player, opponents) in [(0, 0), (2, 1), (1, 2)] {
+            let captures = CaptureScore { player, opponents };
+            let commit = objective_commitment(Some(&clock), captures);
+            let protect = lead_protection(Some(&clock), captures);
+            for team in [AiTeam::Blue, AiTeam::Red] {
+                assert_ne!(
+                    commit.for_team(team),
+                    protect.for_team(team),
+                    "in closing time a team either commits or protects, never both nor neither"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_leading_team_recalls_its_home_most_car_to_defend_in_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, MATCH_TIME_LIMIT_FRAMES};
+
+        // Red home sits at the origin and the blue (enemy) flag and base straight
+        // ahead at +Y. A free red car drives forward to attack the enemy flag; a
+        // car recalled to guard the lead instead heads back down its home lane
+        // (toward the guard point at +Y 220), so a car sitting forward of that
+        // point reverses. The home-most red car starts at (0, 500), forward of the
+        // guard point but short of the flag, so the two intents pull opposite ways.
+        fn home_most_dy(protecting: bool) -> f32 {
+            let mut app = app_with_system();
+            // Red (opponents) leads, so in closing time it protects that lead.
+            app.insert_resource(CaptureScore {
+                player: 0,
+                opponents: 1,
+            });
+            app.insert_resource(MatchClock {
+                frames_remaining: if protecting {
+                    10
+                } else {
+                    MATCH_TIME_LIMIT_FRAMES
+                },
+                phase: MatchPhase::Regulation,
+            });
+
+            let home_most = spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 2000.0)],
+                Vec3::new(0.0, 500.0, 4.0),
+            );
+            // A second, more-forward red car keeps the team above the lone-car
+            // guard and is never the home-most pick.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 2000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::ZERO,
+                Vec3::new(0.0, 0.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 1000.0),
+                Vec3::new(0.0, 1000.0, 4.0),
+                None,
+            );
+
+            app.update();
+
+            app.world.get::<Transform>(home_most).unwrap().translation.y - 500.0
+        }
+
+        let attacking = home_most_dy(false);
+        let defending = home_most_dy(true);
+
+        assert!(
+            attacking > 0.1,
+            "outside closing time the leader's car pushes forward to attack: {attacking}"
+        );
+        assert!(
+            defending < -0.1,
+            "in closing time the leader recalls its home-most car to guard the lead: {defending}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_team_is_not_recalled_to_defend_in_closing_time() {
+        use crate::gameplay::ctf::MatchPhase;
+
+        // Red trails on captures, so in closing time it commits to attack rather
+        // than protecting a lead it does not hold: its home-most car pushes on.
+        let mut app = app_with_system();
+        app.insert_resource(CaptureScore {
+            player: 1,
+            opponents: 0,
+        });
+        app.insert_resource(MatchClock {
+            frames_remaining: 10,
+            phase: MatchPhase::Regulation,
+        });
+        let home_most = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 500.0, 4.0),
+        );
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 1500.0, 4.0),
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::ZERO,
+            Vec3::new(0.0, 0.0, 4.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, 1000.0),
+            Vec3::new(0.0, 1000.0, 4.0),
+            None,
+        );
+
+        app.update();
+
+        let dy = app.world.get::<Transform>(home_most).unwrap().translation.y - 500.0;
+        assert!(
+            dy > 0.1,
+            "a trailing team commits forward, it is never recalled to camp: {dy}"
         );
     }
 
