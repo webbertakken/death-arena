@@ -1,4 +1,6 @@
-use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, FlagTeam};
+use crate::gameplay::ctf::{
+    CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, CAPTURES_TO_WIN, CAPTURE_CASH_BOUNTY,
+};
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -51,6 +53,29 @@ pub const WRECK_STREAK_BONUS: u32 = 75;
 /// reach; wrecks beyond this point still pay, just at the capped top rate. With
 /// the base bounty this tops a rampage out at `150 + 3 * 75 = 375` per wreck.
 pub const WRECK_STREAK_BONUS_CAP: u32 = 3;
+/// Extra cash a team banks per capture the *leader* it just wrecked is ahead by.
+///
+/// The classic Death Rally "most wanted" bounty: the team winning the round has
+/// a price on its head, so taking one of its cars down pays the trailing team
+/// extra on top of the base [`WRECK_CASH_BOUNTY`] and any rampage streak. This
+/// is the economy's missing anti-snowball lever pointing the other way: the
+/// [`WRECK_STREAK_BONUS_CAP`] keeps a *dominant* team from snowballing its cash
+/// out of reach, while this lets the *trailing* team bankroll a comeback by
+/// hunting the leader. Paid only to the side that is behind on captures, so a
+/// leader wrecking the team chasing it earns nothing extra.
+pub const MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD: u32 = 100;
+/// Largest capture lead the most-wanted bounty still scales with.
+///
+/// A team reaching [`CAPTURES_TO_WIN`] ends the round, so the widest lead that
+/// can stand mid-match is one short of the win. Capping here keeps the bounty
+/// bounded even if a future rule ever let the tally climb higher.
+pub const MOST_WANTED_MAX_CAPTURE_LEAD: u32 = CAPTURES_TO_WIN - 1;
+/// Taking the leader down must never out-earn actually scoring a capture,
+/// enforced at compile time, so the comeback lever rewards the chase without
+/// eclipsing the objective it is chasing.
+const _: () = assert!(
+    MOST_WANTED_MAX_CAPTURE_LEAD * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD < CAPTURE_CASH_BOUNTY
+);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -442,6 +467,24 @@ pub const fn resolve_wreck_streaks(before: WreckStreaks, wrecks: WreckEvents) ->
         player_bounty,
         opponent_bounty,
     }
+}
+
+/// Cash bonus a team banks for wrecking a car belonging to the capture leader.
+///
+/// `victim_captures` is the capture tally of the team that was wrecked,
+/// `dealer_captures` that of the team that dealt the wreck. The bonus is paid
+/// only when the wrecked team leads on captures, scaling with the lead up to
+/// [`MOST_WANTED_MAX_CAPTURE_LEAD`]; wrecking a level or trailing team pays
+/// nothing, so only taking down the side that is ahead bankrolls a comeback.
+#[must_use]
+pub const fn most_wanted_wreck_bonus(victim_captures: u32, dealer_captures: u32) -> u32 {
+    let lead = victim_captures.saturating_sub(dealer_captures);
+    let capped = if lead > MOST_WANTED_MAX_CAPTURE_LEAD {
+        MOST_WANTED_MAX_CAPTURE_LEAD
+    } else {
+        lead
+    };
+    capped * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD
 }
 
 /// Brief spin-out each team suffers the instant its cars are wrecked.
@@ -1044,6 +1087,7 @@ fn drop_wrecked_carriers_flags(
 #[allow(clippy::too_many_arguments)]
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
+    captures: Option<Res<CaptureScore>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
     armour_boosts: Option<Res<ArmourBoosts>>,
     mut integrity: ResMut<VehicleIntegrity>,
@@ -1135,30 +1179,51 @@ pub fn ram_damage_system(
         *streaks = payout.streaks;
     }
 
+    // The "most wanted" comeback bonus: taking down a car of the team that leads
+    // on captures pays the trailing side extra. The player team deals a wreck
+    // when the opponents fall, so it collects on the opponents' capture lead, and
+    // vice versa. A level or trailing victim adds nothing.
+    let captures = captures.as_deref().copied().unwrap_or_default();
+    let player_most_wanted_bonus = if wrecks.opponent {
+        most_wanted_wreck_bonus(captures.opponents, captures.player)
+    } else {
+        0
+    };
+    let opponent_most_wanted_bonus = if wrecks.player {
+        most_wanted_wreck_bonus(captures.player, captures.opponents)
+    } else {
+        0
+    };
+    let player_bounty = payout.player_bounty + player_most_wanted_bonus;
+    let opponent_bounty = payout.opponent_bounty + opponent_most_wanted_bonus;
+
     if wrecks.any() {
         info!(
             "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
-             banking player_bounty={} opponent_bounty={}",
+             most-wanted bonus player={} opponent={}; banking player_bounty={} opponent_bounty={}",
             wrecks.player,
             wrecks.opponent,
             payout.streaks.player,
             payout.streaks.opponent,
-            payout.player_bounty,
-            payout.opponent_bounty,
+            player_most_wanted_bonus,
+            opponent_most_wanted_bonus,
+            player_bounty,
+            opponent_bounty,
         );
     }
 
     // The wrecking team banks the bounty: a wrecked opponent pays the player
     // team, a wrecked player team pays the opponents. Each consecutive wreck in
-    // a rampage pays more, up to the streak cap.
-    if payout.player_bounty > 0 {
+    // a rampage pays more, up to the streak cap, plus the most-wanted bonus for
+    // taking down the capture leader.
+    if player_bounty > 0 {
         if let Some(score) = score.as_deref_mut() {
-            score.bank_wreck_bounty(payout.player_bounty);
+            score.bank_wreck_bounty(player_bounty);
         }
     }
-    if payout.opponent_bounty > 0 {
+    if opponent_bounty > 0 {
         if let Some(opponent_score) = opponent_score.as_deref_mut() {
-            opponent_score.bank_wreck_bounty(payout.opponent_bounty);
+            opponent_score.bank_wreck_bounty(opponent_bounty);
         }
     }
 }
@@ -2748,6 +2813,76 @@ mod tests {
     }
 
     #[test]
+    fn system_pays_a_most_wanted_bonus_for_wrecking_the_capture_leader() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        // The opponents lead the round by two captures: a price on their head.
+        app.insert_resource(CaptureScore {
+            player: 0,
+            opponents: 2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + most_wanted_wreck_bonus(2, 0),
+            "wrecking the two-capture leader must add the most-wanted comeback bonus"
+        );
+        assert_eq!(
+            score.wrecks, 1,
+            "the comeback bonus rides the same wreck, not a phantom second one"
+        );
+    }
+
+    #[test]
+    fn system_pays_no_most_wanted_bonus_for_wrecking_a_trailing_team() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        // The player team is the one ahead, so wrecking the trailing opponents
+        // earns only the base bounty: no comeback cash for the side already up.
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 0,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash, WRECK_CASH_BOUNTY,
+            "the leader earns no comeback bonus for wrecking the team chasing it"
+        );
+        assert_eq!(score.wrecks, 1);
+    }
+
+    #[test]
     fn system_pays_no_bounty_while_both_teams_stay_operational() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
@@ -2863,6 +2998,52 @@ mod tests {
         let capped = WRECK_CASH_BOUNTY + WRECK_STREAK_BONUS_CAP * WRECK_STREAK_BONUS;
         assert_eq!(wreck_bounty_for_streak(WRECK_STREAK_BONUS_CAP + 1), capped);
         assert_eq!(wreck_bounty_for_streak(99), capped);
+    }
+
+    #[test]
+    fn most_wanted_pays_nothing_for_wrecking_a_level_or_trailing_team() {
+        assert_eq!(
+            most_wanted_wreck_bonus(2, 2),
+            0,
+            "a level victim has no price on its head"
+        );
+        assert_eq!(
+            most_wanted_wreck_bonus(1, 2),
+            0,
+            "wrecking the team that is behind earns no comeback bonus"
+        );
+    }
+
+    #[test]
+    fn most_wanted_bonus_scales_with_the_leader_capture_lead() {
+        assert_eq!(
+            most_wanted_wreck_bonus(1, 0),
+            MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD,
+            "a one-capture lead is worth a single step"
+        );
+        assert_eq!(
+            most_wanted_wreck_bonus(2, 0),
+            2 * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD,
+            "a wider lead is worth proportionally more"
+        );
+    }
+
+    #[test]
+    fn most_wanted_bonus_is_capped_at_the_max_lead() {
+        let capped = MOST_WANTED_MAX_CAPTURE_LEAD * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD;
+        assert_eq!(
+            most_wanted_wreck_bonus(MOST_WANTED_MAX_CAPTURE_LEAD + 5, 0),
+            capped
+        );
+        assert_eq!(most_wanted_wreck_bonus(u32::MAX, 0), capped);
+    }
+
+    #[test]
+    fn taking_the_leader_down_never_out_earns_a_capture() {
+        assert!(
+            most_wanted_wreck_bonus(u32::MAX, 0) < CAPTURE_CASH_BOUNTY,
+            "the comeback lever must stay below the value of a capture"
+        );
     }
 
     #[test]
