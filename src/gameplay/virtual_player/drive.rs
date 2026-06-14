@@ -7,9 +7,9 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    finish_off_car, lead_defence_car, next_waypoint, pincer_partner, pit_retreat_car, AiTeam,
-    DrivingChoices, DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate,
-    PickupTarget, PitRetreatCandidate, ThreatTarget,
+    finish_off_car, finish_off_wall_crush_aim, lead_defence_car, next_waypoint, pincer_partner,
+    pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget, FinishOffCandidate, FlagTarget,
+    LeadDefenceCandidate, PickupTarget, PitRetreatCandidate, ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -823,12 +823,18 @@ fn finish_off_targets(
             &enemy_positions,
             enemy_flag_carrier,
         ) {
-            targets.push((entity, DrivingTarget::FinishWreck(prey)));
+            // When the prey is pinned near a wall, aim past it into the boundary so
+            // the charge shoves it in and springs the combat wall (or corner) crush
+            // rather than scraping it in the open (see [`finish_off_wall_crush_aim`]).
+            let aim = finish_off_wall_crush_aim(prey, BOUNDS / 2.0);
+            targets.push((entity, DrivingTarget::FinishWreck(aim)));
             // Pile a second spare car onto the same victim when the team can field
             // one without abandoning the objective, springing the combat pincer so
-            // the kill lands faster (see [`pincer_partner`]).
+            // the kill lands faster (see [`pincer_partner`]). The partner is picked
+            // by its proximity to the real prey, then aimed at the same wall-crush
+            // point so both hunters shove the victim into the boundary together.
             if let Some(partner) = pincer_partner(entity, prey, &candidates) {
-                targets.push((partner, DrivingTarget::FinishWreck(prey)));
+                targets.push((partner, DrivingTarget::FinishWreck(aim)));
             }
         }
     }
@@ -2256,6 +2262,53 @@ mod tests {
         assert!(
             y < -0.001,
             "a hunter must drive through to ram a close reeling enemy, not idle short of it: {y}"
+        );
+    }
+
+    #[test]
+    fn a_hunter_shoves_a_wall_pinned_prey_into_the_boundary() {
+        // A reeling blue prey hugs the +x wall (x = 920, inside the crush band);
+        // the red hunter sits directly below it on the open side, facing +Y. Aiming
+        // straight at the prey would carry the hunter due north (no sideways drift);
+        // aiming past it into the wall instead bends the charge toward +x, so a
+        // rightward nudge is the tell that the kill press is setting up a wall crush.
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        let hunter_start_x = 920.0;
+        let hunter = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(hunter_start_x, -800.0, 4.0),
+        );
+        // A distant second red car keeps the team above the lone-car guard and sits
+        // far from the prey so the lower car is the chosen hunter.
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 3000.0, 4.0),
+        );
+        // The reeling blue prey, pinned against the +x wall straight above the hunter.
+        app.world.spawn((
+            VirtualPlayer {
+                team: AiTeam::Blue,
+                movement_speed: 500.0,
+                rotation_speed: f32::to_radians(360.0),
+                waypoints: vec![Vec2::new(hunter_start_x, -2000.0)],
+                current_waypoint: 0,
+            },
+            Transform::from_translation(Vec3::new(hunter_start_x, -300.0, 4.0)),
+        ));
+
+        app.update();
+
+        let x = app.world.get::<Transform>(hunter).unwrap().translation.x;
+        assert!(
+            x > hunter_start_x + 1e-3,
+            "a hunter must bend its charge toward the wall to crush a pinned prey, \
+             not drive straight at it: {x}"
         );
     }
 

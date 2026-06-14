@@ -543,6 +543,59 @@ pub fn pincer_partner(
         .map(|candidate| candidate.entity)
 }
 
+/// Distance beyond the arena wall the [`finish_off_wall_crush_aim`] target sits,
+/// so a hunter pressing a wall-pinned prey charges firmly *through* it into the
+/// boundary rather than merely up to it.
+///
+/// A steering target outside the arena is only an aim, never a destination (cars
+/// clamp to the bounds), so the overshoot just biases the charge into the wall.
+/// One car-length-and-change past the boundary is plenty to keep the hunter's
+/// nose on the wall however close to it the prey already sits, even glued to it.
+pub const FINISH_OFF_WALL_CRUSH_OVERSHOOT: f32 = 200.0;
+
+/// The overshoot must actually carry the aim past the wall, enforced at compile
+/// time, so the charge always points into the boundary.
+const _: () = assert!(FINISH_OFF_WALL_CRUSH_OVERSHOOT > 0.0);
+
+/// Aims a [`finish_off_car`] hunter so it shoves a reeling prey *into* the arena
+/// wall (or corner) it is pinned against, springing the combat wall crush.
+///
+/// Death Rally's classic "ram them into the wall to finish them". Where the kill
+/// press otherwise drives at the prey's exact spot and hopes the geometry lands a
+/// crush, this deliberately sets one up, the offensive mirror of how
+/// [`pincer_partner`] deliberately springs the gang-up. On each axis the prey sits
+/// within [`crate::gameplay::combat::WALL_CRUSH_MARGIN`] of (the same band the
+/// combat [`crate::gameplay::combat::wall_crush_ram_damage`] reads), the aim is
+/// pushed past that wall by [`FINISH_OFF_WALL_CRUSH_OVERSHOOT`]. A hunter steering
+/// at a point beyond the prey toward the wall charges through it nose-on from the
+/// open side, exactly the pin the crush rewards, and a prey wedged in a corner
+/// (both axes pinned) gets the aim driven diagonally into the corner, stacking the
+/// [`crate::gameplay::combat::corner_crush_ram_damage`] top-up too.
+///
+/// A prey out in the open (neither axis pinned) is returned untouched, so the kill
+/// press only diverts toward a wall when the combat layer would actually pay the
+/// crush off.
+#[must_use]
+pub fn finish_off_wall_crush_aim(prey: Vec2, half_extents: Vec2) -> Vec2 {
+    use crate::gameplay::combat::WALL_CRUSH_MARGIN;
+
+    let shove_axis = |coordinate: f32, half: f32| {
+        let band = half - WALL_CRUSH_MARGIN;
+        if coordinate >= band {
+            half + FINISH_OFF_WALL_CRUSH_OVERSHOOT
+        } else if coordinate <= -band {
+            -(half + FINISH_OFF_WALL_CRUSH_OVERSHOOT)
+        } else {
+            coordinate
+        }
+    };
+
+    Vec2::new(
+        shove_axis(prey.x, half_extents.x),
+        shove_axis(prey.y, half_extents.y),
+    )
+}
+
 /// Closest position in `positions` to `from`, with the shared deterministic
 /// `x`-then-`y` tie-break so the pick never wavers between equidistant targets.
 fn nearest_position(from: Vec2, positions: &[Vec2]) -> Option<Vec2> {
@@ -2967,5 +3020,87 @@ mod tests {
             pincer_partner(Entity::from_raw(1), prey, &candidates),
             Some(Entity::from_raw(3))
         );
+    }
+
+    #[test]
+    fn wall_crush_aim_drives_a_wall_pinned_prey_into_the_boundary() {
+        let half = Vec2::new(1000.0, 600.0);
+        // A prey hugging the +x side wall, well inside the crush band and clear of
+        // the y walls: the hunter aims past it into the wall to spring the crush.
+        let prey = Vec2::new(960.0, 0.0);
+        let aim = finish_off_wall_crush_aim(prey, half);
+
+        assert!(
+            aim.x > prey.x,
+            "the aim must sit beyond the prey toward the wall so the charge shoves it in: {aim:?}"
+        );
+        // The pinned x is shoved past the wall; the unpinned y is left on the prey.
+        assert_eq!(
+            aim,
+            Vec2::new(half.x + FINISH_OFF_WALL_CRUSH_OVERSHOOT, prey.y)
+        );
+    }
+
+    #[test]
+    fn wall_crush_aim_handles_the_negative_side_wall() {
+        let half = Vec2::new(1000.0, 600.0);
+        // Mirror of the +x case: a prey pinned to the -x wall is shoved the other
+        // way, the aim sitting beyond the negative boundary.
+        let prey = Vec2::new(-960.0, 0.0);
+        let aim = finish_off_wall_crush_aim(prey, half);
+
+        assert!(
+            aim.x < prey.x,
+            "a prey on the negative wall is shoved the other way: {aim:?}"
+        );
+        assert_eq!(
+            aim,
+            Vec2::new(-(half.x + FINISH_OFF_WALL_CRUSH_OVERSHOOT), prey.y)
+        );
+    }
+
+    #[test]
+    fn wall_crush_aim_wedges_a_cornered_prey_into_both_walls() {
+        let half = Vec2::new(1000.0, 600.0);
+        // A prey trapped in the bottom-left corner sits inside both crush bands, so
+        // the aim points diagonally past it into the corner, springing the corner
+        // crush on top of the wall crush.
+        let prey = Vec2::new(-950.0, -550.0);
+        let aim = finish_off_wall_crush_aim(prey, half);
+
+        assert_eq!(
+            aim,
+            Vec2::new(
+                -(half.x + FINISH_OFF_WALL_CRUSH_OVERSHOOT),
+                -(half.y + FINISH_OFF_WALL_CRUSH_OVERSHOOT)
+            )
+        );
+    }
+
+    #[test]
+    fn wall_crush_aim_leaves_an_open_field_prey_untouched() {
+        let half = Vec2::new(1000.0, 600.0);
+        // A prey out in the open has no wall to pin it against, so the hunter just
+        // drives at it as before, no aim shift.
+        let prey = Vec2::new(100.0, -50.0);
+
+        assert_eq!(finish_off_wall_crush_aim(prey, half), prey);
+    }
+
+    #[test]
+    fn wall_crush_aim_matches_the_crush_band_edge() {
+        let half = Vec2::new(1000.0, 600.0);
+        let margin = crate::gameplay::combat::WALL_CRUSH_MARGIN;
+        // Exactly on the band edge the prey is pinned (the same `>=` boundary the
+        // combat crush uses), so the aim shifts to the wall.
+        let on_edge = Vec2::new(half.x - margin, 0.0);
+        assert_eq!(
+            finish_off_wall_crush_aim(on_edge, half),
+            Vec2::new(half.x + FINISH_OFF_WALL_CRUSH_OVERSHOOT, on_edge.y)
+        );
+        // A whisker outside the band the prey is open-field, the aim left on it, so
+        // the AI never shoves a foe that the combat layer would not crush.
+        let just_outside = Vec2::new(half.x - margin - 1.0, 0.0);
+        assert_eq!(finish_off_wall_crush_aim(just_outside, half), just_outside);
     }
 }
