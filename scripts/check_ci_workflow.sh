@@ -44,6 +44,15 @@ ERROR
   exit 1
 fi
 
+if ! grep -Fq "bash scripts/check_security_advisories.sh" "${workflow}"; then
+  cat >&2 <<'ERROR'
+CI must scan Cargo.lock against the RustSec advisory database, so a dependency
+with a known security vulnerability cannot ship to players unnoticed.
+Add a step that runs: bash scripts/check_security_advisories.sh
+ERROR
+  exit 1
+fi
+
 # The guard scripts that gate commits locally must also run in CI, so the same
 # integrity rules (no unsafe, strict shell scripts, intact workflows) are
 # enforced on every push and pull request, not just before a local commit.

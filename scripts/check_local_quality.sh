@@ -11,5 +11,6 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo check --all-targets --all-features
 bash scripts/check_rust_docs.sh
+bash scripts/check_security_advisories.sh
 env -u NO_COLOR trunk build --release --public-url /death-arena/
 bash scripts/check_pages_dist.sh

@@ -169,6 +169,24 @@ jobs:
       - name: Check Rust docs (no broken intra-doc links)
         run: bash scripts/check_rust_docs.sh
 
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Scan dependencies for known vulnerabilities
+        run: bash scripts/check_security_advisories.sh
+
   guards:
     name: Quality guards
     runs-on: ubuntu-latest
