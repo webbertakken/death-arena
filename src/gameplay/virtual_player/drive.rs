@@ -3923,6 +3923,13 @@ mod tests {
     /// A flat-priced sabotage stays on its narrow lane and is dropped in closing
     /// time, so only the getaway-priced sabotage (our carrier is running) detours.
     fn disciplined_escort_detour_y(kind: PickupKind) -> f32 {
+        disciplined_escort_detour_y_with_integrity(kind, None)
+    }
+
+    fn disciplined_escort_detour_y_with_integrity(
+        kind: PickupKind,
+        integrity: Option<VehicleIntegrity>,
+    ) -> f32 {
         use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
         use std::f32::consts::FRAC_PI_2;
 
@@ -3931,6 +3938,9 @@ mod tests {
             frames_remaining: CLOSING_TIME_FRAMES,
             phase: MatchPhase::Regulation,
         });
+        if let Some(integrity) = integrity {
+            app.insert_resource(integrity);
+        }
 
         let escort = spawn_ai_at(
             &mut app,
@@ -3998,6 +4008,34 @@ mod tests {
         assert!(
             shield_y > 0.0,
             "an escort must break off onto the shield to armour its carrier's run home, y={shield_y}"
+        );
+        assert!(
+            cash_y.abs() < 1e-3,
+            "a disciplined escort must leave a cash bag and hold its escort route, y={cash_y}"
+        );
+    }
+
+    #[test]
+    fn carried_flag_pulls_a_worn_disciplined_escort_onto_a_repair() {
+        // The third leg of the getaway tripod: while a teammate runs the enemy flag
+        // home, a worn escort-team tops up the integrity buffer the gauntlet will
+        // burn. Unlike the shield/sabotage getaway lifts, a repair heals nothing on
+        // a full team, so the team is held to half durability (0.5, above the
+        // pit-retreat band) where a bare repair is worth only 110, below the
+        // closing-time wide-detour bar. The getaway top-up lifts it over that bar
+        // while a cash bag stays left.
+        let worn = || {
+            Some(VehicleIntegrity {
+                player: 100.0,
+                opponent: 50.0,
+            })
+        };
+        let repair_y = disciplined_escort_detour_y_with_integrity(PickupKind::Repair, worn());
+        let cash_y = disciplined_escort_detour_y_with_integrity(PickupKind::Cash, worn());
+
+        assert!(
+            repair_y > 0.0,
+            "a worn escort must break off onto the repair to top up its carrier's run home, y={repair_y}"
         );
         assert!(
             cash_y.abs() < 1e-3,

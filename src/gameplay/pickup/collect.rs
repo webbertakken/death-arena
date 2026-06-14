@@ -93,6 +93,52 @@ const _: () = assert!(
 const _: () =
     assert!(SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY < SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY);
 
+/// Tactical value a team places on a repair while one of its own cars is hauling
+/// the enemy flag home, and that car has already taken real wear.
+///
+/// The third leg of the getaway tripod, after the getaway
+/// [`SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`] (halve the rams the carrier
+/// eats) and the getaway [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`] (slow
+/// the pursuers closing on it). A flag carrier's team bleeds ram damage twice as
+/// fast ([`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]), so the
+/// run home is a gauntlet that burns through the team's integrity buffer; topping
+/// that buffer up directly extends how long the fragile carrier survives, and a
+/// wreck mid-run drops the flag for a turnover right before the capture. Where a
+/// getaway shield halves *future* rams and a getaway sabotage slows the
+/// *pursuers*, a getaway repair restores the *buffer* the gauntlet is about to
+/// spend.
+///
+/// Pitched a notch below the getaway shield (sustained halving beats a one-time
+/// top-up) yet above the getaway sabotage (restoring the carrier's own buffer
+/// beats merely slowing its chasers) and nitro (a worn carrier tops up before
+/// reaching for raw escort speed). Unlike the getaway shield's flat floor, this
+/// lift is gated on the carrier-team having taken real wear: a repair heals
+/// nothing on a pristine team (durability is capped), so only a team whose own
+/// wear already prices the repair above its flat baseline is lifted, and the lift
+/// is folded in with `max` so a battered carrier-team keeps its even higher
+/// integrity-scaled survival value.
+pub const REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY: u32 = 153;
+
+/// A getaway repair must yield to the getaway shield's more direct, sustained
+/// cover, enforced at compile time, so a worn carrier-team armours the run before
+/// it tops up the buffer.
+const _: () = assert!(
+    REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY < SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY
+);
+
+/// Restoring the carrier's own buffer must edge out merely slowing its pursuers,
+/// enforced at compile time, so a worn carrier-team reaches for a heal before a
+/// getaway sabotage.
+const _: () = assert!(
+    REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY > SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY
+);
+
+/// A getaway repair must stay below a wrecked team's repair panic, enforced at
+/// compile time, so the `max` fold keeps a battered carrier-team's higher
+/// survival value intact and a heal-on-the-ropes still tops the getaway floor.
+const _: () =
+    assert!(REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY < REPAIR_MAX_VIRTUAL_PLAYER_PRIORITY);
+
 /// The classic Death Rally trackside collectibles a car can drive over.
 ///
 /// Each kind awards a cash bounty when picked up; richer per-kind effects
@@ -173,15 +219,24 @@ impl PickupKind {
     ///   [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`];
     /// - `we_hold_enemy_flag`: our own carrier running the enemy flag home turns a
     ///   sabotage into getaway cover (slow the pursuers), so it jumps to
-    ///   [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`], and turns a shield into
+    ///   [`SABOTAGE_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`], turns a shield into
     ///   getaway armour for the fragile carrier, so it is raised to at least
-    ///   [`SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`] (folded in with `max` so a
-    ///   battered carrier-team keeps its higher integrity-scaled survival value).
+    ///   [`SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`], and turns a *worn* team's
+    ///   repair into a getaway top-up of the buffer the run will burn, so it is
+    ///   raised to at least [`REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY`] (both
+    ///   folded in with `max` so a battered carrier-team keeps its higher
+    ///   integrity-scaled survival value).
+    ///
+    /// The repair lift, unlike the shield's flat floor, only fires once the team's
+    /// own wear already prices the repair above its flat baseline: a heal is
+    /// worthless on a pristine carrier (durability is capped), so a near-full
+    /// carrier-team keeps the flat value and only a worn one tops up for the run.
     ///
     /// Defending an in-flight steal takes precedence over covering our own run, so
     /// a team caught in a double steal prices the sabotage at the chase value (a
-    /// shield still armours the run, since the carrier is fragile either way).
-    /// Every other case keeps the integrity-scaled price.
+    /// shield still armours the run and a worn team still tops up, since the
+    /// carrier is fragile either way). Every other case keeps the integrity-scaled
+    /// price.
     #[must_use]
     pub fn virtual_player_priority_for_context(
         self,
@@ -199,6 +254,19 @@ impl PickupKind {
             Self::Shield if we_hold_enemy_flag => self
                 .virtual_player_priority_for_integrity(integrity_fraction)
                 .max(SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY),
+            // The same run also makes a repair worth topping up the buffer the
+            // gauntlet will burn, but a heal does nothing for a pristine team, so
+            // lift only a carrier-team whose own wear already values the repair
+            // above its flat baseline. The `max` keeps a battered team's higher
+            // survival value.
+            Self::Repair if we_hold_enemy_flag => {
+                let worn = self.virtual_player_priority_for_integrity(integrity_fraction);
+                if worn > self.virtual_player_priority() {
+                    worn.max(REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY)
+                } else {
+                    worn
+                }
+            }
             other => other.virtual_player_priority_for_integrity(integrity_fraction),
         }
     }
@@ -415,11 +483,11 @@ mod tests {
     }
 
     #[test]
-    fn a_flag_in_flight_leaves_cash_repair_and_nitro_untouched() {
-        // Only the two contextual CTF tools (sabotage, shield) react to a flag in
-        // flight; the pure economy/speed grabs keep their plain pricing whatever is
-        // being stolen or carried.
-        for kind in [PickupKind::Cash, PickupKind::Repair, PickupKind::Nitro] {
+    fn a_flag_in_flight_leaves_cash_and_nitro_untouched() {
+        // The three contextual CTF tools (sabotage, shield, repair) react to a flag
+        // in flight; the pure economy and speed grabs keep their plain pricing
+        // whatever is being stolen or carried.
+        for kind in [PickupKind::Cash, PickupKind::Nitro] {
             for fraction in [1.0, 0.5, 0.0] {
                 for enemy_holds_our_flag in [false, true] {
                     for we_carry in [false, true] {
@@ -522,6 +590,150 @@ mod tests {
         assert_eq!(
             armouring, SHIELD_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
             "a double steal must still armour our own fragile carrier's run"
+        );
+    }
+
+    #[test]
+    fn carrying_the_enemy_flag_tops_up_a_worn_carriers_repair() {
+        // A worn carrier-team (durability 0.5) normally values a repair at its
+        // integrity-scaled price; hauling the enemy flag home lifts it to the
+        // getaway top-up so it patches the buffer the gauntlet will burn.
+        let calm = PickupKind::Repair.virtual_player_priority_for_context(0.5, false, false);
+        let topping = PickupKind::Repair.virtual_player_priority_for_context(0.5, false, true);
+        assert_eq!(
+            calm,
+            PickupKind::Repair.virtual_player_priority_for_integrity(0.5),
+            "with no flag of ours in flight a repair keeps its integrity-scaled value"
+        );
+        assert_eq!(
+            topping, REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "a worn carrier-team prices a repair as a getaway top-up for the run home"
+        );
+        assert!(
+            topping > calm,
+            "hauling the enemy flag home must make a worn team's repair more valuable: \
+             {calm} -> {topping}"
+        );
+    }
+
+    #[test]
+    fn a_pristine_carrier_does_not_chase_a_useless_repair() {
+        // A repair heals nothing on a full team (durability is capped), so unlike a
+        // shield the getaway lift must not pull a pristine carrier-team off its run
+        // for a patch-up it cannot use.
+        let carrying = PickupKind::Repair.virtual_player_priority_for_context(1.0, false, true);
+        assert_eq!(
+            carrying,
+            PickupKind::Repair.virtual_player_priority(),
+            "a pristine carrier-team keeps a repair at its flat, ignorable value: {carrying}"
+        );
+    }
+
+    #[test]
+    fn the_getaway_topup_only_lifts_a_carrier_that_has_taken_wear() {
+        // The lift tracks the repair's own wear tiers: a near-full carrier (still in
+        // the flat tier) is left alone, while a carrier that has taken real wear is
+        // raised to the getaway floor.
+        let near_full = PickupKind::Repair.virtual_player_priority_for_context(0.8, false, true);
+        let worn = PickupKind::Repair.virtual_player_priority_for_context(0.7, false, true);
+        assert_eq!(
+            near_full,
+            PickupKind::Repair.virtual_player_priority(),
+            "a near-full carrier-team keeps the flat repair value: {near_full}"
+        );
+        assert_eq!(
+            worn, REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "a worn carrier-team is lifted to the getaway top-up: {worn}"
+        );
+    }
+
+    #[test]
+    fn getaway_repair_justifies_a_wide_detour_above_nitro() {
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+        // A lightly worn carrier-team (0.6, repair worth only 60 on its own) is
+        // lifted over the wide-detour bar by the getaway top-up alone.
+        let topping = PickupKind::Repair.virtual_player_priority_for_context(0.6, false, true);
+        assert!(
+            PickupKind::Repair.virtual_player_priority_for_integrity(0.6)
+                < CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "the lightly worn repair must sit below the wide-detour bar without the getaway lift"
+        );
+        assert!(
+            topping >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a worn carrier-team must break off its run to top up the buffer: {topping}"
+        );
+        assert!(
+            topping > PickupKind::Nitro.virtual_player_priority(),
+            "topping up the carrier's buffer should edge out raw escort speed: {topping}"
+        );
+    }
+
+    #[test]
+    fn getaway_shield_edges_out_the_getaway_repair() {
+        // Sustained ram-halving beats a one-time buffer top-up, so a worn carrier
+        // armours the run before it patches up.
+        let shield = PickupKind::Shield.virtual_player_priority_for_context(0.5, false, true);
+        let repair = PickupKind::Repair.virtual_player_priority_for_context(0.5, false, true);
+        assert!(
+            shield > repair,
+            "halving the rams directly should edge out a one-time top-up: \
+             shield={shield} repair={repair}"
+        );
+    }
+
+    #[test]
+    fn getaway_repair_edges_out_the_getaway_sabotage() {
+        // Restoring the carrier's own buffer beats merely slowing its pursuers.
+        let repair = PickupKind::Repair.virtual_player_priority_for_context(0.5, false, true);
+        let sabotage = PickupKind::Sabotage.virtual_player_priority_for_context(0.5, false, true);
+        assert!(
+            repair > sabotage,
+            "restoring the carrier's buffer should edge out slowing its pursuers: \
+             repair={repair} sabotage={sabotage}"
+        );
+    }
+
+    #[test]
+    fn getaway_topup_never_lowers_a_battered_carrier_teams_panic_value() {
+        // The `max` fold means a battered carrier-team keeps its higher
+        // integrity-scaled survival value rather than being dragged down to the
+        // getaway floor: a near-wrecked team panics for the heal exactly as hard
+        // whether or not it happens to be carrying.
+        for fraction in [0.0, 0.1, 0.2, 0.3] {
+            let topping =
+                PickupKind::Repair.virtual_player_priority_for_context(fraction, false, true);
+            let panic = PickupKind::Repair.virtual_player_priority_for_integrity(fraction);
+            assert!(
+                topping >= panic,
+                "the getaway top-up must never price a battered carrier-team's repair below its \
+                 survival value: {topping} < {panic}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stolen_flag_alone_does_not_lift_a_repair() {
+        // Defending against a steal (an enemy holds our flag) is a chase, not a run:
+        // the repair only becomes a getaway top-up once one of our own cars is
+        // hauling the enemy flag home.
+        for fraction in [1.0, 0.5, 0.0] {
+            assert_eq!(
+                PickupKind::Repair.virtual_player_priority_for_context(fraction, true, false),
+                PickupKind::Repair.virtual_player_priority_for_integrity(fraction),
+                "defending a steal leaves a repair at its integrity-scaled value"
+            );
+        }
+    }
+
+    #[test]
+    fn a_double_steal_still_tops_up_our_own_worn_carrier() {
+        // In a double steal our worn carrier is fragile and running just the same, so
+        // the repair is still lifted to the getaway top-up even while our flag is
+        // also stolen.
+        let topping = PickupKind::Repair.virtual_player_priority_for_context(0.5, true, true);
+        assert_eq!(
+            topping, REPAIR_FLAG_GETAWAY_VIRTUAL_PLAYER_PRIORITY,
+            "a double steal must still top up our own fragile worn carrier's run"
         );
     }
 
