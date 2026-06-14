@@ -92,6 +92,7 @@ pub fn virtual_player_drive_system(
     let visible_pickups = arena_pickups(&pickup_query);
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
+    let flag_stolen = flag_stolen_state(&flags);
     let assigned_ctf_targets = assigned_ctf_targets(&query, &flags, &threats);
     let overlays = overlay_targets(
         &query,
@@ -109,6 +110,7 @@ pub fn virtual_player_drive_system(
         integrity.as_deref(),
         player_position,
         discipline,
+        flag_stolen,
     );
 
     for (entity, mut ai, mut transform) in &mut query {
@@ -320,18 +322,59 @@ fn arena_pickups(
         .collect()
 }
 
-/// Prices a pickup from `team`'s perspective: repairs scale with that team's own
-/// durability, every other kind keeps its flat priority. Without an integrity
+/// Per-team flag for the one threat that lifts a pickup above its own-wear value:
+/// is an enemy currently hauling this team's flag away?
+///
+/// A live steal turns a sabotage into a carrier-chase tool (slow the thief so a
+/// defender catches it), so the pricing reads this alongside durability. Default
+/// (no steal in flight) leaves every pickup at its integrity-scaled price.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FlagStolen {
+    blue: bool,
+    red: bool,
+}
+
+impl FlagStolen {
+    const fn for_team(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.blue,
+            AiTeam::Red => self.red,
+        }
+    }
+}
+
+/// Reads which teams have an enemy carrying their flag this frame.
+///
+/// A flag is only ever held by an enemy (a car touching its own loose flag
+/// returns it), so a [`FlagTarget`] with a holder marks that team's flag stolen.
+fn flag_stolen_state(flags: &[FlagTarget]) -> FlagStolen {
+    let stolen = |team: AiTeam| {
+        flags
+            .iter()
+            .any(|flag| flag.team == team && flag.holder.is_some())
+    };
+    FlagStolen {
+        blue: stolen(AiTeam::Blue),
+        red: stolen(AiTeam::Red),
+    }
+}
+
+/// Prices a pickup from `team`'s perspective: repairs and shields scale with that
+/// team's own durability, a sabotage jumps when an enemy is hauling that team's
+/// flag, and every other kind keeps its flat priority. Without an integrity
 /// resource a team is treated as pristine, matching the unstarted-match default.
 fn price_pickup_for_team(
     pickup: ArenaPickup,
     integrity: Option<&VehicleIntegrity>,
     team: AiTeam,
+    flag_stolen: FlagStolen,
 ) -> PickupTarget {
     let fraction = integrity.map_or(1.0, |integrity| integrity.fraction_for_team(team));
     PickupTarget {
         position: pickup.position,
-        priority: pickup.kind.virtual_player_priority_for_integrity(fraction),
+        priority: pickup
+            .kind
+            .virtual_player_priority_for_context(fraction, flag_stolen.for_team(team)),
     }
 }
 
@@ -454,9 +497,10 @@ fn claimed_pickups_for_virtual_players(
     integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
     discipline: ClosingTimePickupDiscipline,
+    flag_stolen: FlagStolen,
 ) -> Vec<(Entity, PickupTarget)> {
     let mut ordered_pickups = pickups.to_vec();
-    ordered_pickups.sort_by(|a, b| compare_pickup_claim_priority(*a, *b, integrity));
+    ordered_pickups.sort_by(|a, b| compare_pickup_claim_priority(*a, *b, integrity, flag_stolen));
 
     let mut claimed_entities = Vec::new();
     ordered_pickups
@@ -471,9 +515,13 @@ fn claimed_pickups_for_virtual_players(
                 player_position,
                 &claimed_entities,
                 discipline,
+                flag_stolen,
             )?;
             claimed_entities.push(entity);
-            Some((entity, price_pickup_for_team(pickup, integrity, team)))
+            Some((
+                entity,
+                price_pickup_for_team(pickup, integrity, team, flag_stolen),
+            ))
         })
         .collect()
 }
@@ -487,6 +535,7 @@ fn closest_eligible_pickup_claimant(
     player_position: Option<Vec2>,
     claimed_entities: &[Entity],
     discipline: ClosingTimePickupDiscipline,
+    flag_stolen: FlagStolen,
 ) -> Option<(Entity, AiTeam)> {
     let (entity, team, _) = query
         .iter()
@@ -497,7 +546,12 @@ fn closest_eligible_pickup_claimant(
                 .find(|(assigned_entity, _)| *assigned_entity == entity)
                 .and_then(|(_, target)| *target);
             let position = transform.translation.xy();
-            let pickup_candidates = [price_pickup_for_team(pickup, integrity, ai.team)];
+            let pickup_candidates = [price_pickup_for_team(
+                pickup,
+                integrity,
+                ai.team,
+                flag_stolen,
+            )];
             let target = choose_driving_target(
                 position,
                 DrivingChoices {
@@ -526,7 +580,7 @@ fn closest_eligible_pickup_claimant(
             !virtual_player_yields_player_pickup_claim(
                 *team,
                 player_position,
-                price_pickup_for_team(pickup, integrity, *team),
+                price_pickup_for_team(pickup, integrity, *team, flag_stolen),
                 *position,
             )
         })?;
@@ -542,16 +596,21 @@ fn compare_pickup_claim_priority(
     a: ArenaPickup,
     b: ArenaPickup,
     integrity: Option<&VehicleIntegrity>,
+    flag_stolen: FlagStolen,
 ) -> std::cmp::Ordering {
-    claim_priority(b, integrity)
-        .cmp(&claim_priority(a, integrity))
+    claim_priority(b, integrity, flag_stolen)
+        .cmp(&claim_priority(a, integrity, flag_stolen))
         .then_with(|| compare_positions(a.position, b.position))
 }
 
-fn claim_priority(pickup: ArenaPickup, integrity: Option<&VehicleIntegrity>) -> u32 {
-    price_pickup_for_team(pickup, integrity, AiTeam::Blue)
+fn claim_priority(
+    pickup: ArenaPickup,
+    integrity: Option<&VehicleIntegrity>,
+    flag_stolen: FlagStolen,
+) -> u32 {
+    price_pickup_for_team(pickup, integrity, AiTeam::Blue, flag_stolen)
         .priority
-        .max(price_pickup_for_team(pickup, integrity, AiTeam::Red).priority)
+        .max(price_pickup_for_team(pickup, integrity, AiTeam::Red, flag_stolen).priority)
 }
 
 fn player_has_better_pickup_claim(
@@ -3663,6 +3722,116 @@ mod tests {
             second_transform.translation.x > 0.0,
             "expected spare defender to detour through the home-lane pickup, x={}",
             second_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn pricing_lifts_a_sabotage_for_the_team_whose_flag_is_stolen() {
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+
+        // Red's flag is being hauled off by an enemy; Blue's sits safe at home.
+        let flags = [
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(0.0, 0.0),
+                holder: Some(Entity::from_raw(7)),
+            },
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+        ];
+        let stolen = flag_stolen_state(&flags);
+        assert!(stolen.for_team(AiTeam::Red), "an enemy holds Red's flag");
+        assert!(
+            !stolen.for_team(AiTeam::Blue),
+            "Blue's flag is safe at home"
+        );
+
+        let sabotage = ArenaPickup {
+            position: Vec2::new(50.0, 0.0),
+            kind: PickupKind::Sabotage,
+        };
+        let robbed = price_pickup_for_team(sabotage, None, AiTeam::Red, stolen).priority;
+        let safe = price_pickup_for_team(sabotage, None, AiTeam::Blue, stolen).priority;
+
+        assert!(
+            robbed >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "the robbed team must value the sabotage enough to chase the thief: {robbed}"
+        );
+        assert_eq!(
+            safe,
+            PickupKind::Sabotage.virtual_player_priority(),
+            "the team whose flag is safe keeps the sabotage at its flat value"
+        );
+    }
+
+    /// Drives one frame with the lone Red defender facing straight down its
+    /// home-defence route (`-x`) while Red's flag is being carried off and the
+    /// round is in closing-time discipline, then reports the defender's `y`
+    /// drift. A pickup of `kind` sits off the route at `(50, 80)`: only a pickup
+    /// worth the wide closing-time detour pulls the defender off the line, so a
+    /// positive `y` means it broke off for the pickup.
+    fn disciplined_defender_detour_y(kind: PickupKind) -> f32 {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+        use std::f32::consts::FRAC_PI_2;
+
+        let mut app = app_with_system();
+        app.insert_resource(MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        });
+
+        let defender = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(200.0, 0.0, 4.0),
+        );
+        // Face the defender west, straight along its intercept route, so any +y
+        // motion is a genuine detour and not steering slack off the spawn facing.
+        app.world.get_mut::<Transform>(defender).unwrap().rotation =
+            Quat::from_rotation_z(FRAC_PI_2);
+
+        let carrier = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(-500.0, 0.0),
+            Vec3::new(-500.0, 0.0, 2.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(500.0, 0.0),
+            Vec3::new(0.0, 0.0, 2.0),
+            Some(carrier),
+        );
+        app.world.spawn((
+            Pickup { kind },
+            Transform::from_translation(Vec3::new(50.0, 80.0, 2.0)),
+        ));
+
+        app.update();
+
+        app.world.get::<Transform>(defender).unwrap().translation.y
+    }
+
+    #[test]
+    fn stolen_flag_pulls_a_disciplined_defender_onto_a_sabotage() {
+        let sabotage_y = disciplined_defender_detour_y(PickupKind::Sabotage);
+        let cash_y = disciplined_defender_detour_y(PickupKind::Cash);
+
+        assert!(
+            sabotage_y > 0.0,
+            "a defender must break off onto the sabotage to slow the thief carrying its flag, y={sabotage_y}"
+        );
+        assert!(
+            cash_y.abs() < 1e-3,
+            "a disciplined defender must leave a cash bag and hold its intercept route, y={cash_y}"
         );
     }
 

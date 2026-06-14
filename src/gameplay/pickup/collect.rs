@@ -18,6 +18,26 @@ pub const SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY: u32 = 160;
 /// at compile time, so a repair always wins a straight repair-vs-shield choice.
 const _: () = assert!(SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY < REPAIR_MAX_VIRTUAL_PLAYER_PRIORITY);
 
+/// Tactical value a team places on a sabotage charge while an enemy is hauling
+/// that team's flag away.
+///
+/// Sabotage's marquee Death Rally use is running down a fleeing flag carrier:
+/// slow the thief and a defender can catch it before the capture. With the
+/// team's own flag stolen, the charge jumps from a flat narrow-detour grab to a
+/// wide-detour chase tool, worth pulling a defender off station and surviving
+/// closing-time discipline. Pitched above nitro's race pressure (slowing the
+/// carrier stops the capture more directly than raw speed) yet below a wrecked
+/// team's shield/repair panic, so survival still wins when a team is on the ropes.
+pub const SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY: u32 = 155;
+
+/// A flag-chase sabotage must justify the wide CTF detour (so a committed
+/// defender breaks off to slow the thief), enforced against the shield ceiling so
+/// the panic ordering stays intact.
+const _: () = assert!(
+    SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY < SHIELD_MAX_VIRTUAL_PLAYER_PRIORITY,
+    "a wrecked team's survival grabs (shield/repair) must still outrank a sabotage chase"
+);
+
 /// The classic Death Rally trackside collectibles a car can drive over.
 ///
 /// Each kind awards a cash bounty when picked up; richer per-kind effects
@@ -85,6 +105,26 @@ impl PickupKind {
             Self::Repair => repair_priority_for_integrity(integrity_fraction),
             Self::Shield => shield_priority_for_integrity(integrity_fraction),
             other => other.virtual_player_priority(),
+        }
+    }
+
+    /// Tactical value virtual players place on this pickup given both their team's
+    /// durability and whether an enemy is currently hauling their flag away.
+    ///
+    /// Folds the durability-driven pricing ([`Self::virtual_player_priority_for_integrity`])
+    /// together with the one threat that lifts a pickup's value above its own
+    /// wear: a live steal turns a sabotage into a carrier-chase tool, so it
+    /// jumps to [`SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY`]. Every other case
+    /// keeps the integrity-scaled price.
+    #[must_use]
+    pub fn virtual_player_priority_for_context(
+        self,
+        integrity_fraction: f32,
+        enemy_holds_our_flag: bool,
+    ) -> u32 {
+        match self {
+            Self::Sabotage if enemy_holds_our_flag => SABOTAGE_FLAG_CHASE_VIRTUAL_PLAYER_PRIORITY,
+            other => other.virtual_player_priority_for_integrity(integrity_fraction),
         }
     }
 }
@@ -223,6 +263,66 @@ mod tests {
                 "sabotage value is about denying the enemy, not the team's own wear"
             );
         }
+    }
+
+    #[test]
+    fn stolen_flag_lifts_sabotage_into_a_carrier_chase() {
+        let calm = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, false);
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true);
+        assert_eq!(
+            calm,
+            PickupKind::Sabotage.virtual_player_priority(),
+            "with our flag safe a sabotage keeps its flat value"
+        );
+        assert!(
+            chasing > calm,
+            "an enemy hauling our flag must make a sabotage more valuable: {calm} -> {chasing}"
+        );
+    }
+
+    #[test]
+    fn flag_chase_sabotage_justifies_a_wide_detour() {
+        use crate::gameplay::virtual_player::ai::CTF_WIDE_DETOUR_MIN_PRIORITY;
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(1.0, true);
+        assert!(
+            chasing >= CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a defender must break off a committed run to slow a fleeing carrier: {chasing}"
+        );
+        assert!(
+            chasing > PickupKind::Nitro.virtual_player_priority(),
+            "slowing the thief should edge out raw nitro speed when our flag is stolen: {chasing}"
+        );
+    }
+
+    #[test]
+    fn stolen_flag_only_lifts_sabotage_not_other_pickups() {
+        for kind in [
+            PickupKind::Cash,
+            PickupKind::Repair,
+            PickupKind::Nitro,
+            PickupKind::Shield,
+        ] {
+            for fraction in [1.0, 0.5, 0.0] {
+                assert_eq!(
+                    kind.virtual_player_priority_for_context(fraction, true),
+                    kind.virtual_player_priority_for_integrity(fraction),
+                    "a stolen flag only changes how a team values a sabotage, not a {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flag_chase_sabotage_yields_to_a_wrecked_teams_survival_grabs() {
+        let chasing = PickupKind::Sabotage.virtual_player_priority_for_context(0.0, true);
+        assert!(
+            chasing < PickupKind::Shield.virtual_player_priority_for_integrity(0.0),
+            "a wrecked team must still reach for its shield breather before chasing the thief"
+        );
+        assert!(
+            chasing < PickupKind::Repair.virtual_player_priority_for_integrity(0.0),
+            "a wrecked team must still reach for a repair before chasing the thief"
+        );
     }
 
     #[test]
