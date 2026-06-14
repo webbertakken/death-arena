@@ -33,6 +33,12 @@ pub enum PickupKind {
     /// A shield that briefly blunts the ram damage a team takes, the defensive
     /// counter to an otherwise all-offence combat loop. Also pays a small bounty.
     Shield,
+    /// A sabotage charge that briefly slows the *enemy* team's engines: the
+    /// classic Death Rally disruption item and the missing enemy-denial axis
+    /// alongside self-speed (nitro), self-defence (shield) and heal (repair).
+    /// Slowing a fleeing flag carrier makes it a real CTF chase tool. Pays the
+    /// same small bounty as the other utility grabs.
+    Sabotage,
 }
 
 impl PickupKind {
@@ -42,8 +48,9 @@ impl PickupKind {
         match self {
             Self::Cash => 100,
             Self::Repair => 25,
-            // A nitro canister and a shield are both modest utility grabs.
-            Self::Nitro | Self::Shield => 50,
+            // A nitro canister, a shield and a sabotage charge are all modest
+            // utility grabs.
+            Self::Nitro | Self::Shield | Self::Sabotage => 50,
         }
     }
 
@@ -58,6 +65,11 @@ impl PickupKind {
             // but not a wide one: grabbing a defensive edge should not pull a
             // car off a committed flag run the way nitro can.
             Self::Shield => 120,
+            // A touch above the shield: sabotage is proactive offence (deny the
+            // enemy their speed, slow a fleeing carrier) rather than a defensive
+            // edge, so a team reaches for it a little more readily, yet still
+            // below nitro's raw race pressure so it never eclipses a flag run.
+            Self::Sabotage => 130,
         }
     }
 
@@ -161,6 +173,56 @@ mod tests {
             shield < PickupKind::Nitro.virtual_player_priority(),
             "a shield should not eclipse nitro's race pressure: {shield}"
         );
+    }
+
+    #[test]
+    fn sabotage_pays_the_same_modest_bounty_as_nitro() {
+        assert_eq!(PickupKind::Sabotage.bounty(), PickupKind::Nitro.bounty());
+        assert!(PickupKind::Sabotage.bounty() < PickupKind::Cash.bounty());
+    }
+
+    #[test]
+    fn virtual_players_rate_sabotage_between_cash_and_nitro() {
+        let sabotage = PickupKind::Sabotage.virtual_player_priority();
+        assert!(
+            sabotage > PickupKind::Cash.virtual_player_priority(),
+            "a sabotage should outrank cash so a team detours to deny the enemy: {sabotage}"
+        );
+        assert!(
+            sabotage < PickupKind::Nitro.virtual_player_priority(),
+            "a sabotage should not eclipse nitro's race pressure: {sabotage}"
+        );
+        assert!(
+            sabotage > PickupKind::Shield.virtual_player_priority(),
+            "proactive offence should edge out a purely defensive shield: {sabotage}"
+        );
+    }
+
+    #[test]
+    fn team_will_take_a_narrow_detour_for_a_sabotage() {
+        use crate::gameplay::virtual_player::ai::{
+            CTF_PICKUP_DETOUR_MIN_PRIORITY, CTF_WIDE_DETOUR_MIN_PRIORITY,
+        };
+        let sabotage = PickupKind::Sabotage.virtual_player_priority();
+        assert!(
+            sabotage >= CTF_PICKUP_DETOUR_MIN_PRIORITY,
+            "a team must be willing to take at least a narrow detour for a sabotage"
+        );
+        assert!(
+            sabotage < CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a sabotage must not pull a car off a committed flag run the way nitro can"
+        );
+    }
+
+    #[test]
+    fn integrity_does_not_change_sabotage_priority() {
+        for fraction in [1.0, 0.5, 0.0] {
+            assert_eq!(
+                PickupKind::Sabotage.virtual_player_priority_for_integrity(fraction),
+                PickupKind::Sabotage.virtual_player_priority(),
+                "sabotage value is about denying the enemy, not the team's own wear"
+            );
+        }
     }
 
     #[test]

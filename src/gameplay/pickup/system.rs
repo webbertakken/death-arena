@@ -1,8 +1,8 @@
 use crate::gameplay::combat::VehicleIntegrity;
 use crate::gameplay::ctf::CtfMatchResult;
 use crate::gameplay::pickup::{
-    ArmourBoosts, NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, Score,
-    PICKUP_RADIUS,
+    ArmourBoosts, NitroBoosts, OpponentScore, Pickup, PickupKind, PickupRespawns, SabotageEffects,
+    Score, PICKUP_RADIUS,
 };
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::AiTeam;
@@ -17,6 +17,7 @@ pub struct PickupCollectionParams<'w, 's> {
     respawns: ResMut<'w, PickupRespawns>,
     nitro_boosts: ResMut<'w, NitroBoosts>,
     armour_boosts: ResMut<'w, ArmourBoosts>,
+    sabotage_effects: ResMut<'w, SabotageEffects>,
     integrity: Option<ResMut<'w, VehicleIntegrity>>,
     score: ResMut<'w, Score>,
     opponent_score: ResMut<'w, OpponentScore>,
@@ -59,6 +60,7 @@ pub fn pickup_collection_system(mut commands: Commands, mut params: PickupCollec
                 &mut params.opponent_score,
                 &mut params.nitro_boosts,
                 &mut params.armour_boosts,
+                &mut params.sabotage_effects,
                 params.integrity.as_deref_mut(),
             );
             params.respawns.queue(kind, position);
@@ -157,6 +159,7 @@ fn collect_for_team(
     opponent_score: &mut OpponentScore,
     nitro_boosts: &mut NitroBoosts,
     armour_boosts: &mut ArmourBoosts,
+    sabotage_effects: &mut SabotageEffects,
     integrity: Option<&mut VehicleIntegrity>,
 ) {
     match team {
@@ -168,6 +171,10 @@ fn collect_for_team(
             if kind == PickupKind::Shield {
                 armour_boosts.trigger_player();
             }
+            // A sabotage charge slows the *enemy* team: blue grabs it, red bogs.
+            if kind == PickupKind::Sabotage {
+                sabotage_effects.sabotage_opponent();
+            }
         }
         AiTeam::Red => {
             opponent_score.collect(kind);
@@ -176,6 +183,9 @@ fn collect_for_team(
             }
             if kind == PickupKind::Shield {
                 armour_boosts.trigger_opponent();
+            }
+            if kind == PickupKind::Sabotage {
+                sabotage_effects.sabotage_player();
             }
         }
     }
@@ -215,6 +225,21 @@ pub fn armour_boost_decay_system(
     }
 
     armour_boosts.tick();
+}
+
+/// Advances active engine-sabotage timers by one fixed frame.
+pub fn sabotage_effect_decay_system(
+    match_result: Option<Res<CtfMatchResult>>,
+    mut sabotage_effects: ResMut<SabotageEffects>,
+) {
+    if match_result
+        .as_ref()
+        .is_some_and(|result| result.winner.is_some())
+    {
+        return;
+    }
+
+    sabotage_effects.tick();
 }
 
 fn advance_respawns(respawns: &mut PickupRespawns) -> Vec<(PickupKind, Vec2)> {
@@ -291,6 +316,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         app.world
             .spawn((test_player(), Transform::from_translation(position)));
@@ -376,6 +402,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::ZERO);
 
@@ -393,6 +420,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
@@ -420,6 +448,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
         let pickup = spawn_pickup(&mut app, PickupKind::Cash, Vec3::new(10.0, 0.0, 0.0));
@@ -486,6 +515,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.insert_resource(VehicleIntegrity {
             player: 50.0,
             opponent: 50.0,
@@ -517,6 +547,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
@@ -539,6 +570,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Blue, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Nitro, Vec3::new(10.0, 0.0, 0.0));
@@ -558,6 +590,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(nitro_boost_decay_system);
         app.world.resource_mut::<NitroBoosts>().trigger_player();
 
@@ -574,6 +607,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
         });
@@ -616,6 +650,7 @@ mod tests {
         app.init_resource::<PickupRespawns>();
         app.init_resource::<NitroBoosts>();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(pickup_collection_system);
         spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
         spawn_pickup(&mut app, PickupKind::Shield, Vec3::new(10.0, 0.0, 0.0));
@@ -639,6 +674,7 @@ mod tests {
     fn armour_boost_decay_counts_down() {
         let mut app = App::new();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.add_system(armour_boost_decay_system);
         app.world.resource_mut::<ArmourBoosts>().trigger_player();
 
@@ -654,6 +690,7 @@ mod tests {
     fn finished_match_pauses_armour_boost_decay() {
         let mut app = App::new();
         app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
         });
@@ -665,6 +702,95 @@ mod tests {
         assert_eq!(
             app.world.resource::<ArmourBoosts>().player_frames,
             crate::gameplay::pickup::SHIELD_BOOST_FRAMES
+        );
+    }
+
+    #[test]
+    fn sabotage_pickup_slows_the_opponent_when_player_team_collects() {
+        let mut app = app_with_player_at(Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Sabotage, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let effects = app.world.resource::<SabotageEffects>();
+        assert_eq!(
+            effects.opponent_frames,
+            crate::gameplay::pickup::SABOTAGE_FRAMES,
+            "the player team's grab should bog the opponents down"
+        );
+        assert_eq!(
+            effects.player_frames, 0,
+            "a team must never sabotage its own engines"
+        );
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            PickupKind::Sabotage.bounty(),
+            "a sabotage should still pay its modest bounty"
+        );
+    }
+
+    #[test]
+    fn sabotage_pickup_slows_the_player_team_when_opponent_collects() {
+        let mut app = App::new();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PickupRespawns>();
+        app.init_resource::<NitroBoosts>();
+        app.init_resource::<ArmourBoosts>();
+        app.init_resource::<SabotageEffects>();
+        app.add_system(pickup_collection_system);
+        spawn_virtual_player(&mut app, AiTeam::Red, Vec3::ZERO);
+        spawn_pickup(&mut app, PickupKind::Sabotage, Vec3::new(10.0, 0.0, 0.0));
+
+        app.update();
+
+        let effects = app.world.resource::<SabotageEffects>();
+        assert_eq!(
+            effects.player_frames,
+            crate::gameplay::pickup::SABOTAGE_FRAMES,
+            "the opponents' grab should bog the player team down"
+        );
+        assert_eq!(effects.opponent_frames, 0);
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            PickupKind::Sabotage.bounty()
+        );
+    }
+
+    #[test]
+    fn sabotage_effect_decay_counts_down() {
+        let mut app = App::new();
+        app.init_resource::<SabotageEffects>();
+        app.add_system(sabotage_effect_decay_system);
+        app.world
+            .resource_mut::<SabotageEffects>()
+            .sabotage_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<SabotageEffects>().player_frames,
+            crate::gameplay::pickup::SABOTAGE_FRAMES - 1
+        );
+    }
+
+    #[test]
+    fn finished_match_pauses_sabotage_effect_decay() {
+        let mut app = App::new();
+        app.init_resource::<SabotageEffects>();
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.add_system(sabotage_effect_decay_system);
+        app.world
+            .resource_mut::<SabotageEffects>()
+            .sabotage_player();
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<SabotageEffects>().player_frames,
+            crate::gameplay::pickup::SABOTAGE_FRAMES
         );
     }
 

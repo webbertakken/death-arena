@@ -24,6 +24,21 @@ pub const SHIELD_BOOST_FRAMES: u32 = 300;
 /// A shield must outlast a nitro burst to feel like a real breather, enforced at
 /// compile time.
 const _: () = assert!(SHIELD_BOOST_FRAMES > NITRO_BOOST_FRAMES);
+/// Number of fixed update frames a sabotage charge slows the enemy team.
+///
+/// Pitched to match the nitro window (3s at 60 FPS): a sabotage is the offensive
+/// mirror of nitro, so a charge denies roughly a nitro's worth of speed.
+pub const SABOTAGE_FRAMES: u32 = 180;
+/// Speed multiplier applied to a team whose engines are sabotaged.
+///
+/// A 15% slow: meaningful (it blunts a getaway or a counter-attack and helps run
+/// down a fleeing flag carrier) without being a crippling stop. An enemy nitro
+/// burst still nets a gain on top of it (`1.5 * 0.85 = 1.275`), so sabotage
+/// blunts a boost rather than negating it, keeping the counter-play alive.
+pub const SABOTAGE_SPEED_MULTIPLIER: f32 = 0.85;
+/// A sabotage must slow, never speed up or stop, the enemy, enforced at compile
+/// time.
+const _: () = assert!(SABOTAGE_SPEED_MULTIPLIER > 0.0 && SABOTAGE_SPEED_MULTIPLIER < 1.0);
 
 /// A trackside collectible the player drives over to bank a bounty.
 #[derive(Component, Debug)]
@@ -132,6 +147,57 @@ impl ArmourBoosts {
 
     pub const fn trigger_opponent(&mut self) {
         self.opponent_frames = SHIELD_BOOST_FRAMES;
+    }
+
+    pub const fn tick(&mut self) {
+        self.player_frames = self.player_frames.saturating_sub(1);
+        self.opponent_frames = self.opponent_frames.saturating_sub(1);
+    }
+}
+
+/// Timed engine sabotage currently slowing the player and opponent team.
+///
+/// The offensive mirror of [`NitroBoosts`]: where nitro speeds a team's *own*
+/// cars up, a sabotage charge slows the *enemy* team down. Same per-team frame
+/// timer, but armed by the opposing side: a [`PickupKind::Sabotage`] collected
+/// by one team winds up the other team's timer (see the collection system).
+/// Wound down each frame by the decay system and read by both movement systems
+/// to throttle the sabotaged team.
+#[derive(Resource, Default, Debug, PartialEq, Eq)]
+pub struct SabotageEffects {
+    /// Frames the player team's engines remain sabotaged (slowed).
+    pub player_frames: u32,
+    /// Frames the opponent team's engines remain sabotaged (slowed).
+    pub opponent_frames: u32,
+}
+
+impl SabotageEffects {
+    /// Speed multiplier the player team carries while sabotaged.
+    pub const fn player_multiplier(&self) -> f32 {
+        if self.player_frames > 0 {
+            SABOTAGE_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Speed multiplier the opponent team carries while sabotaged.
+    pub const fn opponent_multiplier(&self) -> f32 {
+        if self.opponent_frames > 0 {
+            SABOTAGE_SPEED_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// Sabotage the player team: the opponents collected a sabotage charge.
+    pub const fn sabotage_player(&mut self) {
+        self.player_frames = SABOTAGE_FRAMES;
+    }
+
+    /// Sabotage the opponent team: the player team collected a sabotage charge.
+    pub const fn sabotage_opponent(&mut self) {
+        self.opponent_frames = SABOTAGE_FRAMES;
     }
 
     pub const fn tick(&mut self) {
@@ -262,6 +328,7 @@ impl Plugin for PickupPlugin {
             .init_resource::<OpponentScore>()
             .init_resource::<NitroBoosts>()
             .init_resource::<ArmourBoosts>()
+            .init_resource::<SabotageEffects>()
             .init_resource::<PickupRespawns>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
@@ -270,6 +337,9 @@ impl Plugin for PickupPlugin {
             );
         app.add_system(system::nitro_boost_decay_system.before(system::pickup_collection_system))
             .add_system(system::armour_boost_decay_system.before(system::pickup_collection_system))
+            .add_system(
+                system::sabotage_effect_decay_system.before(system::pickup_collection_system),
+            )
             .add_system(system::pickup_collection_system)
             .add_system(system::pickup_respawn_system.after(system::pickup_collection_system));
     }
@@ -280,12 +350,14 @@ fn reset_pickup_match_resources(
     mut opponent_score: ResMut<OpponentScore>,
     mut nitro_boosts: ResMut<NitroBoosts>,
     mut armour_boosts: ResMut<ArmourBoosts>,
+    mut sabotage_effects: ResMut<SabotageEffects>,
     mut respawns: ResMut<PickupRespawns>,
 ) {
     *score = Score::default();
     *opponent_score = OpponentScore::default();
     *nitro_boosts = NitroBoosts::default();
     *armour_boosts = ArmourBoosts::default();
+    *sabotage_effects = SabotageEffects::default();
     *respawns = PickupRespawns::default();
 }
 
@@ -592,6 +664,10 @@ mod tests {
             player_frames: 56,
             opponent_frames: 78,
         });
+        app.insert_resource(SabotageEffects {
+            player_frames: 90,
+            opponent_frames: 11,
+        });
         let mut respawns = PickupRespawns::default();
         respawns.queue(PickupKind::Cash, Vec2::new(1.0, 2.0));
         app.insert_resource(respawns);
@@ -610,9 +686,47 @@ mod tests {
             ArmourBoosts::default()
         );
         assert_eq!(
+            *app.world.resource::<SabotageEffects>(),
+            SabotageEffects::default()
+        );
+        assert_eq!(
             *app.world.resource::<PickupRespawns>(),
             PickupRespawns::default()
         );
+    }
+
+    #[test]
+    fn sabotage_starts_active_and_expires() {
+        let mut effects = SabotageEffects::default();
+        assert_multiplier_eq(effects.player_multiplier(), 1.0);
+        assert_multiplier_eq(effects.opponent_multiplier(), 1.0);
+
+        effects.sabotage_player();
+        effects.sabotage_opponent();
+
+        assert_multiplier_eq(effects.player_multiplier(), SABOTAGE_SPEED_MULTIPLIER);
+        assert_multiplier_eq(effects.opponent_multiplier(), SABOTAGE_SPEED_MULTIPLIER);
+        assert_eq!(effects.player_frames, SABOTAGE_FRAMES);
+        assert_eq!(effects.opponent_frames, SABOTAGE_FRAMES);
+
+        for _ in 0..SABOTAGE_FRAMES {
+            effects.tick();
+        }
+
+        assert_eq!(effects.player_frames, 0);
+        assert_eq!(effects.opponent_frames, 0);
+        assert_multiplier_eq(effects.player_multiplier(), 1.0);
+        assert_multiplier_eq(effects.opponent_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn sabotaging_one_team_leaves_the_other_at_full_speed() {
+        let mut effects = SabotageEffects::default();
+        effects.sabotage_opponent();
+
+        assert_multiplier_eq(effects.opponent_multiplier(), SABOTAGE_SPEED_MULTIPLIER);
+        assert_eq!(effects.player_frames, 0);
+        assert_multiplier_eq(effects.player_multiplier(), 1.0);
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub fn pickup_layout() -> Vec<(PickupKind, Vec2)> {
         (PickupKind::Nitro, Vec2::new(0.0, -y)),
         (PickupKind::Shield, Vec2::new(x * 0.45, y)),
         (PickupKind::Shield, Vec2::new(-x * 0.45, -y)),
+        (PickupKind::Sabotage, Vec2::new(x * 0.75, y)),
+        (PickupKind::Sabotage, Vec2::new(-x * 0.75, -y)),
     ]
 }
 
@@ -125,6 +127,18 @@ mod tests {
         assert!(
             shields >= 2,
             "expected at least one mirrored shield pair, found {shields}"
+        );
+    }
+
+    #[test]
+    fn layout_scatters_a_mirrored_sabotage_pair() {
+        let sabotages = pickup_layout()
+            .into_iter()
+            .filter(|(kind, _)| *kind == PickupKind::Sabotage)
+            .count();
+        assert!(
+            sabotages >= 2,
+            "expected at least one mirrored sabotage pair, found {sabotages}"
         );
     }
 

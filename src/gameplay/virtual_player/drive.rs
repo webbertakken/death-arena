@@ -3,7 +3,7 @@ use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock,
 };
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
-use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
+use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
@@ -56,11 +56,17 @@ type VirtualPlayerDriveContext<'w> = (
 
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
+///
+/// `sabotage_effects` rides as its own parameter rather than in the bundled
+/// [`VirtualPlayerDriveContext`]: it is the eighth optional resource and folding
+/// it into the tuple expands the destructure enough to trip clippy's line gate,
+/// so it stays separate (still well inside the argument limit).
 pub fn virtual_player_drive_system(
     mut query: Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerTransform>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
+    sabotage_effects: Option<Res<SabotageEffects>>,
     context: VirtualPlayerDriveContext,
 ) {
     let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures, match_clock) =
@@ -162,6 +168,7 @@ pub fn virtual_player_drive_system(
                 integrity.as_deref(),
                 wreck_stuns.as_deref(),
                 wreck_surges.as_deref(),
+                sabotage_effects.as_deref(),
             )
             * carry_multiplier
             * TIME_STEP;
@@ -1076,23 +1083,34 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
     }
 }
 
+const fn sabotage_multiplier_for_team(effects: &SabotageEffects, team: AiTeam) -> f32 {
+    match team {
+        AiTeam::Blue => effects.player_multiplier(),
+        AiTeam::Red => effects.opponent_multiplier(),
+    }
+}
+
 /// Combined speed multiplier a team's cars carry from the live combat resources:
-/// the product of its nitro boost, integrity wear, wreck spin-out and wreck
-/// surge. Each absent resource (no combat loaded) contributes a neutral `1.0`,
-/// matching the per-team multiplier the human player movement applies. The
-/// flag-carry tax is applied separately, since it is per-car rather than per-team.
+/// the product of its nitro boost, integrity wear, wreck spin-out, wreck surge
+/// and any enemy engine sabotage. Each absent resource (no combat loaded)
+/// contributes a neutral `1.0`, matching the per-team multiplier the human player
+/// movement applies. The flag-carry tax is applied separately, since it is
+/// per-car rather than per-team.
 fn team_movement_multiplier(
     team: AiTeam,
     nitro_boosts: Option<&NitroBoosts>,
     integrity: Option<&VehicleIntegrity>,
     wreck_stuns: Option<&WreckStuns>,
     wreck_surges: Option<&WreckSurges>,
+    sabotage_effects: Option<&SabotageEffects>,
 ) -> f32 {
     let nitro = nitro_boosts.map_or(1.0, |boosts| nitro_multiplier_for_team(boosts, team));
     let integrity = integrity.map_or(1.0, |integrity| integrity.multiplier_for_team(team));
     let stun = wreck_stuns.map_or(1.0, |stuns| stuns.multiplier_for_team(team));
     let surge = wreck_surges.map_or(1.0, |surges| surges.multiplier_for_team(team));
-    nitro * integrity * stun * surge
+    let sabotage =
+        sabotage_effects.map_or(1.0, |effects| sabotage_multiplier_for_team(effects, team));
+    nitro * integrity * stun * surge * sabotage
 }
 
 /// Arrive radius a car uses to reach `target`.
@@ -3794,6 +3812,42 @@ mod tests {
         assert!(
             (opponent_wrecked_y - healthy_y).abs() < 1e-4,
             "healthy={healthy_y}, opponent_wrecked={opponent_wrecked_y}"
+        );
+    }
+
+    fn one_frame_ai_y_with_sabotage(team: AiTeam, effects: SabotageEffects) -> f32 {
+        let mut app = app_with_system();
+        app.insert_resource(effects);
+        let ai = spawn_ai_on_team(&mut app, team, vec![Vec2::new(0.0, 1000.0)]);
+
+        app.update();
+
+        app.world.get::<Transform>(ai).unwrap().translation.y
+    }
+
+    #[test]
+    fn sabotaging_the_opponent_reduces_its_distance() {
+        let healthy_y = one_frame_ai_y(AiTeam::Red, None);
+        let mut effects = SabotageEffects::default();
+        effects.sabotage_opponent();
+        let sabotaged_y = one_frame_ai_y_with_sabotage(AiTeam::Red, effects);
+
+        assert!(
+            sabotaged_y > 0.0 && sabotaged_y < healthy_y,
+            "a sabotaged opponent should crawl forward: healthy={healthy_y}, sabotaged={sabotaged_y}"
+        );
+    }
+
+    #[test]
+    fn sabotaging_the_opponent_does_not_slow_blue_virtual_players() {
+        let healthy_y = one_frame_ai_y(AiTeam::Blue, None);
+        let mut effects = SabotageEffects::default();
+        effects.sabotage_opponent();
+        let blue_y = one_frame_ai_y_with_sabotage(AiTeam::Blue, effects);
+
+        assert!(
+            (blue_y - healthy_y).abs() < 1e-4,
+            "sabotaging red must not slow blue cars: healthy={healthy_y}, blue={blue_y}"
         );
     }
 

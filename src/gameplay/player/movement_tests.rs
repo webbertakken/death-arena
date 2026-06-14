@@ -3,7 +3,7 @@ mod tests {
     use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
     use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, CtfMatchWinner, FlagTeam};
     use crate::gameplay::main::BOUNDS;
-    use crate::gameplay::pickup::NitroBoosts;
+    use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
     use crate::gameplay::player::movement::car_movement_system;
     use crate::gameplay::player::Player;
@@ -348,6 +348,82 @@ mod tests {
         assert!(
             (player_y - normal_y).abs() < 1e-4,
             "the opponents' surge must not speed the player: normal={normal_y}, player={player_y}"
+        );
+    }
+
+    #[test]
+    fn a_sabotaged_player_team_crawls_forward() {
+        let mut healthy_app = setup_test_app();
+        let healthy_player = spawn_player(&mut healthy_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut healthy_app, healthy_player);
+        healthy_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        healthy_app.update();
+        let healthy_y = healthy_app
+            .world
+            .get::<Transform>(healthy_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut sabotaged_app = setup_test_app();
+        let mut effects = SabotageEffects::default();
+        effects.sabotage_player();
+        sabotaged_app.insert_resource(effects);
+        let sabotaged_player = spawn_player(&mut sabotaged_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut sabotaged_app, sabotaged_player);
+        sabotaged_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        sabotaged_app.update();
+        let sabotaged_y = sabotaged_app
+            .world
+            .get::<Transform>(sabotaged_player)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            sabotaged_y > 0.0 && sabotaged_y < healthy_y,
+            "a sabotaged player should crawl forward: healthy={healthy_y}, sabotaged={sabotaged_y}"
+        );
+    }
+
+    #[test]
+    fn sabotaging_the_opponent_does_not_slow_the_player() {
+        let mut healthy_app = setup_test_app();
+        let healthy_player = spawn_player(&mut healthy_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut healthy_app, healthy_player);
+        healthy_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        healthy_app.update();
+        let healthy_y = healthy_app
+            .world
+            .get::<Transform>(healthy_player)
+            .unwrap()
+            .translation
+            .y;
+
+        let mut app = setup_test_app();
+        let mut effects = SabotageEffects::default();
+        effects.sabotage_opponent();
+        app.insert_resource(effects);
+        let player = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut app, player);
+        app.world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        app.update();
+        let player_y = app.world.get::<Transform>(player).unwrap().translation.y;
+
+        assert!(
+            (player_y - healthy_y).abs() < 1e-4,
+            "sabotaging red must not slow the blue player: healthy={healthy_y}, player={player_y}"
         );
     }
 
