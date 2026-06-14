@@ -41,6 +41,17 @@ pub const MATCH_TIME_LIMIT_FRAMES: u32 = 10_800;
 /// match gets a dramatic decider instead of a tame draw, while still
 /// guaranteeing the round terminates. At 60 FPS this is one minute.
 pub const SUDDEN_DEATH_TIME_LIMIT_FRAMES: u32 = 3_600;
+/// Fixed update frames from the end of regulation within which the round counts
+/// as closing time, the final stretch where a team not ahead on captures stops
+/// gambling on opportunistic pickup detours and commits to the objective.
+///
+/// At the game's 60 FPS convention this is the last thirty seconds of a
+/// regulation round. Sudden death is always closing time regardless of this
+/// window, since in golden-goal overtime every frame off the objective is wasted.
+pub const CLOSING_TIME_FRAMES: u32 = 1_800;
+/// Closing time must be a real slice of regulation, not the whole round, enforced
+/// at compile time, so a round only tightens into clutch play near the end.
+const _: () = assert!(CLOSING_TIME_FRAMES < MATCH_TIME_LIMIT_FRAMES);
 /// Speed multiplier a car suffers while hauling the enemy flag home.
 ///
 /// The classic capture-the-flag tax: the heavy flag drags on the car, so the
@@ -270,6 +281,15 @@ impl MatchClock {
     /// Whether the clock is timing a sudden-death overtime.
     pub const fn is_sudden_death(self) -> bool {
         matches!(self.phase, MatchPhase::SuddenDeath)
+    }
+
+    /// Whether the round is in its closing stretch: the final
+    /// [`CLOSING_TIME_FRAMES`] of regulation, or any moment of sudden death.
+    ///
+    /// Read by the virtual players to switch a team that is not ahead on captures
+    /// into objective-commitment play, the classic clutch-time push.
+    pub const fn is_closing_time(self) -> bool {
+        self.is_sudden_death() || self.frames_remaining <= CLOSING_TIME_FRAMES
     }
 
     /// Refills the overtime budget and switches the clock to sudden death.
@@ -1234,6 +1254,44 @@ mod tests {
         assert!(clock.is_sudden_death());
         assert_eq!(clock.frames_remaining, SUDDEN_DEATH_TIME_LIMIT_FRAMES);
         assert!(!clock.is_expired());
+    }
+
+    #[test]
+    fn regulation_is_closing_time_only_in_its_final_stretch() {
+        let early = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES + 1,
+            phase: MatchPhase::Regulation,
+        };
+        assert!(
+            !early.is_closing_time(),
+            "a round with time to spare must not force clutch play"
+        );
+
+        let boundary = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        };
+        assert!(
+            boundary.is_closing_time(),
+            "the closing window opens exactly at CLOSING_TIME_FRAMES"
+        );
+
+        let expiring = MatchClock {
+            frames_remaining: 0,
+            phase: MatchPhase::Regulation,
+        };
+        assert!(expiring.is_closing_time());
+    }
+
+    #[test]
+    fn sudden_death_is_always_closing_time() {
+        let clock = MatchClock {
+            // More frames than the regulation closing window, yet still closing
+            // because every second of golden-goal overtime is decisive.
+            frames_remaining: SUDDEN_DEATH_TIME_LIMIT_FRAMES,
+            phase: MatchPhase::SuddenDeath,
+        };
+        assert!(clock.is_closing_time());
     }
 
     #[test]

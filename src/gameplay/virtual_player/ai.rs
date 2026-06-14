@@ -183,6 +183,11 @@ pub struct DrivingChoices<'a> {
     pub pickup_pursuit_radius: f32,
     pub player_position: Option<Vec2>,
     pub player_pursuit_radius: f32,
+    /// Closing-time clutch play: when set, a car on a CTF objective only breaks
+    /// off for a pickup genuinely worth a wide detour (nitro or a battered team's
+    /// survival grab), never a mere cash bag, so a team racing the clock commits
+    /// to scoring instead of sightseeing. See [`closing_time_detour_min_priority`].
+    pub commit_to_objective: bool,
 }
 
 #[must_use]
@@ -570,12 +575,13 @@ fn pickup_detour(
     }
 
     let target_distance_sq = position.distance_squared(target.position());
+    let min_priority = closing_time_detour_min_priority(choices.commit_to_objective);
     best_pickup(
         position,
         choices.pickups,
         choices.pickup_pursuit_radius,
         |pickup| {
-            pickup.priority >= CTF_PICKUP_DETOUR_MIN_PRIORITY
+            pickup.priority >= min_priority
                 && position.distance_squared(pickup.position) < target_distance_sq
                 && is_ahead_of_target_push(position, pickup.position, target.position())
                 && is_on_target_lane(
@@ -586,6 +592,22 @@ fn pickup_detour(
                 )
         },
     )
+}
+
+/// Minimum pickup priority that still justifies a CTF detour this frame.
+///
+/// In normal play a car breaks off its objective for any pickup worth the base
+/// [`CTF_PICKUP_DETOUR_MIN_PRIORITY`]. Once a team commits to the objective in
+/// closing time the bar rises to [`CTF_WIDE_DETOUR_MIN_PRIORITY`], so only a
+/// pickup already worth a wide gamble (nitro's race pressure or a battered team's
+/// integrity-scaled repair/shield) is worth the time, while a mere cash bag is
+/// left on the track in favour of racing the flag home.
+const fn closing_time_detour_min_priority(commit_to_objective: bool) -> u32 {
+    if commit_to_objective {
+        CTF_WIDE_DETOUR_MIN_PRIORITY
+    } else {
+        CTF_PICKUP_DETOUR_MIN_PRIORITY
+    }
 }
 
 fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
@@ -753,6 +775,7 @@ mod tests {
             pickup_pursuit_radius: 100.0,
             player_position,
             player_pursuit_radius,
+            commit_to_objective: false,
         }
     }
 
@@ -1159,6 +1182,94 @@ mod tests {
         assert_eq!(
             target,
             Some(DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn closing_time_raises_the_detour_bar_to_the_wide_threshold() {
+        assert_eq!(
+            closing_time_detour_min_priority(false),
+            CTF_PICKUP_DETOUR_MIN_PRIORITY,
+            "normal play breaks off for any pickup worth the base detour"
+        );
+        assert_eq!(
+            closing_time_detour_min_priority(true),
+            CTF_WIDE_DETOUR_MIN_PRIORITY,
+            "a committed team only breaks off for a wide-detour-worthy grab"
+        );
+    }
+
+    #[test]
+    fn committed_attacker_leaves_cash_but_still_grabs_nitro() {
+        use crate::gameplay::pickup::PickupKind;
+
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(0.0, 300.0));
+        let on_lane = Vec2::new(0.0, 80.0);
+
+        let cash = [PickupTarget {
+            position: on_lane,
+            priority: PickupKind::Cash.virtual_player_priority(),
+        }];
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                choices(&waypoints, 0, Some(flag), &cash, None, 0.0),
+            ),
+            Some(DrivingTarget::Pickup(on_lane)),
+            "normal play still grabs a cash bag sitting on the flag lane"
+        );
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    commit_to_objective: true,
+                    ..choices(&waypoints, 0, Some(flag), &cash, None, 0.0)
+                },
+            ),
+            Some(flag),
+            "a team racing the clock leaves the cash and commits to the flag"
+        );
+
+        let nitro = [PickupTarget {
+            position: on_lane,
+            priority: PickupKind::Nitro.virtual_player_priority(),
+        }];
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    commit_to_objective: true,
+                    ..choices(&waypoints, 0, Some(flag), &nitro, None, 0.0)
+                },
+            ),
+            Some(DrivingTarget::Pickup(on_lane)),
+            "a committed team still grabs nitro that speeds the push home"
+        );
+    }
+
+    #[test]
+    fn committed_battered_attacker_still_grabs_a_survival_repair() {
+        use crate::gameplay::pickup::PickupKind;
+
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(0.0, 300.0));
+        let repair = [PickupTarget {
+            position: Vec2::new(0.0, 80.0),
+            // A wrecked team rates a repair above the wide-detour bar.
+            priority: PickupKind::Repair.virtual_player_priority_for_integrity(0.0),
+        }];
+
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    commit_to_objective: true,
+                    ..choices(&waypoints, 0, Some(flag), &repair, None, 0.0)
+                },
+            ),
+            Some(DrivingTarget::Pickup(Vec2::new(0.0, 80.0))),
+            "commitment must not suicide: a wrecked car still patches up to finish the run"
         );
     }
 

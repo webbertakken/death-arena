@@ -1,6 +1,6 @@
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
 use crate::gameplay::ctf::{
-    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam,
+    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock,
 };
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind};
@@ -50,6 +50,7 @@ type VirtualPlayerDriveContext<'w> = (
     Option<Res<'w, WreckSurges>>,
     Option<Res<'w, CtfMatchResult>>,
     Option<Res<'w, CaptureScore>>,
+    Option<Res<'w, MatchClock>>,
 );
 
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
@@ -61,7 +62,8 @@ pub fn virtual_player_drive_system(
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     context: VirtualPlayerDriveContext,
 ) {
-    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures) = context;
+    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures, match_clock) =
+        context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -69,6 +71,9 @@ pub fn virtual_player_drive_system(
         return;
     }
     let captures = captures.as_deref().copied().unwrap_or_default();
+    // Closing-time clutch play: in the final stretch of a round each team that is
+    // not ahead on captures commits to the objective and stops chasing cash.
+    let commitment = objective_commitment(match_clock.as_deref(), captures);
 
     let player = player_query
         .get_single()
@@ -89,6 +94,7 @@ pub fn virtual_player_drive_system(
         &visible_pickups,
         integrity.as_deref(),
         player_position,
+        commitment,
     );
 
     for (entity, mut ai, mut transform) in &mut query {
@@ -110,6 +116,7 @@ pub fn virtual_player_drive_system(
                 pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                 player_position: player_position_for_team(ai.team, player_position),
                 player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+                commit_to_objective: commitment.for_team(ai.team),
             },
         ) else {
             continue;
@@ -138,26 +145,17 @@ pub fn virtual_player_drive_system(
 
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
-        let nitro_multiplier = nitro_boosts
-            .as_ref()
-            .map_or(1.0, |boosts| nitro_multiplier_for_team(boosts, ai.team));
-        let integrity_multiplier = integrity
-            .as_ref()
-            .map_or(1.0, |integrity| integrity.multiplier_for_team(ai.team));
-        let stun_multiplier = wreck_stuns
-            .as_ref()
-            .map_or(1.0, |stuns| stuns.multiplier_for_team(ai.team));
-        let surge_multiplier = wreck_surges
-            .as_ref()
-            .map_or(1.0, |surges| surges.multiplier_for_team(ai.team));
         let carry_multiplier =
             flag_carrier_speed_multiplier(carries_enemy_flag(entity, ai.team, &flags));
         let movement_distance = intent.throttle
             * ai.movement_speed
-            * nitro_multiplier
-            * integrity_multiplier
-            * stun_multiplier
-            * surge_multiplier
+            * team_movement_multiplier(
+                ai.team,
+                nitro_boosts.as_deref(),
+                integrity.as_deref(),
+                wreck_stuns.as_deref(),
+                wreck_surges.as_deref(),
+            )
             * carry_multiplier
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
@@ -304,12 +302,47 @@ fn price_pickup_for_team(
     }
 }
 
+/// Per-team flag for closing-time clutch play: should this team's cars commit to
+/// the CTF objective and stop chasing opportunistic pickup detours?
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ObjectiveCommitment {
+    blue: bool,
+    red: bool,
+}
+
+impl ObjectiveCommitment {
+    const fn for_team(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.blue,
+            AiTeam::Red => self.red,
+        }
+    }
+}
+
+/// Decides which teams commit to the objective given the round clock and the
+/// capture scoreline.
+///
+/// Outside the closing stretch no team commits. Within it every team that is not
+/// ahead on captures does: a closing-time leader keeps playing the field, while a
+/// trailing side, and both sides of a level sudden death, drop cash detours to
+/// race the flag. A missing clock (an unstarted match) never forces commitment.
+fn objective_commitment(clock: Option<&MatchClock>, captures: CaptureScore) -> ObjectiveCommitment {
+    if !clock.is_some_and(|clock| clock.is_closing_time()) {
+        return ObjectiveCommitment::default();
+    }
+    ObjectiveCommitment {
+        blue: captures.player <= captures.opponents,
+        red: captures.opponents <= captures.player,
+    }
+}
+
 fn claimed_pickups_for_virtual_players(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
     pickups: &[ArenaPickup],
     integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
+    commitment: ObjectiveCommitment,
 ) -> Vec<(Entity, PickupTarget)> {
     let mut ordered_pickups = pickups.to_vec();
     ordered_pickups.sort_by(|a, b| compare_pickup_claim_priority(*a, *b, integrity));
@@ -326,6 +359,7 @@ fn claimed_pickups_for_virtual_players(
                 integrity,
                 player_position,
                 &claimed_entities,
+                commitment,
             )?;
             claimed_entities.push(entity);
             Some((entity, price_pickup_for_team(pickup, integrity, team)))
@@ -333,6 +367,7 @@ fn claimed_pickups_for_virtual_players(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn closest_eligible_pickup_claimant(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     assigned_ctf_targets: &[(Entity, Option<DrivingTarget>)],
@@ -340,6 +375,7 @@ fn closest_eligible_pickup_claimant(
     integrity: Option<&VehicleIntegrity>,
     player_position: Option<Vec2>,
     claimed_entities: &[Entity],
+    commitment: ObjectiveCommitment,
 ) -> Option<(Entity, AiTeam)> {
     let (entity, team, _) = query
         .iter()
@@ -361,6 +397,7 @@ fn closest_eligible_pickup_claimant(
                     pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                     player_position: player_position_for_team(ai.team, player_position),
                     player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+                    commit_to_objective: commitment.for_team(ai.team),
                 },
             );
 
@@ -891,6 +928,25 @@ const fn nitro_multiplier_for_team(boosts: &NitroBoosts, team: AiTeam) -> f32 {
     }
 }
 
+/// Combined speed multiplier a team's cars carry from the live combat resources:
+/// the product of its nitro boost, integrity wear, wreck spin-out and wreck
+/// surge. Each absent resource (no combat loaded) contributes a neutral `1.0`,
+/// matching the per-team multiplier the human player movement applies. The
+/// flag-carry tax is applied separately, since it is per-car rather than per-team.
+fn team_movement_multiplier(
+    team: AiTeam,
+    nitro_boosts: Option<&NitroBoosts>,
+    integrity: Option<&VehicleIntegrity>,
+    wreck_stuns: Option<&WreckStuns>,
+    wreck_surges: Option<&WreckSurges>,
+) -> f32 {
+    let nitro = nitro_boosts.map_or(1.0, |boosts| nitro_multiplier_for_team(boosts, team));
+    let integrity = integrity.map_or(1.0, |integrity| integrity.multiplier_for_team(team));
+    let stun = wreck_stuns.map_or(1.0, |stuns| stuns.multiplier_for_team(team));
+    let surge = wreck_surges.map_or(1.0, |surges| surges.multiplier_for_team(team));
+    nitro * integrity * stun * surge
+}
+
 /// Arrive radius a car uses to reach `target`.
 ///
 /// Positional and patrol targets keep the wide [`WAYPOINT_ARRIVE_RADIUS`] so a
@@ -1013,6 +1069,150 @@ mod tests {
         app.update();
 
         app.world.get::<Transform>(ai).unwrap().translation.y
+    }
+
+    #[test]
+    fn no_team_commits_to_the_objective_outside_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES + 1,
+            phase: MatchPhase::Regulation,
+        };
+        assert_eq!(
+            objective_commitment(
+                Some(&clock),
+                CaptureScore {
+                    player: 0,
+                    opponents: 2,
+                },
+            ),
+            ObjectiveCommitment::default(),
+            "a round with time to spare must not force any team to commit"
+        );
+    }
+
+    #[test]
+    fn closing_time_commits_every_team_that_is_not_ahead() {
+        use crate::gameplay::ctf::{MatchPhase, CLOSING_TIME_FRAMES};
+
+        let clock = MatchClock {
+            frames_remaining: CLOSING_TIME_FRAMES,
+            phase: MatchPhase::Regulation,
+        };
+        // Blue (player) trails Red (opponents) on captures.
+        let commitment = objective_commitment(
+            Some(&clock),
+            CaptureScore {
+                player: 1,
+                opponents: 2,
+            },
+        );
+        assert!(
+            commitment.for_team(AiTeam::Blue),
+            "the trailing team drops its detours and races the flag"
+        );
+        assert!(
+            !commitment.for_team(AiTeam::Red),
+            "the closing-time leader keeps playing the field"
+        );
+    }
+
+    #[test]
+    fn a_level_sudden_death_commits_both_teams() {
+        use crate::gameplay::ctf::MatchPhase;
+
+        let clock = MatchClock {
+            frames_remaining: 1,
+            phase: MatchPhase::SuddenDeath,
+        };
+        let commitment = objective_commitment(
+            Some(&clock),
+            CaptureScore {
+                player: 2,
+                opponents: 2,
+            },
+        );
+        assert!(commitment.for_team(AiTeam::Blue));
+        assert!(
+            commitment.for_team(AiTeam::Red),
+            "golden goal: both level sides race for the decider"
+        );
+    }
+
+    #[test]
+    fn a_missing_clock_never_forces_commitment() {
+        assert_eq!(
+            objective_commitment(
+                None,
+                CaptureScore {
+                    player: 0,
+                    opponents: 3,
+                },
+            ),
+            ObjectiveCommitment::default(),
+            "an unstarted match (no clock) plays the field as normal"
+        );
+    }
+
+    #[test]
+    fn a_committing_team_skips_a_cash_detour_to_race_the_flag() {
+        use crate::gameplay::ctf::{MatchPhase, MATCH_TIME_LIMIT_FRAMES};
+
+        // A red attacker at the origin facing +Y, the blue (enemy) flag dead
+        // ahead and sitting at home so the car is assigned to go steal it. A cash
+        // bag sits just ahead and to the right, inside the flag lane: a free grab
+        // in normal play that a clock-racing team should leave on the track.
+        fn attacker_x_after_one_frame(closing: bool) -> f32 {
+            let mut app = app_with_system();
+            // Red (opponents) trails, so in closing time it commits to the push.
+            app.insert_resource(CaptureScore {
+                player: 1,
+                opponents: 0,
+            });
+            app.insert_resource(MatchClock {
+                frames_remaining: if closing { 10 } else { MATCH_TIME_LIMIT_FRAMES },
+                phase: MatchPhase::Regulation,
+            });
+
+            let attacker = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 2000.0)]);
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 800.0),
+                Vec3::new(0.0, 800.0, 0.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::new(0.0, -1000.0),
+                Vec3::new(0.0, -1000.0, 0.0),
+                None,
+            );
+            app.world.spawn((
+                Pickup {
+                    kind: PickupKind::Cash,
+                },
+                Transform::from_translation(Vec3::new(40.0, 80.0, 2.0)),
+            ));
+
+            app.update();
+
+            app.world.get::<Transform>(attacker).unwrap().translation.x
+        }
+
+        let detoured = attacker_x_after_one_frame(false);
+        let committed = attacker_x_after_one_frame(true);
+
+        assert!(
+            detoured > 0.1,
+            "normal play veers right toward the cash bag: {detoured}"
+        );
+        assert!(
+            committed.abs() < 1e-3,
+            "closing-time commitment drives straight at the flag, ignoring the cash: {committed}"
+        );
     }
 
     #[test]
