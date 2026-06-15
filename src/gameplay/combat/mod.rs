@@ -1,6 +1,6 @@
 use crate::gameplay::ctf::{
-    CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, CAPTURES_TO_WIN, CAPTURE_CASH_BOUNTY,
-    FLAG_RETURN_CASH_BOUNTY,
+    CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock, CAPTURES_TO_WIN,
+    CAPTURE_CASH_BOUNTY, FLAG_RETURN_CASH_BOUNTY,
 };
 use crate::gameplay::main::BOUNDS;
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
@@ -187,6 +187,27 @@ pub const PAYBACK_WINDOW_FRAMES: u32 = 300;
 /// A payback window must outlast the spin-out it answers, enforced at compile
 /// time, so a wrecked team can recover and still land its riposte in time.
 const _: () = assert!(PAYBACK_WINDOW_FRAMES > WRECK_STUN_FRAMES);
+/// Cash a team banks for a clutch wreck: grinding an enemy down in closing time.
+///
+/// The dying-seconds heroics reward, the combat companion to the CTF nail-biter
+/// purse. Where every other wreck bonus prices a *combat* situation, a rampage
+/// ([`WRECK_STREAK_BONUS`]), the capture leader ([`most_wanted_wreck_bonus`]), a
+/// flag carrier ([`carrier_takedown_wreck_bonus`]), a run being ended
+/// ([`shutdown_wreck_bonus`]), the opening kill ([`first_blood_wreck_bonus`]) or a
+/// riposte ([`payback_wreck_bonus`]), this keys on the *clock*: a wreck landed in
+/// the round's closing stretch ([`crate::gameplay::ctf::MatchClock::is_closing_time`])
+/// pays extra. It bankrolls precisely the moment the match hangs in the balance,
+/// where a wreck also breaks a level overtime in the wrecking team's favour
+/// (the same closing-time push the virtual players commit to), so the final
+/// seconds are a scramble for the kill rather than a tame run down the clock.
+/// Paid on top of the base [`WRECK_CASH_BOUNTY`] and any other bonus that frame.
+pub const CLUTCH_WRECK_CASH_BONUS: u32 = 100;
+/// A clutch wreck must be a real payday, not a token, enforced at compile time.
+const _: () = assert!(CLUTCH_WRECK_CASH_BONUS > 0);
+/// Landing a clutch wreck must never out-earn scoring a capture, enforced at
+/// compile time, so the dying-seconds reward never eclipses the objective,
+/// mirroring the ceiling every other wreck bonus respects.
+const _: () = assert!(CLUTCH_WRECK_CASH_BONUS < CAPTURE_CASH_BOUNTY);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -646,6 +667,20 @@ impl WreckEvents {
     }
 }
 
+/// Which teams had a car hauling the enemy flag the frame a wreck landed.
+///
+/// Read before a wreck knocks flags loose so the carrier-takedown bonus can tell
+/// which side's wreck cut down a flag runner and denied a capture in flight. The
+/// per-team companion to [`WreckEvents`], mirroring its `{ player, opponent }`
+/// shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WreckCarriers {
+    /// The player team had a car hauling the enemy flag this frame.
+    pub player: bool,
+    /// The opponent team had a car hauling the enemy flag this frame.
+    pub opponent: bool,
+}
+
 /// A flag currently being hauled by a car, tagged with the carrying team.
 ///
 /// Bridges the per-team [`WreckEvents`] to the per-flag CTF state so a wreck can
@@ -838,6 +873,22 @@ pub const fn payback_wreck_bonus(window_live: bool, dealt_wreck: bool) -> u32 {
     }
 }
 
+/// Cash bonus a team banks for a clutch wreck: a kill landed in closing time.
+///
+/// `closing_time` is whether the round is in its closing stretch (the final
+/// frames of regulation or any moment of sudden death), `dealt_wreck` whether this
+/// team ground an enemy car down to a full wreck this frame. The
+/// [`CLUTCH_WRECK_CASH_BONUS`] is paid only when a wreck lands while the clock is
+/// running down the match; a kill earlier in the round pays nothing extra here.
+#[must_use]
+pub const fn clutch_wreck_bonus(closing_time: bool, dealt_wreck: bool) -> u32 {
+    if closing_time && dealt_wreck {
+        CLUTCH_WRECK_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Every cash reward a frame's wrecks pay each team, with the bonus breakdown
 /// preserved for logging.
 ///
@@ -873,22 +924,29 @@ pub struct WreckBounties {
     pub player_payback: u32,
     /// Payback bonus (for a retaliation wreck) folded into `opponent`.
     pub opponent_payback: u32,
+    /// Clutch bonus (for a closing-time wreck) folded into `player`.
+    pub player_clutch: u32,
+    /// Clutch bonus (for a closing-time wreck) folded into `opponent`.
+    pub opponent_clutch: u32,
 }
 
 /// Resolves every cash reward a frame's wrecks pay: the rampage streak payout,
 /// the most-wanted leader bonus, the carrier-takedown bonus, the shutdown bonus
-/// for ending an enemy rampage, the first-blood bonus for the opening wreck, and
-/// the payback bonus for a retaliation wreck.
+/// for ending an enemy rampage, the first-blood bonus for the opening wreck, the
+/// payback bonus for a retaliation wreck, and the clutch bonus for a closing-time
+/// wreck.
 ///
 /// The player team deals a wreck when the opponents fall (and vice versa), so it
 /// collects on the opponents' capture lead, on a wrecked opponent carrier, and on
 /// ending the opponents' rampage.
-/// `player_was_carrying`/`opponent_was_carrying` say whether each team had a car
-/// hauling the enemy flag the frame it fell. `first_blood_available` is whether
-/// the round's opening wreck is still up for grabs; when it is, whichever side(s)
-/// deal a wreck this frame draw first blood.
+/// `carriers` says whether each team had a car hauling the enemy flag the frame
+/// it fell. `first_blood_available` is whether the round's opening wreck is still
+/// up for grabs; when it is, whichever side(s) deal a wreck this frame draw first
+/// blood.
 /// `payback` is each team's payback window as it stood entering the frame; a team
-/// that deals a wreck while its window is still live banks the payback. Bonuses
+/// that deals a wreck while its window is still live banks the payback.
+/// `closing_time` is whether the round is in its closing stretch; a wreck landed
+/// while it is banks the clutch bonus for whichever side(s) dealt it. Bonuses
 /// are folded into the per-team totals and also returned individually for the
 /// wreck log.
 #[must_use]
@@ -896,10 +954,10 @@ pub const fn resolve_wreck_bounties(
     before_streaks: WreckStreaks,
     wrecks: WreckEvents,
     captures: CaptureScore,
-    player_was_carrying: bool,
-    opponent_was_carrying: bool,
+    carriers: WreckCarriers,
     first_blood_available: bool,
     payback: PaybackWindows,
+    closing_time: bool,
 ) -> WreckBounties {
     let payout = resolve_wreck_streaks(before_streaks, wrecks);
 
@@ -915,12 +973,12 @@ pub const fn resolve_wreck_bounties(
     };
 
     let player_carrier_takedown = if wrecks.opponent {
-        carrier_takedown_wreck_bonus(opponent_was_carrying)
+        carrier_takedown_wreck_bonus(carriers.opponent)
     } else {
         0
     };
     let opponent_carrier_takedown = if wrecks.player {
-        carrier_takedown_wreck_bonus(player_was_carrying)
+        carrier_takedown_wreck_bonus(carriers.player)
     } else {
         0
     };
@@ -952,6 +1010,12 @@ pub const fn resolve_wreck_bounties(
     let player_payback = payback_wreck_bonus(payback.is_player_live(), wrecks.opponent);
     let opponent_payback = payback_wreck_bonus(payback.is_opponent_live(), wrecks.player);
 
+    // A clutch wreck is any kill landed while the clock is running the match down:
+    // a wrecked opponent means the player team landed it, and vice versa. The clock
+    // is shared, so a double wreck in closing time pays both, mirroring first blood.
+    let player_clutch = clutch_wreck_bonus(closing_time, wrecks.opponent);
+    let opponent_clutch = clutch_wreck_bonus(closing_time, wrecks.player);
+
     WreckBounties {
         streaks: payout.streaks,
         player: payout.player_bounty
@@ -959,13 +1023,15 @@ pub const fn resolve_wreck_bounties(
             + player_carrier_takedown
             + player_shutdown
             + player_first_blood
-            + player_payback,
+            + player_payback
+            + player_clutch,
         opponent: payout.opponent_bounty
             + opponent_most_wanted
             + opponent_carrier_takedown
             + opponent_shutdown
             + opponent_first_blood
-            + opponent_payback,
+            + opponent_payback
+            + opponent_clutch,
         player_most_wanted,
         opponent_most_wanted,
         player_carrier_takedown,
@@ -976,6 +1042,8 @@ pub const fn resolve_wreck_bounties(
         opponent_first_blood,
         player_payback,
         opponent_payback,
+        player_clutch,
+        opponent_clutch,
     }
 }
 
@@ -2047,8 +2115,9 @@ fn drop_wrecked_carriers_flags(
 /// Logs the full bounty breakdown for any frame that produced a wreck.
 ///
 /// A quiet frame logs nothing; otherwise it attributes every reward each team
-/// banked, including the first-blood opening-kill bonus and the payback riposte
-/// bonus, so the wreck economy is auditable from the logs alone.
+/// banked, including the first-blood opening-kill bonus, the payback riposte
+/// bonus and the clutch closing-time bonus, so the wreck economy is auditable
+/// from the logs alone.
 fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
     if !wrecks.any() {
         return;
@@ -2057,8 +2126,8 @@ fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
         "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
          most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
          opponent={}; shutdown bonus player={} opponent={}; first-blood bonus player={} \
-         opponent={}; payback bonus player={} opponent={}; banking player_bounty={} \
-         opponent_bounty={}",
+         opponent={}; payback bonus player={} opponent={}; clutch bonus player={} \
+         opponent={}; banking player_bounty={} opponent_bounty={}",
         wrecks.player,
         wrecks.opponent,
         bounties.streaks.player,
@@ -2073,6 +2142,8 @@ fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
         bounties.opponent_first_blood,
         bounties.player_payback,
         bounties.opponent_payback,
+        bounties.player_clutch,
+        bounties.opponent_clutch,
         bounties.player,
         bounties.opponent,
     );
@@ -2083,6 +2154,7 @@ fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
 #[allow(clippy::too_many_arguments)]
 pub fn ram_damage_system(
     match_result: Option<Res<CtfMatchResult>>,
+    match_clock: Option<Res<MatchClock>>,
     captures: Option<Res<CaptureScore>>,
     nitro_boosts: Option<Res<NitroBoosts>>,
     armour_boosts: Option<Res<ArmourBoosts>>,
@@ -2193,14 +2265,23 @@ pub fn ram_damage_system(
     // present and unclaimed. An absent latch leaves the bonus off, mirroring how
     // every other optional combat resource degrades when missing.
     let first_blood_available = first_blood.as_deref().is_some_and(|claimed| !claimed.0);
+    // A clutch wreck pays extra in the round's closing stretch. An absent clock
+    // leaves the bonus off, mirroring how every other optional CTF resource
+    // degrades when missing.
+    let closing_time = match_clock
+        .as_deref()
+        .is_some_and(|clock| clock.is_closing_time());
     let bounties = resolve_wreck_bounties(
         before_streaks,
         wrecks,
         captures,
-        team_was_carrying(&cars, AiTeam::Blue),
-        team_was_carrying(&cars, AiTeam::Red),
+        WreckCarriers {
+            player: team_was_carrying(&cars, AiTeam::Blue),
+            opponent: team_was_carrying(&cars, AiTeam::Red),
+        },
         first_blood_available,
         payback_before,
+        closing_time,
     );
     if let Some(streaks) = wreck_streaks.as_deref_mut() {
         *streaks = bounties.streaks;
@@ -4308,6 +4389,68 @@ mod tests {
     }
 
     #[test]
+    fn system_pays_a_clutch_bonus_for_a_closing_time_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        // Sudden death is always closing time, so the wreck lands a clutch bonus.
+        let mut clock = MatchClock::default();
+        clock.enter_sudden_death();
+        app.insert_resource(clock);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS,
+            "a wreck in closing time banks the clutch bonus on top of the base bounty"
+        );
+        assert_eq!(score.wrecks, 1, "the clutch bonus rides the same wreck");
+    }
+
+    #[test]
+    fn system_pays_no_clutch_bonus_outside_closing_time() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        // A fresh regulation clock is far from its closing stretch, so an early
+        // wreck pays only the base bounty.
+        app.insert_resource(MatchClock::default());
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            WRECK_CASH_BOUNTY,
+            "a wreck before closing time banks no clutch bonus"
+        );
+    }
+
+    #[test]
     fn system_draws_first_blood_for_the_opening_wreck() {
         let mut app = App::new();
         app.insert_resource(VehicleIntegrity {
@@ -5041,10 +5184,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_shutdown, shutdown_wreck_bonus(3));
@@ -5068,10 +5214,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_shutdown, 0);
@@ -5093,10 +5242,13 @@ mod tests {
                 player: 0,
                 opponents: 2,
             },
-            false,
-            true,
+            WreckCarriers {
+                player: false,
+                opponent: true,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_most_wanted, most_wanted_wreck_bonus(2, 0));
@@ -5125,10 +5277,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
@@ -5201,6 +5356,51 @@ mod tests {
     }
 
     #[test]
+    fn clutch_pays_a_closing_time_wreck() {
+        assert_eq!(
+            clutch_wreck_bonus(true, true),
+            CLUTCH_WRECK_CASH_BONUS,
+            "wrecking an enemy while the clock is closing out the round banks the clutch bonus"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_outside_closing_time() {
+        assert_eq!(
+            clutch_wreck_bonus(false, true),
+            0,
+            "a wreck landed before closing time pays nothing extra"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            clutch_wreck_bonus(true, false),
+            0,
+            "closing time pays nothing until an enemy is actually wrecked"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_when_calm_and_no_wreck() {
+        assert_eq!(clutch_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn landing_a_clutch_wreck_is_a_real_payday_below_a_capture() {
+        let bonus = clutch_wreck_bonus(true, true);
+        assert!(
+            bonus > 0,
+            "a clutch wreck must be a real dying-seconds payday"
+        );
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the closing-time reward must never eclipse scoring a capture"
+        );
+    }
+
+    #[test]
     fn paying_back_a_wreck_is_a_real_payday_below_a_capture() {
         let bonus = payback_wreck_bonus(true, true);
         assert!(bonus > 0, "a payback must be a real retaliation payday");
@@ -5234,10 +5434,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             true,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
@@ -5261,10 +5464,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_first_blood, 0);
@@ -5282,10 +5488,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             true,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
@@ -5309,13 +5518,16 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows {
                 player_frames: PAYBACK_WINDOW_FRAMES,
                 opponent_frames: 0,
             },
+            false,
         );
 
         assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
@@ -5339,10 +5551,13 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows::default(),
+            false,
         );
 
         assert_eq!(bounties.player_payback, 0);
@@ -5360,13 +5575,16 @@ mod tests {
                 opponent: true,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows {
                 player_frames: PAYBACK_WINDOW_FRAMES,
                 opponent_frames: PAYBACK_WINDOW_FRAMES,
             },
+            false,
         );
 
         assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
@@ -5386,13 +5604,16 @@ mod tests {
                 opponent: false,
             },
             CaptureScore::default(),
-            false,
-            false,
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
             false,
             PaybackWindows {
                 player_frames: PAYBACK_WINDOW_FRAMES,
                 opponent_frames: 0,
             },
+            false,
         );
 
         assert_eq!(
@@ -5400,6 +5621,89 @@ mod tests {
             "a payback rides the riposte, not being wrecked again"
         );
         assert_eq!(bounties.opponent_payback, 0);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_clutch_for_a_closing_time_wreck() {
+        // The player team grinds an opponent down while the clock is closing out
+        // the round: the kill banks the clutch bonus on top of the base bounty.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            true,
+        );
+
+        assert_eq!(bounties.player_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS,
+            "a closing-time wreck folds the clutch bonus into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_clutch, 0,
+            "the side that fell landed no clutch wreck"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_clutch_outside_closing_time() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_clutch, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_clutch_to_both_on_a_double_closing_time_wreck() {
+        // Both teams are ground out in closing time: the clock is shared, so each
+        // dealt wreck banks its clutch bonus, mirroring how first blood pays both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            true,
+        );
+
+        assert_eq!(bounties.player_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(bounties.opponent_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(
+            bounties.opponent,
+            WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS
+        );
     }
 
     #[test]
