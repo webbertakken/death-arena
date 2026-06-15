@@ -58,7 +58,10 @@ const _: () = assert!(DRAFT_LANE_HALF_WIDTH > 0.0 && DRAFT_LANE_HALF_WIDTH < DRA
 ///
 /// At `0.5` the two must be travelling within sixty degrees of the same direction,
 /// so a car only drafts a leader genuinely running its way: an oncoming or a
-/// crossing car punches no usable hole in the air and grants no tow.
+/// crossing car punches no usable hole in the air and grants no tow. The tow does
+/// not snap on at this gate but fades in from it: a leader yawed right at the gate
+/// lends nothing and the wake builds to full only as the two line up squarely (see
+/// the alignment falloff in [`slipstream_speed_multiplier`]).
 pub const DRAFT_MIN_ALIGNMENT: f32 = 0.5;
 
 /// The alignment gate must be a real heading test, never trivially open or shut,
@@ -79,11 +82,13 @@ pub struct LeadingCar {
 /// Returns `1.0` (no tow) unless a `leader` is genuinely in the follower's wake
 /// corridor: ahead of it, within [`DRAFT_LANE_HALF_WIDTH`] of its tail line, no
 /// further than [`DRAFT_RADIUS`], and travelling within [`DRAFT_MIN_ALIGNMENT`] of
-/// the same direction. The tow scales with both how close the gap is (full
-/// nose-to-tail, fading to nothing at [`DRAFT_RADIUS`]) and how centred the
+/// the same direction. The tow scales with three things: how close the gap is
+/// (full nose-to-tail, fading to nothing at [`DRAFT_RADIUS`]), how centred the
 /// follower sits in the lane (full dead on the tail line, fading to nothing at the
-/// lane edge), so the full [`DRAFT_MAX_SPEED_BONUS`] is earned only by tucking in
-/// close on a tidy line; when several cars qualify, the strongest wake wins.
+/// lane edge), and how squarely the two run the same way (full heading-aligned,
+/// fading to nothing as the leader yaws out to [`DRAFT_MIN_ALIGNMENT`]), so the
+/// full [`DRAFT_MAX_SPEED_BONUS`] is earned only by tucking in close, on a tidy
+/// line, squarely behind; when several cars qualify, the strongest wake wins.
 ///
 /// The caller passes only *other* cars (it excludes the follower itself) and omits
 /// any car that should not receive a tow (a flag carrier). A degenerate heading
@@ -107,11 +112,13 @@ pub fn slipstream_speed_multiplier(position: Vec2, heading: Vec2, leaders: &[Lea
 /// The corridor is a narrow forward channel: the leader must sit ahead of the
 /// follower, no more than [`DRAFT_LANE_HALF_WIDTH`] off its tail line, within
 /// [`DRAFT_RADIUS`], and travelling within [`DRAFT_MIN_ALIGNMENT`] of the same
-/// heading. Strength is the product of two linear falloffs: how close the gap is
-/// (full nose-to-tail, nothing at [`DRAFT_RADIUS`]) and how centred the follower
-/// sits in the lane (full dead on the tail line, nothing at the lane edge). A car
-/// must therefore both tuck in close *and* hold a tidy line to win the strongest
-/// tow, and the wake fades smoothly to nothing at the lane edge rather than
+/// heading. Strength is the product of three linear falloffs: how close the gap is
+/// (full nose-to-tail, nothing at [`DRAFT_RADIUS`]), how centred the follower sits
+/// in the lane (full dead on the tail line, nothing at the lane edge), and how
+/// squarely the two run the same way (full heading-aligned, nothing as the leader
+/// yaws out to the [`DRAFT_MIN_ALIGNMENT`] gate). A car must therefore tuck in
+/// close, hold a tidy line *and* sit squarely behind to win the strongest tow, and
+/// the wake fades smoothly to nothing at each edge of the corridor rather than
 /// cutting off at a cliff.
 fn draft_strength(position: Vec2, heading: Vec2, leader: LeadingCar) -> Option<f32> {
     let to_leader = leader.position - position;
@@ -128,12 +135,15 @@ fn draft_strength(position: Vec2, heading: Vec2, leader: LeadingCar) -> Option<f
         return None;
     }
     let leader_heading = leader.heading.try_normalize()?;
-    if leader_heading.dot(heading) < DRAFT_MIN_ALIGNMENT {
+    let alignment = leader_heading.dot(heading);
+    if alignment < DRAFT_MIN_ALIGNMENT {
         return None;
     }
     let gap_falloff = (1.0 - distance / DRAFT_RADIUS).clamp(0.0, 1.0);
     let lane_centring = (1.0 - lateral / DRAFT_LANE_HALF_WIDTH).clamp(0.0, 1.0);
-    Some(gap_falloff * lane_centring)
+    let alignment_centring =
+        ((alignment - DRAFT_MIN_ALIGNMENT) / (1.0 - DRAFT_MIN_ALIGNMENT)).clamp(0.0, 1.0);
+    Some(gap_falloff * lane_centring * alignment_centring)
 }
 
 #[cfg(test)]
@@ -333,6 +343,65 @@ mod tests {
         assert!(
             (full - (1.0 + DRAFT_MAX_SPEED_BONUS)).abs() < 0.01,
             "a dead-centre nose-to-tail follower should still earn the full cap: {full}"
+        );
+    }
+
+    /// A leader directly ahead at straight-line `gap`, but travelling at `degrees`
+    /// away from the follower's heading (yawed toward +X), so only the heading
+    /// agreement differs from a square nose-to-tail tow.
+    fn leader_ahead_yawed(gap: f32, degrees: f32) -> LeadingCar {
+        let theta = degrees.to_radians();
+        LeadingCar {
+            position: Vec2::new(0.0, gap),
+            heading: Vec2::new(theta.sin(), theta.cos()),
+        }
+    }
+
+    #[test]
+    fn a_squarely_aligned_follower_out_tows_a_yawed_one_at_the_same_gap() {
+        // Both leaders sit dead-centre at the identical gap, so the gap and lane
+        // falloffs match; only their heading agreement differs. A leader running
+        // squarely the follower's way punches a cleaner hole in the air than one
+        // peeling off at an angle, so the square tow must be the stronger.
+        let gap = 120.0;
+        let square =
+            slipstream_speed_multiplier(Vec2::ZERO, Vec2::Y, &[leader_ahead_yawed(gap, 0.0)]);
+        let yawed =
+            slipstream_speed_multiplier(Vec2::ZERO, Vec2::Y, &[leader_ahead_yawed(gap, 45.0)]);
+        assert!(
+            square > yawed,
+            "a squarely aligned tow should beat a yawed one at the same gap: \
+             square={square}, yawed={yawed}"
+        );
+        assert!(
+            yawed > 1.0,
+            "a leader still inside the alignment gate should keep some tow: {yawed}"
+        );
+    }
+
+    #[test]
+    fn the_tow_fades_smoothly_to_nothing_at_the_alignment_gate() {
+        // The wake must fade to nothing as a leader's heading swings out to the
+        // alignment gate, so crossing the boundary is continuous rather than a
+        // cliff where a degree of yaw kills a near-full tow outright, mirroring how
+        // the lane-centring falloff fades to nothing at the lane edge.
+        let gap = 100.0;
+        let gate_degrees = DRAFT_MIN_ALIGNMENT.acos().to_degrees();
+        let just_inside = slipstream_speed_multiplier(
+            Vec2::ZERO,
+            Vec2::Y,
+            &[leader_ahead_yawed(gap, gate_degrees - 1.0)],
+        );
+        let just_outside = slipstream_speed_multiplier(
+            Vec2::ZERO,
+            Vec2::Y,
+            &[leader_ahead_yawed(gap, gate_degrees + 1.0)],
+        );
+        assert_near(just_outside, 1.0);
+        assert!(
+            just_inside >= just_outside && just_inside - just_outside < 0.01,
+            "the tow must fade to nothing at the alignment gate, no cliff: \
+             inside={just_inside}, outside={just_outside}"
         );
     }
 }
