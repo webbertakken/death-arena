@@ -79,9 +79,11 @@ pub struct LeadingCar {
 /// Returns `1.0` (no tow) unless a `leader` is genuinely in the follower's wake
 /// corridor: ahead of it, within [`DRAFT_LANE_HALF_WIDTH`] of its tail line, no
 /// further than [`DRAFT_RADIUS`], and travelling within [`DRAFT_MIN_ALIGNMENT`] of
-/// the same direction. The tow scales linearly with how close the gap is, reaching
-/// [`DRAFT_MAX_SPEED_BONUS`] nose-to-tail and fading to nothing at the edge of
-/// [`DRAFT_RADIUS`]; when several cars qualify, the strongest wake wins.
+/// the same direction. The tow scales with both how close the gap is (full
+/// nose-to-tail, fading to nothing at [`DRAFT_RADIUS`]) and how centred the
+/// follower sits in the lane (full dead on the tail line, fading to nothing at the
+/// lane edge), so the full [`DRAFT_MAX_SPEED_BONUS`] is earned only by tucking in
+/// close on a tidy line; when several cars qualify, the strongest wake wins.
 ///
 /// The caller passes only *other* cars (it excludes the follower itself) and omits
 /// any car that should not receive a tow (a flag carrier). A degenerate heading
@@ -105,15 +107,20 @@ pub fn slipstream_speed_multiplier(position: Vec2, heading: Vec2, leaders: &[Lea
 /// The corridor is a narrow forward channel: the leader must sit ahead of the
 /// follower, no more than [`DRAFT_LANE_HALF_WIDTH`] off its tail line, within
 /// [`DRAFT_RADIUS`], and travelling within [`DRAFT_MIN_ALIGNMENT`] of the same
-/// heading. Strength scales linearly with how close the gap is, so a nose-to-tail
-/// leader lends a full `1.0` and one at the very edge of the reach lends nothing.
+/// heading. Strength is the product of two linear falloffs: how close the gap is
+/// (full nose-to-tail, nothing at [`DRAFT_RADIUS`]) and how centred the follower
+/// sits in the lane (full dead on the tail line, nothing at the lane edge). A car
+/// must therefore both tuck in close *and* hold a tidy line to win the strongest
+/// tow, and the wake fades smoothly to nothing at the lane edge rather than
+/// cutting off at a cliff.
 fn draft_strength(position: Vec2, heading: Vec2, leader: LeadingCar) -> Option<f32> {
     let to_leader = leader.position - position;
     let ahead = to_leader.dot(heading);
     if ahead <= 0.0 {
         return None;
     }
-    if heading.perp_dot(to_leader).abs() > DRAFT_LANE_HALF_WIDTH {
+    let lateral = heading.perp_dot(to_leader).abs();
+    if lateral > DRAFT_LANE_HALF_WIDTH {
         return None;
     }
     let distance = to_leader.length();
@@ -124,7 +131,9 @@ fn draft_strength(position: Vec2, heading: Vec2, leader: LeadingCar) -> Option<f
     if leader_heading.dot(heading) < DRAFT_MIN_ALIGNMENT {
         return None;
     }
-    Some((1.0 - distance / DRAFT_RADIUS).clamp(0.0, 1.0))
+    let gap_falloff = (1.0 - distance / DRAFT_RADIUS).clamp(0.0, 1.0);
+    let lane_centring = (1.0 - lateral / DRAFT_LANE_HALF_WIDTH).clamp(0.0, 1.0);
+    Some(gap_falloff * lane_centring)
 }
 
 #[cfg(test)]
@@ -252,6 +261,78 @@ mod tests {
         assert_near(
             slipstream_speed_multiplier(Vec2::ZERO, Vec2::ZERO, &[leader_ahead(100.0)]),
             1.0,
+        );
+    }
+
+    /// A leader sitting at straight-line distance `distance`, offset `lateral`
+    /// units off the follower's tail line, travelling the same way. Solving for the
+    /// forward component keeps the straight-line gap fixed, so only the lane offset
+    /// changes between fixtures.
+    fn leader_off_centre(lateral: f32, distance: f32) -> LeadingCar {
+        let forward = distance.mul_add(distance, -(lateral * lateral)).sqrt();
+        LeadingCar {
+            position: Vec2::new(lateral, forward),
+            heading: Vec2::Y,
+        }
+    }
+
+    #[test]
+    fn a_centred_follower_out_tows_an_off_centre_one_at_the_same_gap() {
+        // Both leaders sit at the identical straight-line gap, so the distance
+        // falloff is the same for each; only the lane offset differs. A tidy,
+        // dead-centre tow line must earn a stronger wake than one drifting toward
+        // the edge of the lane.
+        let distance = 120.0;
+        let centred =
+            slipstream_speed_multiplier(Vec2::ZERO, Vec2::Y, &[leader_off_centre(0.0, distance)]);
+        let off_centre = slipstream_speed_multiplier(
+            Vec2::ZERO,
+            Vec2::Y,
+            &[leader_off_centre(DRAFT_LANE_HALF_WIDTH * 0.6, distance)],
+        );
+        assert!(
+            centred > off_centre,
+            "a centred tow line should out-tow an off-centre one at the same gap: \
+             centred={centred}, off_centre={off_centre}"
+        );
+        assert!(
+            off_centre > 1.0,
+            "a follower still inside the lane should keep some tow: {off_centre}"
+        );
+    }
+
+    #[test]
+    fn the_tow_fades_smoothly_to_nothing_at_the_lane_edge() {
+        // The wake must fade to nothing as a follower drifts to the edge of the
+        // lane, so crossing the boundary is continuous rather than a cliff where a
+        // unit of drift kills a near-full tow outright.
+        let distance = 100.0;
+        let just_inside = slipstream_speed_multiplier(
+            Vec2::ZERO,
+            Vec2::Y,
+            &[leader_off_centre(DRAFT_LANE_HALF_WIDTH - 1.0, distance)],
+        );
+        let just_outside = slipstream_speed_multiplier(
+            Vec2::ZERO,
+            Vec2::Y,
+            &[leader_off_centre(DRAFT_LANE_HALF_WIDTH + 1.0, distance)],
+        );
+        assert_near(just_outside, 1.0);
+        assert!(
+            just_inside >= just_outside && just_inside - just_outside < 0.01,
+            "the tow must fade to nothing at the lane edge, no cliff: \
+             inside={just_inside}, outside={just_outside}"
+        );
+    }
+
+    #[test]
+    fn dead_centre_nose_to_tail_still_earns_the_full_cap() {
+        // The lane-centring scaling must leave the common case untouched: a
+        // follower tucked dead-centre on a leader's tail still earns the full tow.
+        let full = slipstream_speed_multiplier(Vec2::ZERO, Vec2::Y, &[leader_ahead(0.5)]);
+        assert!(
+            (full - (1.0 + DRAFT_MAX_SPEED_BONUS)).abs() < 0.01,
+            "a dead-centre nose-to-tail follower should still earn the full cap: {full}"
         );
     }
 }
