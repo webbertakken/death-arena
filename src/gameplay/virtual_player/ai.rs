@@ -90,14 +90,20 @@ pub const CARRIER_JUKE_OFFSET: f32 = 160.0;
 /// everywhere: into a bend, onto a kill, and past a blocker on the scoring run.
 const CARRIER_JUKE_COMMITMENT_GAIN: f32 = 100.0;
 
-/// Tightest run-home line the keenest driver ever squeezes: a safety net so a
-/// degenerate `corner_throttle` can never collapse the juke into aiming straight
-/// through the blocker. The asserted roster commitment band (`0.15..=0.5`, see
-/// [`crate::gameplay::virtual_player::spawn`]) maps strictly inside this offset band,
-/// so the clamp only ever guards a garbage throttle, never a legal driver.
+/// Tightest run-home line the clamp will allow: a safety net so a degenerate or
+/// extreme-reckless `corner_throttle` can never collapse the juke into aiming
+/// straight through the blocker. It sits at or outside true ram range (asserted
+/// below), so even a fully-clamped squeeze still arcs around the blocker. The
+/// keenest line the roster actually fields, the sprinter's reckless `0.42`, still
+/// maps inside this floor (see [`carrier_juke_offset`]), so the clamp only ever
+/// guards a throttle past the whole roster, never a real driver's line.
 const CARRIER_JUKE_OFFSET_MIN: f32 = 145.0;
 
-/// Widest run-home berth the most disciplined driver ever swings.
+/// Widest run-home berth the clamp will allow: the disciplined counterpart to the
+/// floor, so a degenerate or extreme-timid `corner_throttle` tops out here instead
+/// of swinging an absurdly wide arc. The safest line the roster actually fields, the
+/// technician's careful `0.20`, still maps inside this ceiling, so it too only ever
+/// guards a throttle past the whole roster, never a real driver's line.
 const CARRIER_JUKE_OFFSET_MAX: f32 = 180.0;
 
 /// The keenest juke must still aim at or outside true ram range, enforced at compile
@@ -2935,6 +2941,22 @@ mod tests {
         // tightest berth, an absurdly timid one tops out at the widest.
         assert!((carrier_juke_offset(99.0) - CARRIER_JUKE_OFFSET_MIN).abs() <= f32::EPSILON);
         assert!((carrier_juke_offset(-99.0) - CARRIER_JUKE_OFFSET_MAX).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn carrier_juke_offset_never_clamps_a_real_drivers_line() {
+        // Every driver the roster actually fields, from the technician's careful 0.20
+        // through the ambusher's 0.38 to the sprinter's reckless 0.42, flexes its line
+        // by the raw affine map, landing strictly inside the clamp band and so left
+        // untouched by it. The clamp is a pure safety net for a throttle past the
+        // whole roster, never a real driver's line, so the floor and ceiling docs hold.
+        for corner_throttle in [0.20_f32, MIN_THROTTLE, 0.38, 0.42] {
+            let offset = carrier_juke_offset(corner_throttle);
+            assert!(
+                offset > CARRIER_JUKE_OFFSET_MIN && offset < CARRIER_JUKE_OFFSET_MAX,
+                "throttle={corner_throttle} gave {offset}, which the clamp touched"
+            );
+        }
     }
 
     #[test]
