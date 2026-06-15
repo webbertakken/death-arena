@@ -35,6 +35,22 @@ pub const CTF_HIGH_VALUE_PICKUP_LANE_WIDTH: f32 = 100.0;
 /// and commits to finishing the capture.
 pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
 
+/// Half-width of the lane, measured from a flag carrier's straight line home,
+/// within which an enemy counts as planted on the racing line and worth juking
+/// around. Sits just inside the `CTF_HIGH_VALUE_PICKUP_LANE_WIDTH` detour lane so
+/// the carrier only swerves for a foe genuinely in the way, not one merely off to
+/// the shoulder.
+pub const CARRIER_JUKE_LANE_WIDTH: f32 = 90.0;
+
+/// Sideways distance a flag carrier swings its aim away from a lane blocker, so
+/// it arcs around the roadblock on its run home rather than ramming straight into
+/// it and eating the doubled [`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]
+/// a carrier takes. The aim snaps back to the base the moment the blocker clears
+/// the lane (it is recomputed every frame) and is dropped entirely inside
+/// [`FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE`], so the final approach is always a
+/// straight commit to the capture.
+pub const CARRIER_JUKE_OFFSET: f32 = 160.0;
+
 /// Distance around home base where an enemy blocks a carried-flag capture.
 pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
 
@@ -217,7 +233,15 @@ pub fn choose_capture_the_flag_target(
                 contested_home_base_staging_point(own_flag.home, threat.position),
             ));
         }
-        return Some(DrivingTarget::HomeBase(own_flag.home));
+        // The base is clear of contesters, so commit homeward, juking around any
+        // enemy planted on the run home rather than ramming it for doubled damage.
+        // A held flag sits at its carrier, so the enemy flag's position is ours.
+        return Some(DrivingTarget::HomeBase(carrier_home_run_aim(
+            enemy_flag.position,
+            own_flag.home,
+            team,
+            threats,
+        )));
     }
 
     if own_flag.holder.is_some() && own_flag.holder != Some(ai_entity) {
@@ -709,6 +733,90 @@ fn escort_lead_point(carrier_position: Vec2, home: Vec2) -> Vec2 {
         return carrier_position;
     };
     carrier_position + direction * ESCORT_LEAD_DISTANCE
+}
+
+/// The aim a flag carrier drives at on its run home.
+///
+/// Usually the base itself, but when an enemy is planted on the carrier's
+/// straight line home the aim swings out to one side by [`CARRIER_JUKE_OFFSET`],
+/// so the carrier arcs around the roadblock instead of ramming straight into it
+/// and eating the doubled [`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]
+/// a carrier takes. The classic Death Rally "shake the roadblock on the way to
+/// score".
+///
+/// The swerve is deliberately minimal so it never fights the rest of the brain:
+/// - inside [`FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE`] it commits straight to the
+///   capture, so the final approach is always a clean run at the base;
+/// - it only reacts to an *enemy* (a teammate on the line is no threat) that is
+///   genuinely in the way (ahead, nearer than the base, and within
+///   [`CARRIER_JUKE_LANE_WIDTH`] of the line), so it stays straight whenever the
+///   lane is clear;
+/// - it swerves away from the *nearest* such blocker, and a blocker sitting dead
+///   on the line picks a deterministic side so the carrier never stalls head-on.
+///
+/// Recomputed every frame, so the moment the blocker clears the lane the aim
+/// snaps back to the base and the carrier straightens up. Near-base contesters are
+/// already handled upstream (the carrier stages outside a contested base), so this
+/// only ever jukes a midfield roadblock.
+#[must_use]
+pub fn carrier_home_run_aim(
+    carrier: Vec2,
+    home: Vec2,
+    team: AiTeam,
+    threats: &[ThreatTarget],
+) -> Vec2 {
+    let to_home = home - carrier;
+    if to_home.length_squared()
+        <= FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE * FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE
+    {
+        return home;
+    }
+
+    let Some(direction) = to_home.try_normalize() else {
+        return home;
+    };
+
+    let Some(blocker) = nearest_lane_blocker(carrier, home, team, threats) else {
+        return home;
+    };
+
+    // Swing the aim to the side opposite the blocker. `perp` is `direction`
+    // rotated a quarter turn left, so a blocker on the left (positive side) sends
+    // the aim right and vice versa; one dead on the line (side `0.0`) swings left.
+    let perp = Vec2::new(-direction.y, direction.x);
+    let blocker_side = (blocker - carrier).dot(perp);
+    let juke = if blocker_side > 0.0 { -1.0 } else { 1.0 };
+    home + perp * juke * CARRIER_JUKE_OFFSET
+}
+
+/// Nearest enemy planted on a flag carrier's straight line home, between it and
+/// the base, or `None` when the run home is clear.
+///
+/// Reuses the same forward-of and on-lane tests the CTF pickup detour uses, so a
+/// carrier judges "in my way home" exactly as it judges "on my flag lane".
+fn nearest_lane_blocker(
+    carrier: Vec2,
+    home: Vec2,
+    team: AiTeam,
+    threats: &[ThreatTarget],
+) -> Option<Vec2> {
+    let home_distance_sq = carrier.distance_squared(home);
+    threats
+        .iter()
+        .filter(|threat| threat.team == team.enemy())
+        .map(|threat| threat.position)
+        .filter(|&position| {
+            is_ahead_of_target_push(carrier, position, home)
+                && carrier.distance_squared(position) < home_distance_sq
+                && is_on_target_lane(carrier, position, home, CARRIER_JUKE_LANE_WIDTH)
+        })
+        .min_by(|a, b| {
+            carrier
+                .distance_squared(*a)
+                .partial_cmp(&carrier.distance_squared(*b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare_positions(*a, *b))
+        })
 }
 
 /// Pick the next driving target for a virtual player.
@@ -1915,6 +2023,152 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_targets_base_when_the_lane_is_clear() {
+        let aim =
+            carrier_home_run_aim(Vec2::new(0.0, 0.0), Vec2::new(400.0, 0.0), AiTeam::Red, &[]);
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_jukes_around_an_enemy_dead_on_the_line() {
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 0.0),
+            }],
+        );
+
+        // A blocker dead on the line picks a deterministic side so the carrier
+        // still commits to a dodge rather than stalling head-on into it.
+        assert_vec2_near(aim, Vec2::new(400.0, CARRIER_JUKE_OFFSET));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_swings_away_from_an_enemy_off_to_one_side() {
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 40.0),
+            }],
+        );
+
+        // Blocker is to the left of the run home, so the carrier swings right.
+        assert_vec2_near(aim, Vec2::new(400.0, -CARRIER_JUKE_OFFSET));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_commits_straight_when_close_to_base() {
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(150.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(75.0, 0.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(150.0, 0.0));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_ignores_friendly_cars_on_the_line() {
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Red,
+                position: Vec2::new(200.0, 0.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_ignores_enemies_behind_or_beyond_the_base() {
+        let behind = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(-100.0, 0.0),
+            }],
+        );
+        assert_vec2_near(behind, Vec2::new(400.0, 0.0));
+
+        let beyond = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(500.0, 0.0),
+            }],
+        );
+        assert_vec2_near(beyond, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn carrier_home_run_aim_ignores_enemies_outside_the_lane() {
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn carrier_jukes_around_an_enemy_planted_on_the_run_home() {
+        let ai = Entity::from_raw(7);
+        let target = choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::new(0.0, 0.0),
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(250.0, 0.0),
+            }],
+        );
+
+        assert_eq!(
+            target,
+            Some(DrivingTarget::HomeBase(Vec2::new(
+                500.0,
+                CARRIER_JUKE_OFFSET
+            )))
+        );
     }
 
     #[test]
