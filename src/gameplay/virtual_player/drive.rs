@@ -328,13 +328,20 @@ fn threat_targets(
         .map(|(_, virtual_player, transform)| ThreatTarget {
             team: virtual_player.team,
             position: transform.translation.xy(),
+            // Heading times top speed: the same instantaneous velocity estimate the
+            // kill press uses, so a home-flag defender can lead an approaching thief
+            // to where it will breach the defensive ring.
+            velocity: (transform.rotation * Vec3::Y).xy() * virtual_player.movement_speed,
         })
         .collect();
 
     if let Some(position) = player_position {
+        // The human player has no velocity entry here, so a defence against a human
+        // thief falls back to a plain body-block, mirroring the kill press.
         threats.push(ThreatTarget {
             team: AiTeam::Blue,
             position,
+            velocity: Vec2::ZERO,
         });
     }
 

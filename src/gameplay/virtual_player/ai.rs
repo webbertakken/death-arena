@@ -193,6 +193,12 @@ pub struct FlagTarget {
 pub struct ThreatTarget {
     pub team: AiTeam,
     pub position: Vec2,
+    /// Instantaneous velocity (heading times top speed), so a defender can lead a
+    /// moving thief to where it will breach the defensive ring rather than
+    /// body-block the spot it has already left. A stationary or unknown threat
+    /// (e.g. the human player, who has no entry here) carries a zero velocity, for
+    /// which the lead falls back to a plain body-block.
+    pub velocity: Vec2,
 }
 
 /// A collectible target visible to virtual players.
@@ -282,7 +288,7 @@ pub fn choose_capture_the_flag_target(
     }
 
     if let Some(threat) = closest_home_flag_threat(team, own_flag, threats) {
-        let target = defensive_intercept_point(own_flag.position, threat.position);
+        let target = defensive_intercept_point(own_flag.position, threat);
         if threat.position.distance_squared(own_flag.position)
             <= URGENT_HOME_FLAG_THREAT_RADIUS * URGENT_HOME_FLAG_THREAT_RADIUS
         {
@@ -842,17 +848,82 @@ fn contested_home_base_staging_point(home_base: Vec2, threat_position: Vec2) -> 
     home_base + direction * CONTESTED_HOME_BASE_STAGING_DISTANCE
 }
 
-fn defensive_intercept_point(flag_position: Vec2, threat_position: Vec2) -> Vec2 {
-    let to_threat = threat_position - flag_position;
+/// Where a home-flag defender meets an incoming thief.
+///
+/// The defensive mirror of [`finish_off_lead_aim`]: where the offensive finisher
+/// leads a fleeing prey to where it is heading, this leads an approaching thief to
+/// where it will *breach the defensive ring* around the flag, so the defender
+/// body-blocks the crossing instead of the spot the thief has already left. The
+/// classic Death Rally "cut them off before they reach the flag".
+///
+/// - A thief already inside the ring ([`HOME_FLAG_DEFENSE_DISTANCE`]) is met
+///   head-on at its current spot, exactly as before.
+/// - A thief outside the ring is led to the point on the ring it will cross first
+///   (see [`ring_breach_time`]), which sits at the same [`HOME_FLAG_DEFENSE_DISTANCE`]
+///   from the flag as the plain body-block but out on the thief's true line of
+///   approach. A thief driving straight at the flag crosses the ring on its current
+///   bearing, so the lead coincides with the plain body-block and nothing changes;
+///   only an angled or sweeping approach shifts the meet-point onto the side the
+///   thief is actually heading for.
+/// - A stationary thief, or one veering away so it never breaches the ring, falls
+///   back to the plain body-block on its current bearing, so the lead is never
+///   worse than the static block it replaces.
+///
+/// Recomputed every frame, so the meet-point tracks the thief as it manoeuvres.
+fn defensive_intercept_point(flag_position: Vec2, threat: ThreatTarget) -> Vec2 {
+    let to_threat = threat.position - flag_position;
     let distance = to_threat.length();
     if distance <= HOME_FLAG_DEFENSE_DISTANCE {
-        return threat_position;
+        return threat.position;
     }
 
     let Some(direction) = to_threat.try_normalize() else {
         return flag_position;
     };
-    flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE
+    let static_block = flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE;
+
+    // Lead the thief to where it will first breach the defensive ring; fall back to
+    // the static body-block when it is stationary or never breaches. The breach
+    // point depends only on the thief's heading, not its speed (scaling the
+    // velocity scales the solved time inversely and cancels), so the rough
+    // `heading * top speed` estimate the threat carries pins the meet-point exactly.
+    let Some(time) = ring_breach_time(to_threat, threat.velocity, HOME_FLAG_DEFENSE_DISTANCE)
+    else {
+        return static_block;
+    };
+    threat.position + threat.velocity * time
+}
+
+/// Earliest time `t >= 0` at which a thief starting at `offset` from a ring's
+/// centre and travelling at constant `velocity` first reaches distance `radius`
+/// from that centre.
+///
+/// Solves `|offset + velocity * t| = radius` for the smallest non-negative root,
+/// the body-block counterpart to [`interception_time`]'s pursuit solve. The caller
+/// only invokes it for a thief already outside the ring (`|offset| > radius`), so a
+/// real breach is the nearer of the two roots; it returns `None` when the thief is
+/// stationary or veers away so it never breaches, letting the caller hold a plain
+/// body-block.
+fn ring_breach_time(offset: Vec2, velocity: Vec2, radius: f32) -> Option<f32> {
+    let quadratic = velocity.length_squared();
+    // A stationary thief never breaches the ring; hold the static body-block.
+    if quadratic <= f32::EPSILON {
+        return None;
+    }
+
+    let linear = 2.0 * offset.dot(velocity);
+    let constant = radius.mul_add(-radius, offset.length_squared());
+    let discriminant = linear.mul_add(linear, -4.0 * quadratic * constant);
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let root = discriminant.sqrt();
+    let denominator = 2.0 * quadratic;
+    earliest_non_negative(
+        (-linear - root) / denominator,
+        (-linear + root) / denominator,
+    )
 }
 
 fn stolen_flag_intercept_point(flag_position: Vec2, enemy_home: Vec2) -> Vec2 {
@@ -2239,6 +2310,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2256,6 +2328,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, 40.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2272,6 +2345,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(75.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2287,6 +2361,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Red,
                 position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2302,6 +2377,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-100.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
         assert_vec2_near(behind, Vec2::new(400.0, 0.0));
@@ -2313,6 +2389,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(500.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
         assert_vec2_near(beyond, Vec2::new(400.0, 0.0));
@@ -2327,6 +2404,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2350,6 +2428,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2368,6 +2447,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, 40.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2388,6 +2468,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(close / 2.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2403,6 +2484,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Red,
                 position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2418,6 +2500,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2447,6 +2530,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(250.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2482,6 +2566,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(430.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2687,6 +2772,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(430.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2719,6 +2805,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-40.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2753,6 +2840,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-200.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2812,6 +2900,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(300.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2843,6 +2932,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(360.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
@@ -2875,10 +2965,12 @@ mod tests {
                 ThreatTarget {
                     team: AiTeam::Blue,
                     position: Vec2::new(260.0, 0.0),
+                    velocity: Vec2::ZERO,
                 },
                 ThreatTarget {
                     team: AiTeam::Blue,
                     position: Vec2::new(500.0, 90.0),
+                    velocity: Vec2::ZERO,
                 },
             ],
         );
@@ -2890,23 +2982,193 @@ mod tests {
     }
 
     #[test]
+    fn ring_breach_time_solves_a_head_on_approach() {
+        // A thief 300 out, driving straight at the flag at 200 u/s, breaches the
+        // 140 ring after travelling 160 units: t = 160 / 200 = 0.8.
+        let time = ring_breach_time(Vec2::new(300.0, 0.0), Vec2::new(-200.0, 0.0), 140.0);
+        let time = time.expect("a head-on thief must breach the ring");
+        assert!((time - 0.8).abs() <= EPSILON, "expected t=0.8, got {time}");
+    }
+
+    #[test]
+    fn ring_breach_time_ignores_a_stationary_thief() {
+        assert_eq!(
+            ring_breach_time(Vec2::new(300.0, 0.0), Vec2::ZERO, 140.0),
+            None,
+            "a parked thief never breaches the ring"
+        );
+    }
+
+    #[test]
+    fn ring_breach_time_ignores_a_thief_veering_away() {
+        assert_eq!(
+            ring_breach_time(Vec2::new(300.0, 0.0), Vec2::new(200.0, 0.0), 140.0),
+            None,
+            "a thief driving away from the flag never breaches the ring"
+        );
+    }
+
+    #[test]
+    fn ring_breach_time_ignores_a_thief_that_misses_the_ring() {
+        // Sweeping sideways 300 units above the flag, the thief's path never comes
+        // within the 140 ring, so there is no breach to lead.
+        assert_eq!(
+            ring_breach_time(Vec2::new(0.0, 300.0), Vec2::new(-200.0, 0.0), 140.0),
+            None,
+            "a thief whose line never reaches the ring is no breach"
+        );
+    }
+
+    #[test]
+    fn defensive_intercept_meets_a_head_on_thief_at_the_plain_body_block() {
+        // A thief running straight at the flag crosses the ring on its current
+        // bearing, so the lead must coincide with the plain body-block: leading only
+        // matters for an angled approach, never a head-on run.
+        let point = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 0.0),
+                velocity: Vec2::new(-200.0, 0.0),
+            },
+        );
+        assert_vec2_near(point, Vec2::new(HOME_FLAG_DEFENSE_DISTANCE, 0.0));
+    }
+
+    #[test]
+    fn defensive_intercept_leads_a_sweeping_thief_onto_its_own_lane() {
+        // The thief sweeps straight across at y = 60, outside the ring. A plain
+        // body-block would meet it down on its current bearing (y ~= 27); leading
+        // meets it where it will actually cross the ring, out on its own y = 60 lane.
+        let point = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 60.0),
+                velocity: Vec2::new(-200.0, 0.0),
+            },
+        );
+        let expected_x = HOME_FLAG_DEFENSE_DISTANCE
+            .mul_add(HOME_FLAG_DEFENSE_DISTANCE, -(60.0 * 60.0))
+            .sqrt();
+        assert_vec2_near(point, Vec2::new(expected_x, 60.0));
+    }
+
+    #[test]
+    fn defensive_intercept_falls_back_to_the_body_block_for_a_stationary_thief() {
+        // With no velocity to lead, the meet-point is the plain body-block on the
+        // thief's current bearing, exactly as before the lead existed.
+        let point = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 60.0),
+                velocity: Vec2::ZERO,
+            },
+        );
+        let expected = Vec2::new(300.0, 60.0).normalize() * HOME_FLAG_DEFENSE_DISTANCE;
+        assert_vec2_near(point, expected);
+    }
+
+    #[test]
+    fn defensive_intercept_depends_on_heading_not_speed() {
+        // The breach point is fixed by the thief's line of approach, not how fast it
+        // travels it: a crawling and a flying thief on the same heading are met at the
+        // same ring crossing, so the rough top-speed velocity estimate pins it exactly.
+        let crawling = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 60.0),
+                velocity: Vec2::new(-50.0, 0.0),
+            },
+        );
+        let flying = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 60.0),
+                velocity: Vec2::new(-400.0, 0.0),
+            },
+        );
+        assert_vec2_near(crawling, flying);
+    }
+
+    #[test]
+    fn defensive_intercept_meets_a_thief_inside_the_ring_head_on() {
+        // A thief already inside the defensive ring is met at its current spot, so
+        // the defender closes head-on rather than backing out onto the ring.
+        let point = defensive_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(100.0, 0.0),
+                velocity: Vec2::new(-200.0, 0.0),
+            },
+        );
+        assert_vec2_near(point, Vec2::new(100.0, 0.0));
+    }
+
+    #[test]
+    fn home_defender_leads_a_sweeping_thief_to_the_ring_crossing() {
+        // End to end through the brain: a Red home defender facing a Blue thief
+        // sweeping across its flag lane is sent to where the thief will breach the
+        // defensive ring, not the spot it has already left.
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-1000.0, 0.0),
+                    position: Vec2::new(-1000.0, 0.0),
+                    holder: None,
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(0.0, 0.0),
+                    position: Vec2::new(0.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(300.0, 60.0),
+                velocity: Vec2::new(-200.0, 0.0),
+            }],
+        );
+
+        let Some(DrivingTarget::DefendHomeBase(point)) = target else {
+            panic!("expected a led DefendHomeBase, got {target:?}");
+        };
+        let expected_x = HOME_FLAG_DEFENSE_DISTANCE
+            .mul_add(HOME_FLAG_DEFENSE_DISTANCE, -(60.0 * 60.0))
+            .sqrt();
+        assert_vec2_near(point, Vec2::new(expected_x, 60.0));
+    }
+
+    #[test]
     fn closest_enemy_threat_within_picks_nearest_and_ignores_allies_and_range() {
         let threats = [
             ThreatTarget {
                 team: AiTeam::Red,
                 position: Vec2::new(40.0, 0.0),
+                velocity: Vec2::ZERO,
             },
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(60.0, 0.0),
+                velocity: Vec2::ZERO,
             },
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(10.0, 0.0),
+                velocity: Vec2::ZERO,
             },
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(5000.0, 0.0),
+                velocity: Vec2::ZERO,
             },
         ];
 
@@ -2917,6 +3179,7 @@ mod tests {
             Some(ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(10.0, 0.0),
+                velocity: Vec2::ZERO,
             })
         );
     }
@@ -2927,14 +3190,17 @@ mod tests {
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(0.0, 50.0),
+                velocity: Vec2::ZERO,
             },
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(0.0, -50.0),
+                velocity: Vec2::ZERO,
             },
             ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-50.0, 0.0),
+                velocity: Vec2::ZERO,
             },
         ];
 
@@ -2945,6 +3211,7 @@ mod tests {
             Some(ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-50.0, 0.0),
+                velocity: Vec2::ZERO,
             })
         );
     }
@@ -2971,6 +3238,7 @@ mod tests {
             &[ThreatTarget {
                 team: AiTeam::Blue,
                 position: Vec2::new(-100.0, 0.0),
+                velocity: Vec2::ZERO,
             }],
         );
 
