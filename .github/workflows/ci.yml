@@ -235,6 +235,9 @@ jobs:
       - name: Check pre-commit hook mirrors CI
         run: bash scripts/check_precommit_hook.sh
 
+      - name: Check quality-script coverage (every guard wired into aggregator + CI)
+        run: bash scripts/check_quality_script_coverage.sh
+
       - name: Check shell scripts
         run: bash scripts/check_shell_scripts.sh
 
