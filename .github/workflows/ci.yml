@@ -247,6 +247,9 @@ jobs:
       - name: Check debug-output leftovers (no dbg!/print!/println! in source)
         run: bash scripts/check_debug_leftovers.sh
 
+      - name: Check temporary-fix markers (no TODO/FIXME/HACK/XXX in source)
+        run: bash scripts/check_temporary_fix_markers.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:

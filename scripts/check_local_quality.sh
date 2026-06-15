@@ -11,6 +11,7 @@ bash scripts/check_workflow_lint.sh
 bash scripts/check_rust_safety.sh
 bash scripts/check_rust_suppressions.sh
 bash scripts/check_debug_leftovers.sh
+bash scripts/check_temporary_fix_markers.sh
 bash scripts/check_unused_dependencies.sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
