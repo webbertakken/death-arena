@@ -16,6 +16,7 @@ mod pickup;
 mod player;
 mod slipstream;
 mod virtual_player;
+mod wall_scrape;
 
 pub struct GameplayPlugins;
 

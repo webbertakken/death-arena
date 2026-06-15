@@ -14,6 +14,7 @@ use crate::gameplay::virtual_player::ai::{
     ThreatTarget, MIN_THROTTLE,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
+use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 
@@ -262,8 +263,8 @@ pub fn virtual_player_drive_system(
 
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
-        let carry_and_draft =
-            carry_and_draft_multiplier(entity, ai.team, position, forward, &flags, &draft_lines);
+        let car_speed =
+            car_speed_multiplier(entity, ai.team, position, forward, &flags, &draft_lines);
         let movement_distance = intent.throttle
             * ai.movement_speed
             * team_movement_multiplier(
@@ -274,7 +275,7 @@ pub fn virtual_player_drive_system(
                 wreck_surges.as_deref(),
                 sabotage_effects.as_deref(),
             )
-            * carry_and_draft
+            * car_speed
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
@@ -378,10 +379,12 @@ fn car_draft_lines(
     lines
 }
 
-/// Combined per-car speed multiplier from the flag-carry tax and any slipstream
-/// tow, computing the carrier state once. A flag carrier pays the carry tax and
-/// earns no tow, so the slipstream can never speed a flag run home.
-fn carry_and_draft_multiplier(
+/// Combined per-car speed multiplier beyond the team's shared timed effects: the
+/// flag-carry tax, any slipstream tow, and the wall scrape a car bleeds for
+/// grinding the arena boundary. The carrier state is computed once; a flag carrier
+/// pays the carry tax and earns no tow, so the slipstream can never speed a flag
+/// run home, and a car jammed against a wall scrubs speed exactly as the human does.
+fn car_speed_multiplier(
     entity: Entity,
     team: AiTeam,
     position: Vec2,
@@ -392,6 +395,7 @@ fn carry_and_draft_multiplier(
     let is_carrier = carries_enemy_flag(entity, team, flags);
     flag_carrier_speed_multiplier(is_carrier)
         * car_draft_multiplier(is_carrier, entity, position, heading, draft_lines)
+        * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`
@@ -2246,6 +2250,48 @@ mod tests {
             drafting_y > lone_y,
             "a car tucked in behind a leader should be towed further: lone={lone_y}, \
              drafting={drafting_y}"
+        );
+    }
+
+    #[test]
+    fn grinding_a_wall_scrubs_a_virtual_players_speed() {
+        // Control: a car in the open centre driving straight at a waypoint dead
+        // ahead, far from every wall so it keeps full pace.
+        let mut open_app = app_with_system();
+        let open = spawn_ai_at(
+            &mut open_app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        open_app.update();
+        let open_y = open_app.world.get::<Transform>(open).unwrap().translation.y;
+
+        // Wall car: jammed up against the +X wall and driving straight up alongside
+        // it (waypoint dead ahead on the same x), so heading and throttle match the
+        // control exactly. Only the wall scrape differs.
+        let wall_x = BOUNDS.x / 2.0 - 10.0;
+        let mut wall_app = app_with_system();
+        let wall = spawn_ai_at(
+            &mut wall_app,
+            vec![Vec2::new(wall_x, 2000.0)],
+            Vec3::new(wall_x, 0.0, 4.0),
+        );
+        wall_app.update();
+        let wall_y = wall_app.world.get::<Transform>(wall).unwrap().translation.y;
+
+        let scrape = wall_scrape_speed_multiplier(Vec2::new(wall_x, 0.0), BOUNDS / 2.0);
+        assert!(
+            scrape < 1.0,
+            "the fixture must actually press into the scrape margin, got {scrape}"
+        );
+        assert!(
+            wall_y > 0.0 && wall_y < open_y,
+            "open={open_y}, wall={wall_y}"
+        );
+        assert!(
+            (wall_y - open_y * scrape).abs() <= 1e-3,
+            "a wall-jammed car should drive at the scrape multiplier: \
+             open={open_y}, wall={wall_y}, scrape={scrape}"
         );
     }
 

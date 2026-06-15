@@ -6,6 +6,7 @@ use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
 use crate::gameplay::slipstream::{slipstream_speed_multiplier, LeadingCar};
 use crate::gameplay::virtual_player::VirtualPlayer;
+use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
 use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 
@@ -62,21 +63,13 @@ pub fn car_movement_system(
     };
 
     // Acceleration
-    let nitro_multiplier = nitro_boosts
-        .as_ref()
-        .map_or(1.0, |boosts| boosts.player_multiplier());
-    let integrity_multiplier = integrity
-        .as_ref()
-        .map_or(1.0, |integrity| integrity.player_multiplier());
-    let stun_multiplier = wreck_stuns
-        .as_ref()
-        .map_or(1.0, |stuns| stuns.player_multiplier());
-    let surge_multiplier = wreck_surges
-        .as_ref()
-        .map_or(1.0, |surges| surges.player_multiplier());
-    let sabotage_multiplier = sabotage_effects
-        .as_ref()
-        .map_or(1.0, |effects| effects.player_multiplier());
+    let effect_multiplier = player_effect_multiplier(
+        nitro_boosts.as_deref(),
+        integrity.as_deref(),
+        wreck_stuns.as_deref(),
+        wreck_surges.as_deref(),
+        sabotage_effects.as_deref(),
+    );
     let carrying_flag = flag_query
         .iter()
         .any(|flag| flag.holder == Some(player_entity));
@@ -99,14 +92,14 @@ pub fn car_movement_system(
             &leaders,
         )
     };
+    // A car grinding the arena boundary bleeds speed, just like the field.
+    let wall_scrape_multiplier =
+        wall_scrape_speed_multiplier(transform.translation.xy(), BOUNDS / 2.0);
     let speed_multiplier = player.engine_max_speed_multiplier
-        * nitro_multiplier
-        * integrity_multiplier
-        * stun_multiplier
-        * surge_multiplier
-        * sabotage_multiplier
+        * effect_multiplier
         * carry_multiplier
-        * draft_multiplier;
+        * draft_multiplier
+        * wall_scrape_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -166,4 +159,24 @@ pub fn car_movement_system(
     transform.translation.x = transform.translation.x.clamp(-extents.x, extents.x);
     transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
     transform.translation.z = 5.0;
+}
+
+/// Combined timed-effect speed multiplier the player team carries this frame: the
+/// nitro boost, engine integrity, wreck stun, wreck surge and engine sabotage
+/// folded together. The player-side mirror of the field's `team_movement_multiplier`,
+/// so the human reads the same stack of timed effects the AI does; an absent
+/// resource (no match in progress) contributes a neutral `1.0`.
+fn player_effect_multiplier(
+    nitro_boosts: Option<&NitroBoosts>,
+    integrity: Option<&VehicleIntegrity>,
+    wreck_stuns: Option<&WreckStuns>,
+    wreck_surges: Option<&WreckSurges>,
+    sabotage_effects: Option<&SabotageEffects>,
+) -> f32 {
+    let nitro = nitro_boosts.map_or(1.0, NitroBoosts::player_multiplier);
+    let integrity = integrity.map_or(1.0, |integrity| integrity.player_multiplier());
+    let stun = wreck_stuns.map_or(1.0, |stuns| stuns.player_multiplier());
+    let surge = wreck_surges.map_or(1.0, |surges| surges.player_multiplier());
+    let sabotage = sabotage_effects.map_or(1.0, SabotageEffects::player_multiplier);
+    nitro * integrity * stun * surge * sabotage
 }
