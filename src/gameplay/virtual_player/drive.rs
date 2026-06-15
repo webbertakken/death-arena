@@ -311,7 +311,7 @@ fn overlay_targets(
     pit_retreat_targets(query, flags, threats, integrity)
         .into_iter()
         .chain(finish_off_targets(
-            query, flags, threats, integrity, captures,
+            query, flags, threats, integrity, captures, clock,
         ))
         .chain(lead_defence_targets(query, flags, clock, captures))
         .collect()
@@ -979,10 +979,15 @@ fn finish_off_targets(
     threats: &[ThreatTarget],
     integrity: Option<&VehicleIntegrity>,
     captures: CaptureScore,
+    clock: Option<&MatchClock>,
 ) -> Vec<(Entity, DrivingTarget)> {
     let Some(integrity) = integrity else {
         return Vec::new();
     };
+    // In the match's closing stretch a trailing team widens its kill press to
+    // chase a clutch wreck (see [`finish_off_car`]); absent a clock the window
+    // stays shut, mirroring every other optional CTF resource.
+    let closing_time = clock.is_some_and(|clock| clock.is_closing_time());
 
     let mut targets = Vec::new();
     for team in [AiTeam::Blue, AiTeam::Red] {
@@ -1027,6 +1032,7 @@ fn finish_off_targets(
             &candidates,
             &enemy_positions,
             enemy_flag_carrier,
+            closing_time,
         ) {
             // Lead a prey loose in the open to where it is heading so the hunter
             // cuts it off, but shove a wall-pinned prey straight into the boundary to
@@ -2649,6 +2655,73 @@ mod tests {
         assert!(
             trailing < -0.001,
             "trailing on captures the red car breaks off to hunt the leader down: {trailing}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_team_chases_a_worn_leader_only_in_closing_time() {
+        use crate::gameplay::ctf::{MatchPhase, MATCH_TIME_LIMIT_FRAMES};
+
+        // Both teams are worn past the normal reeling gate but short of the clutch
+        // ceiling, so outside the closing stretch durability keeps the trailing red
+        // car on its objective. Once the clock runs down, red chases the clutch
+        // wreck that can swing the decider: the AI mirror of the combat clutch
+        // bonus. Only the clock changes between the two runs.
+        fn run(closing: bool) -> f32 {
+            let mut app = app_with_system();
+            // Worn enough to clear the closing-time clutch ceiling (0.45) yet above
+            // the normal reeling gate (0.30): only the clutch window reaches it.
+            app.insert_resource(VehicleIntegrity {
+                player: 37.5,
+                opponent: 37.5,
+            });
+            // Red trails blue, so the clutch comeback gamble is live for red.
+            app.insert_resource(CaptureScore {
+                player: 2,
+                opponents: 0,
+            });
+            app.insert_resource(MatchClock {
+                frames_remaining: if closing { 10 } else { MATCH_TIME_LIMIT_FRAMES },
+                phase: MatchPhase::Regulation,
+            });
+            let red = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            // A second red car keeps the team above the lone-car guard and sits far
+            // from the prey so the origin car is the one chosen to hunt.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 1000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            // The worn blue prey, straight behind the red hunter.
+            app.world.spawn((
+                VirtualPlayer {
+                    team: AiTeam::Blue,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints: vec![Vec2::new(0.0, -2000.0)],
+                    current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
+                },
+                Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
+            ));
+
+            app.update();
+
+            app.world.get::<Transform>(red).unwrap().translation.y
+        }
+
+        let regulation = run(false);
+        let closing = run(true);
+
+        assert!(
+            regulation > 1.0,
+            "outside closing time a worn leader is no target, so red keeps to its objective: {regulation}"
+        );
+        assert!(
+            closing < -0.001,
+            "in closing time red breaks off to chase the clutch wreck: {closing}"
         );
     }
 

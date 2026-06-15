@@ -196,6 +196,31 @@ pub const PIT_RETREAT_HOME_COMMIT_DISTANCE: f32 = crate::gameplay::combat::BASE_
 /// [`finish_off_car`]) to hunt the leader it is paid extra to wreck.
 pub const FINISH_OFF_ENEMY_INTEGRITY_FRACTION: f32 = 0.30;
 
+/// Wider enemy durability ceiling a team trailing on captures presses up to once
+/// the match reaches its closing stretch: the clutch-wreck window.
+///
+/// The targeting mirror of the combat
+/// [`crate::gameplay::combat::clutch_wreck_bonus`]: a wreck landed in the dying
+/// seconds both banks the clutch cash and, on a level overtime, swings the
+/// wreck tiebreaker ([`crate::gameplay::ctf::CtfMatchWinner`]) that settles the
+/// decider. So a trailing team running out of clock stops waiting for an enemy
+/// to be *badly* reeling and presses a merely *worn* one, chasing the clutch
+/// wreck that can win the round outright. Held a clear step below half integrity
+/// so the press still needs an enemy genuinely on the back foot, never a
+/// near-pristine one, and the "we must be at least as healthy" guard
+/// ([`finish_off_car`]) keeps the gamble off a suicidal trade.
+pub const CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION: f32 = 0.45;
+
+/// The clutch window must genuinely widen the press, enforced at compile time, so
+/// closing-time desperation reaches an enemy the normal reeling gate leaves alone.
+const _: () =
+    assert!(CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION > FINISH_OFF_ENEMY_INTEGRITY_FRACTION);
+
+/// The clutch window must stay below half integrity, enforced at compile time, so
+/// even a last-ditch press still needs an enemy on the back foot and never trades
+/// into a fresh one.
+const _: () = assert!(CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION < 0.5);
+
 /// Normalised driving intent produced by the virtual player brain.
 ///
 /// Both fields are in the range `-1.0..=1.0` and are engine-agnostic: the
@@ -534,10 +559,18 @@ pub struct FinishOffCandidate {
 /// `x`-then-`y` tie-break), so a kill press on a reeling team that has just
 /// stolen the flag chases the runner home instead of the merely-nearest foe.
 ///
+/// In the match's closing stretch a team `behind_on_captures` widens that reeling
+/// gate to [`CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION`] (`closing_time`), chasing
+/// the clutch wreck that banks the [`crate::gameplay::combat::clutch_wreck_bonus`]
+/// and can swing the level-overtime decider: running out of clock, it presses a
+/// merely *worn* leader, not only a badly reeling one. The health guard below is
+/// untouched, so the desperation never tips into a suicidal trade.
+///
 /// Guards keep the press from backfiring:
 /// - the enemy must be reeling but not already wrecked: above zero yet at or
-///   below [`FINISH_OFF_ENEMY_INTEGRITY_FRACTION`]. A wreck already paid out and
-///   a stunned enemy has no pool left to grind;
+///   below [`FINISH_OFF_ENEMY_INTEGRITY_FRACTION`] (or, in the closing-time clutch
+///   window, [`CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION`]). A wreck already paid
+///   out and a stunned enemy has no pool left to grind;
 /// - the hunting team must be healthy enough relative to its prey. Normally it
 ///   must be the *healthier* of the two, so a team that is itself battered
 ///   recovers (it pit-retreats) instead of trading into a mutual wreck. A team
@@ -558,10 +591,20 @@ pub fn finish_off_car(
     candidates: &[FinishOffCandidate],
     enemy_positions: &[Vec2],
     enemy_flag_carrier: Option<Vec2>,
+    closing_time: bool,
 ) -> Option<(Entity, Vec2)> {
-    if enemy_integrity_fraction <= 0.0
-        || enemy_integrity_fraction > FINISH_OFF_ENEMY_INTEGRITY_FRACTION
-    {
+    // In the closing stretch a trailing team chases the clutch wreck that can win
+    // the decider, so it presses a merely worn leader, not only a badly reeling
+    // one. Every other situation holds to the standard reeling gate.
+    // In the closing stretch a trailing team chases the clutch wreck that can win
+    // the decider, so it presses a merely worn leader, not only a badly reeling
+    // one. Every other situation holds to the standard reeling gate.
+    let reeling_ceiling = if closing_time && behind_on_captures {
+        CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION
+    } else {
+        FINISH_OFF_ENEMY_INTEGRITY_FRACTION
+    };
+    if enemy_integrity_fraction <= 0.0 || enemy_integrity_fraction > reeling_ceiling {
         return None;
     }
     // A trailing team takes the even-health gamble to hunt the reeling leader; a
@@ -4058,7 +4101,7 @@ mod tests {
 
         // Enemy above the reeling band: nothing to finish off yet.
         assert_eq!(
-            finish_off_car(1.0, 0.6, false, &candidates, &enemies, None),
+            finish_off_car(1.0, 0.6, false, &candidates, &enemies, None, false),
             None
         );
     }
@@ -4073,7 +4116,7 @@ mod tests {
 
         // A wreck already paid out; a stunned enemy has no pool left to grind.
         assert_eq!(
-            finish_off_car(1.0, 0.0, false, &candidates, &enemies, None),
+            finish_off_car(1.0, 0.0, false, &candidates, &enemies, None, false),
             None
         );
     }
@@ -4089,12 +4132,12 @@ mod tests {
         // Both reeling and level: a team that is not behind recovers instead of
         // trading into a mutual wreck.
         assert_eq!(
-            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None),
+            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None, false),
             None
         );
         // We are the more battered: pressing would be suicidal, behind or not.
         assert_eq!(
-            finish_off_car(0.1, 0.25, false, &candidates, &enemies, None),
+            finish_off_car(0.1, 0.25, false, &candidates, &enemies, None, false),
             None
         );
     }
@@ -4109,7 +4152,7 @@ mod tests {
 
         // Car 2 is closest to the prey, so it breaks off to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None, false),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -4124,7 +4167,7 @@ mod tests {
 
         // The closest hunter (car 1) targets the nearer of the two enemy cars.
         assert_eq!(
-            finish_off_car(0.9, 0.15, false, &candidates, &enemies, None),
+            finish_off_car(0.9, 0.15, false, &candidates, &enemies, None, false),
             Some((Entity::from_raw(1), Vec2::new(-50.0, 0.0)))
         );
     }
@@ -4144,11 +4187,12 @@ mod tests {
             &candidates,
             &enemies,
             None,
+            false,
         )
         .is_some());
         let just_above = FINISH_OFF_ENEMY_INTEGRITY_FRACTION + 0.001;
         assert_eq!(
-            finish_off_car(0.9, just_above, false, &candidates, &enemies, None),
+            finish_off_car(0.9, just_above, false, &candidates, &enemies, None, false),
             None
         );
     }
@@ -4166,7 +4210,7 @@ mod tests {
         // The carrier is nearest the prey, but it keeps hauling: the non-carrier
         // is the one sent to finish the kill.
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &[carrier, hunter], &enemies, None),
+            finish_off_car(0.8, 0.2, false, &[carrier, hunter], &enemies, None, false),
             Some((Entity::from_raw(2), Vec2::new(500.0, 0.0)))
         );
     }
@@ -4176,7 +4220,10 @@ mod tests {
         let lone = [finish_off_candidate(1, Vec2::new(100.0, 0.0))];
         let enemies = [Vec2::new(500.0, 0.0)];
 
-        assert_eq!(finish_off_car(0.8, 0.2, false, &lone, &enemies, None), None);
+        assert_eq!(
+            finish_off_car(0.8, 0.2, false, &lone, &enemies, None, false),
+            None
+        );
     }
 
     #[test]
@@ -4187,7 +4234,7 @@ mod tests {
         ];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &[], None),
+            finish_off_car(0.8, 0.2, false, &candidates, &[], None, false),
             None
         );
     }
@@ -4209,7 +4256,7 @@ mod tests {
         let enemies = [Vec2::new(500.0, 0.0)];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &carriers, &enemies, None),
+            finish_off_car(0.8, 0.2, false, &carriers, &enemies, None, false),
             None
         );
     }
@@ -4225,7 +4272,7 @@ mod tests {
         let enemies = [Vec2::ZERO];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None, false),
             Some((Entity::from_raw(2), Vec2::ZERO))
         );
     }
@@ -4242,11 +4289,11 @@ mod tests {
         // station, but a team chasing the leader takes the even-health gamble to
         // wreck the car it is paid extra to take down.
         assert_eq!(
-            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None),
+            finish_off_car(0.2, 0.2, false, &candidates, &enemies, None, false),
             None
         );
         assert_eq!(
-            finish_off_car(0.2, 0.2, true, &candidates, &enemies, None),
+            finish_off_car(0.2, 0.2, true, &candidates, &enemies, None, false),
             Some((Entity::from_raw(1), Vec2::new(500.0, 0.0))),
             "a trailing team should hunt the reeling leader at even health"
         );
@@ -4263,7 +4310,7 @@ mod tests {
         // Behind on captures but the more battered side: the comeback relaxation
         // never tips into a suicidal chase, so the team still recovers instead.
         assert_eq!(
-            finish_off_car(0.15, 0.25, true, &candidates, &enemies, None),
+            finish_off_car(0.15, 0.25, true, &candidates, &enemies, None, false),
             None
         );
     }
@@ -4279,11 +4326,107 @@ mod tests {
         // Being behind relaxes only the health margin, never the requirement that
         // the enemy be reeling: a healthy or already-wrecked leader is no target.
         assert_eq!(
-            finish_off_car(0.2, 0.6, true, &candidates, &enemies, None),
+            finish_off_car(0.2, 0.6, true, &candidates, &enemies, None, false),
             None
         );
         assert_eq!(
-            finish_off_car(0.2, 0.0, true, &candidates, &enemies, None),
+            finish_off_car(0.2, 0.0, true, &candidates, &enemies, None, false),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_clutch_presses_a_worn_leader_in_closing_time_when_behind() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(380.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+        // An enemy worn past the clutch ceiling but above the normal reeling gate:
+        // outside the closing-time window it is no target, but a trailing team
+        // running out of clock presses it for the clutch wreck that can win the
+        // decider.
+        let worn = f32::midpoint(
+            FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+            CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+        );
+
+        assert_eq!(
+            finish_off_car(0.8, worn, true, &candidates, &enemies, None, false),
+            None,
+            "outside closing time the normal reeling gate still holds"
+        );
+        assert_eq!(
+            finish_off_car(0.8, worn, true, &candidates, &enemies, None, true),
+            Some((Entity::from_raw(1), Vec2::new(500.0, 0.0))),
+            "a trailing team should chase the clutch wreck in closing time"
+        );
+    }
+
+    #[test]
+    fn finish_off_clutch_window_only_opens_for_the_trailing_team() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(380.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+        let worn = f32::midpoint(
+            FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+            CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+        );
+
+        // A level or leading team keeps the strict reeling gate even in closing
+        // time: the clutch gamble is the comeback lever, not a leader's tool.
+        assert_eq!(
+            finish_off_car(0.8, worn, false, &candidates, &enemies, None, true),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_clutch_still_spares_a_near_pristine_enemy() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(100.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+
+        // The clutch window widens the gate but never opens it on a fresh enemy:
+        // even a last-ditch press needs a foe genuinely on the back foot.
+        assert!(finish_off_car(
+            0.9,
+            CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+            true,
+            &candidates,
+            &enemies,
+            None,
+            true,
+        )
+        .is_some());
+        let just_above = CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION + 0.001;
+        assert_eq!(
+            finish_off_car(0.9, just_above, true, &candidates, &enemies, None, true),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_off_clutch_never_drops_the_health_guard() {
+        let candidates = [
+            finish_off_candidate(1, Vec2::new(100.0, 0.0)),
+            finish_off_candidate(2, Vec2::new(-300.0, 0.0)),
+        ];
+        let enemies = [Vec2::new(500.0, 0.0)];
+        let worn = f32::midpoint(
+            FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+            CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION,
+        );
+
+        // Behind and in closing time, but the more battered side: the clutch
+        // window widens only the reeling gate, never the "at least as healthy"
+        // guard, so the desperation never tips into a suicidal trade.
+        assert_eq!(
+            finish_off_car(worn - 0.05, worn, true, &candidates, &enemies, None, true),
             None
         );
     }
@@ -4303,7 +4446,7 @@ mod tests {
         let enemies = [nearer_foe, carrier];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier), false),
             Some((Entity::from_raw(1), carrier)),
             "a reeling carrier is the most valuable kill, even when a nearer foe beckons"
         );
@@ -4324,12 +4467,12 @@ mod tests {
         let enemies = [stray, carrier];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, None, false),
             Some((Entity::from_raw(1), stray)),
             "with no flag stolen the nearer kill still wins"
         );
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier), false),
             Some((Entity::from_raw(2), carrier)),
             "a stolen flag redirects the hunt to the thief"
         );
@@ -4356,6 +4499,7 @@ mod tests {
                 &[our_carrier, hunter],
                 &enemies,
                 Some(carrier),
+                false,
             ),
             Some((Entity::from_raw(2), carrier))
         );
@@ -4373,7 +4517,7 @@ mod tests {
         let enemies = [carrier];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier)),
+            finish_off_car(0.8, 0.2, false, &candidates, &enemies, Some(carrier), false),
             Some((Entity::from_raw(2), Vec2::ZERO))
         );
     }
@@ -4390,7 +4534,7 @@ mod tests {
         let enemies = [carrier];
 
         assert_eq!(
-            finish_off_car(0.8, 0.6, false, &candidates, &enemies, Some(carrier)),
+            finish_off_car(0.8, 0.6, false, &candidates, &enemies, Some(carrier), false),
             None
         );
     }
@@ -4404,7 +4548,7 @@ mod tests {
         let enemies = [carrier];
 
         assert_eq!(
-            finish_off_car(0.8, 0.2, false, &lone, &enemies, Some(carrier)),
+            finish_off_car(0.8, 0.2, false, &lone, &enemies, Some(carrier), false),
             None
         );
     }
