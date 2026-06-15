@@ -95,6 +95,7 @@ required_guards=(
   "bash scripts/check_duplicate_comment_blocks.sh"
   "bash scripts/check_unused_dependencies.sh"
   "bash scripts/check_wasm_rng_backend.sh"
+  "bash scripts/check_asset_paths.sh"
 )
 for guard in "${required_guards[@]}"; do
   if ! grep -Fq "${guard}" "${workflow}"; then

@@ -16,6 +16,7 @@ bash scripts/check_temporary_fix_markers.sh
 bash scripts/check_duplicate_comment_blocks.sh
 bash scripts/check_unused_dependencies.sh
 bash scripts/check_wasm_rng_backend.sh
+bash scripts/check_asset_paths.sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings

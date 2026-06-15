@@ -266,3 +266,6 @@ jobs:
 
       - name: Check wasm RNG backend (getrandom js feature)
         run: bash scripts/check_wasm_rng_backend.sh
+
+      - name: Check asset paths (every loaded asset exists)
+        run: bash scripts/check_asset_paths.sh
