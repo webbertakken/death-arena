@@ -35,6 +35,20 @@ ERROR
   exit 1
 fi
 
+if ! grep -Fq "cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings" "${workflow}"; then
+  cat >&2 <<'ERROR'
+CI must lint the wasm32 ship target, the actual artefact deployed to GitHub Pages.
+The check/test/clippy gates all run on the host target, so a wasm-only build break
+(a host-only API, a dependency feature that fails on wasm, a target-gated path)
+passes every PR gate and only surfaces later when the Pages workflow deploys from
+main, breaking the live demo. The Pages workflow itself never runs on a pull
+request, so without this step nothing validates the ship target before merge.
+Lint the ship target on every push and PR with:
+  cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
+ERROR
+  exit 1
+fi
+
 if ! grep -Fq "cargo fmt --all -- --check" "${workflow}"; then
   cat >&2 <<'ERROR'
 CI must verify formatting across the whole workspace, so a misformatted commit
@@ -70,6 +84,7 @@ required_guards=(
   "bash scripts/check_ci_workflow.sh"
   "bash scripts/check_scheduled_audit_workflow.sh"
   "bash scripts/check_toolchain_pin.sh"
+  "bash scripts/check_precommit_hook.sh"
   "bash scripts/check_shell_scripts.sh"
   "bash scripts/check_workflow_lint.sh"
   "bash scripts/check_rust_safety.sh"

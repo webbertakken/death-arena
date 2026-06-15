@@ -1,8 +1,10 @@
 [hooks]
 # Mirror the CI gates (.github/workflows/ci.yml) exactly so the pre-commit hook
 # catches the same lints CI does, including those only reachable through
-# --all-targets (test/bench code) and --all-features (the `dev` feature).
-pre-commit = "cargo check --all-targets --all-features && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features"
+# --all-targets (test/bench code) and --all-features (the `dev` feature), and the
+# wasm32 ship target clippy that guards the artefact deployed to GitHub Pages.
+# scripts/check_precommit_hook.sh enforces this mirror so the two cannot drift.
+pre-commit = "cargo check --all-targets --all-features && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings && cargo test --all-targets --all-features"
 
 [logging]
 verbose = true

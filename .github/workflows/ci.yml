@@ -137,6 +137,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - name: Cache
         uses: swatinem/rust-cache@v2
@@ -145,6 +146,14 @@ jobs:
 
       - name: Cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Lint the wasm32 ship target too: the artefact actually deployed to GitHub
+      # Pages. The host-target gates above cannot catch a wasm-only build break,
+      # and the Pages workflow never runs on a pull request, so this is the only
+      # gate that validates the ship target before it reaches the live demo.
+      # Tests do not link on wasm, so this lints the bin/lib (not --all-targets).
+      - name: Cargo clippy (wasm ship target)
+        run: cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
 
   docs:
     name: Docs
@@ -210,6 +219,9 @@ jobs:
 
       - name: Check toolchain pin
         run: bash scripts/check_toolchain_pin.sh
+
+      - name: Check pre-commit hook mirrors CI
+        run: bash scripts/check_precommit_hook.sh
 
       - name: Check shell scripts
         run: bash scripts/check_shell_scripts.sh
