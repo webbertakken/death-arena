@@ -1,0 +1,20 @@
+# Lint configuration read automatically by clippy on every gate (the host
+# `--all-targets` run and the wasm32 ship-target run alike). Pairs with the
+# crate-root `#![deny(clippy::unwrap_used, clippy::expect_used)]` in
+# src/main.rs.
+#
+# Those two restriction lints (allow-by-default, so NOT covered by the crate's
+# nursery + pedantic warn set) each turn an `Option::None` / `Result::Err` into
+# an instant process abort. In this game that abort hard-crashes the WASM canvas
+# the moment it runs inside an ECS system every frame, exactly like the
+# clippy::todo / clippy::unimplemented placeholder panics the crate root already
+# denies. Denying unwrap/expect closes the same never-ship gap for the *implicit*
+# panic a stray `.unwrap()` or `.expect()` smuggles in.
+#
+# Test code legitimately leans on `.unwrap()` / `.expect()` to assert a fixture
+# resolved exactly as it was set up (hundreds of such call sites across the
+# suite). These two knobs let clippy keep denying both in shipping code while
+# exempting `#[cfg(test)]` code in an AST-aware way, so no test module needs a
+# hand-written `#[allow(...)]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
