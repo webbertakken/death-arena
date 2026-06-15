@@ -244,6 +244,9 @@ jobs:
       - name: Check Rust suppressions (no crate-wide unused/dead_code allow)
         run: bash scripts/check_rust_suppressions.sh
 
+      - name: Check never-ship lints (crate-root panic-guard denies intact)
+        run: bash scripts/check_never_ship_lints.sh
+
       - name: Check debug-output leftovers (no dbg!/print!/println! in source)
         run: bash scripts/check_debug_leftovers.sh
 

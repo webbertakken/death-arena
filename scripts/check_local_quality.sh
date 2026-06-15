@@ -10,6 +10,7 @@ bash scripts/check_shell_scripts.sh
 bash scripts/check_workflow_lint.sh
 bash scripts/check_rust_safety.sh
 bash scripts/check_rust_suppressions.sh
+bash scripts/check_never_ship_lints.sh
 bash scripts/check_debug_leftovers.sh
 bash scripts/check_temporary_fix_markers.sh
 bash scripts/check_unused_dependencies.sh
