@@ -79,6 +79,22 @@ impl DriverProfile {
         pickup_pursuit_radius: 380.0,
         corner_throttle: 0.20,
     };
+    /// Single-minded ambusher: it lives to run a rival down, not to race or loot.
+    /// The corner of the trade-off space the original trio never covered, splitting
+    /// apart the behavioural axes the others kept locked together. The sprinter
+    /// hunts keenly *and* scavenges greedily; the technician is shy of both; the
+    /// ambusher decouples them, hunting from further out than the all-rounder yet
+    /// leaving the cash bags on the track for the objective. It commits to the chase
+    /// line with a reckless corner throttle, and buys all that aggression on the
+    /// mobility frontier: a touch slower flat out than the baseline, paid back with
+    /// a sharper turn-in, so it is a genuine trade-off and never a strict upgrade.
+    const AMBUSHER: Self = Self {
+        movement_speed: 405.0,
+        turn_degrees: 310.0,
+        player_pursuit_radius: 560.0,
+        pickup_pursuit_radius: 400.0,
+        corner_throttle: 0.38,
+    };
 }
 
 /// Each archetype is a genuine trade-off, never a strict upgrade: more top speed
@@ -165,6 +181,51 @@ const _: () = assert!(
     DriverProfile::SPRINTER.corner_throttle <= 0.5
         && DriverProfile::TECHNICIAN.corner_throttle >= 0.15
 );
+/// The ambusher's signature is a genuine decoupling, enforced at compile time: it
+/// hunts keener than the baseline yet scavenges more reluctantly, the trade the
+/// original trio (keen-on-both sprinter, shy-of-both technician, neutral
+/// all-rounder) never struck. This is what makes the fourth archetype a new corner
+/// of the space rather than a numeric remix of the existing three.
+const _: () = assert!(
+    DriverProfile::AMBUSHER.player_pursuit_radius
+        > DriverProfile::ALL_ROUNDER.player_pursuit_radius
+        && DriverProfile::AMBUSHER.pickup_pursuit_radius
+            < DriverProfile::ALL_ROUNDER.pickup_pursuit_radius
+);
+/// The ambusher's aggression is bought on the same speed/turn frontier as the
+/// trio, never for free, enforced at compile time: slower flat out than the
+/// all-rounder but sharper through a corner, so the archetype is a genuine
+/// trade-off and not a strict mobility upgrade.
+const _: () = assert!(
+    DriverProfile::AMBUSHER.movement_speed < DriverProfile::ALL_ROUNDER.movement_speed
+        && DriverProfile::AMBUSHER.turn_degrees > DriverProfile::ALL_ROUNDER.turn_degrees
+);
+/// The ambusher sharpens the roster without flattening the trio's extremes,
+/// enforced at compile time: the sprinter stays the keenest hunter and most
+/// reckless through a corner, and the technician the least greedy scavenger, so
+/// the interior archetype never steals another's identity.
+const _: () = assert!(
+    DriverProfile::AMBUSHER.player_pursuit_radius < DriverProfile::SPRINTER.player_pursuit_radius
+        && DriverProfile::AMBUSHER.corner_throttle < DriverProfile::SPRINTER.corner_throttle
+        && DriverProfile::AMBUSHER.pickup_pursuit_radius
+            > DriverProfile::TECHNICIAN.pickup_pursuit_radius
+);
+/// The ambusher stays inside the same tight bands as the trio so its personality
+/// is felt without breaking the tuned chase and escort balance, enforced at
+/// compile time: its speed and turn sit in the same 360..=480 / 260..=340 mobility
+/// band, and its hunting, greed and corner commitment in the same ranges the trio
+/// is held to, so even this keen hunter never chases from absurd range.
+const _: () = assert!(
+    DriverProfile::AMBUSHER.movement_speed <= 480.0
+        && DriverProfile::AMBUSHER.movement_speed >= 360.0
+        && DriverProfile::AMBUSHER.turn_degrees >= 260.0
+        && DriverProfile::AMBUSHER.turn_degrees <= 340.0
+        && DriverProfile::AMBUSHER.player_pursuit_radius <= 640.0
+        && DriverProfile::AMBUSHER.pickup_pursuit_radius <= 580.0
+        && DriverProfile::AMBUSHER.pickup_pursuit_radius >= 340.0
+        && DriverProfile::AMBUSHER.corner_throttle <= 0.5
+        && DriverProfile::AMBUSHER.corner_throttle >= 0.15
+);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct VirtualPlayerSpawn {
@@ -196,7 +257,7 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 7] {
             team: AiTeam::Blue,
             start_waypoint: 0,
             translation: Vec3::new(-430.0, -200.0, 4.0),
-            profile: DriverProfile::ALL_ROUNDER,
+            profile: DriverProfile::AMBUSHER,
         },
         VirtualPlayerSpawn {
             name: "Opponent 1",
@@ -217,7 +278,7 @@ const fn spawn_roster() -> [VirtualPlayerSpawn; 7] {
             team: AiTeam::Red,
             start_waypoint: 2,
             translation: Vec3::new(430.0, -200.0, 4.0),
-            profile: DriverProfile::ALL_ROUNDER,
+            profile: DriverProfile::AMBUSHER,
         },
         // Opponent 4 fills the slot opposite the human player with the neutral
         // baseline, keeping both teams on the identical multiset of profiles.
@@ -436,6 +497,115 @@ mod tests {
             distinct.len() >= 3,
             "expected a roster of distinct driving personalities, found {}",
             distinct.len()
+        );
+    }
+
+    #[test]
+    fn roster_fields_a_fourth_distinct_personality() {
+        // The roster of rivals grows past the original trio: a fourth genuinely
+        // distinct archetype joins the field instead of padding it out with a
+        // duplicate all-rounder, so the human meets four different driving styles.
+        let roster = spawn_roster();
+        let mut distinct: Vec<DriverProfile> = Vec::new();
+        for spawn in roster {
+            if !distinct.contains(&spawn.profile) {
+                distinct.push(spawn.profile);
+            }
+        }
+        assert!(
+            distinct.len() >= 4,
+            "expected at least four distinct driving personalities, found {}",
+            distinct.len()
+        );
+    }
+
+    #[test]
+    fn the_ambusher_decouples_keen_hunting_from_loot_greed() {
+        // The ambusher is the corner of the trade-off space the original trio never
+        // covered: its hunting and greed point opposite ways around the baseline. It
+        // runs a rival down from further out than the all-rounder, yet is the less
+        // tempted to peel off for loot, the single-minded hunter that leaves the
+        // cash bags on the track.
+        let ambusher_hunt = DriverProfile::AMBUSHER.player_pursuit_radius;
+        let ambusher_greed = DriverProfile::AMBUSHER.pickup_pursuit_radius;
+        let baseline_hunt = DriverProfile::ALL_ROUNDER.player_pursuit_radius;
+        let baseline_greed = DriverProfile::ALL_ROUNDER.pickup_pursuit_radius;
+        assert!(
+            ambusher_hunt > baseline_hunt,
+            "the ambusher ({ambusher_hunt}) must hunt keener than the baseline ({baseline_hunt})"
+        );
+        assert!(
+            ambusher_greed < baseline_greed,
+            "the ambusher ({ambusher_greed}) must scavenge more reluctantly than the baseline \
+             ({baseline_greed})"
+        );
+    }
+
+    #[test]
+    fn no_other_archetype_decouples_hunting_from_greed_like_the_ambusher() {
+        // The decoupling is what makes the ambusher genuinely new and not a remix:
+        // the sprinter is keen on both the hunt and the loot, the technician shy of
+        // both, the all-rounder neutral. Only the ambusher hunts harder while
+        // scavenging softer than the baseline.
+        let baseline_hunt = DriverProfile::ALL_ROUNDER.player_pursuit_radius;
+        let baseline_greed = DriverProfile::ALL_ROUNDER.pickup_pursuit_radius;
+        for profile in [
+            DriverProfile::SPRINTER,
+            DriverProfile::TECHNICIAN,
+            DriverProfile::ALL_ROUNDER,
+        ] {
+            let hunts_harder = profile.player_pursuit_radius > baseline_hunt;
+            let scavenges_softer = profile.pickup_pursuit_radius < baseline_greed;
+            assert!(
+                !(hunts_harder && scavenges_softer),
+                "only the ambusher should hunt harder yet scavenge softer than the baseline"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ambusher_buys_its_aggression_on_the_mobility_frontier() {
+        // Its keen, reckless aggression is never free: a touch slower flat out than
+        // the all-rounder, paid back with a sharper turn-in, so the new archetype
+        // sits on the same speed/turn frontier as the trio and is a genuine
+        // trade-off rather than a strict upgrade.
+        let ambusher_speed = DriverProfile::AMBUSHER.movement_speed;
+        let ambusher_turn = DriverProfile::AMBUSHER.turn_degrees;
+        let baseline_speed = DriverProfile::ALL_ROUNDER.movement_speed;
+        let baseline_turn = DriverProfile::ALL_ROUNDER.turn_degrees;
+        assert!(
+            ambusher_speed < baseline_speed,
+            "the ambusher ({ambusher_speed}) must give up top speed for its aggression"
+        );
+        assert!(
+            ambusher_turn > baseline_turn,
+            "the ambusher ({ambusher_turn}) must earn its keep with a sharper turn-in"
+        );
+    }
+
+    #[test]
+    fn the_ambusher_never_dethrones_the_trios_extremes() {
+        // The interior archetype sharpens the roster without flattening the others:
+        // the sprinter stays the keenest hunter and most reckless through a corner,
+        // and the technician the least greedy scavenger.
+        let ambusher_hunt = DriverProfile::AMBUSHER.player_pursuit_radius;
+        let ambusher_throttle = DriverProfile::AMBUSHER.corner_throttle;
+        let ambusher_greed = DriverProfile::AMBUSHER.pickup_pursuit_radius;
+        let sprinter_hunt = DriverProfile::SPRINTER.player_pursuit_radius;
+        let sprinter_throttle = DriverProfile::SPRINTER.corner_throttle;
+        let technician_greed = DriverProfile::TECHNICIAN.pickup_pursuit_radius;
+        assert!(
+            ambusher_hunt < sprinter_hunt,
+            "the sprinter ({sprinter_hunt}) must remain keener than the ambusher ({ambusher_hunt})"
+        );
+        assert!(
+            ambusher_throttle < sprinter_throttle,
+            "the sprinter must remain the most reckless through a corner"
+        );
+        assert!(
+            ambusher_greed > technician_greed,
+            "the technician ({technician_greed}) must remain less greedy than the ambusher \
+             ({ambusher_greed})"
         );
     }
 
