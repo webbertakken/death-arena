@@ -45,6 +45,34 @@ const _: () = assert!(CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
 /// A clean-sheet bonus must be a real payday, not a token, enforced at compile
 /// time.
 const _: () = assert!(CLEAN_SHEET_CASH_BONUS > 0);
+/// Cash a decisive winner banks on top of [`VICTORY_CASH_PURSE`] for a
+/// nail-biter: taking the round while the beaten team sat on match point, one
+/// capture short of [`CAPTURES_TO_WIN`].
+///
+/// The clutch counterpart to [`CLEAN_SHEET_CASH_BONUS`]: where the clean sheet
+/// prizes airtight dominance (the loser never captured), the nail-biter prizes
+/// surviving a round that ran down to the wire (the loser was a single capture
+/// from the title when the winner clinched). Because a capture ends the round,
+/// a beaten team left on [`CAPTURES_TO_WIN`] `- 1` genuinely had its decider
+/// denied, so the bonus always marks a real cliff-hanger. Pitched below the
+/// clean sheet so watertight defence still out-earns a last-gasp scrape, and
+/// like it kept well below the victory purse so the bonus enriches a win
+/// without ever out-paying taking the round; a level draw never earns it.
+pub const NAIL_BITER_CASH_BONUS: u32 = 250;
+/// A nail-biter bonus must be a real payday, not a token, enforced at compile
+/// time.
+const _: () = assert!(NAIL_BITER_CASH_BONUS > 0);
+/// A nail-biter must enrich a win, never out-pay taking the round itself,
+/// enforced at compile time.
+const _: () = assert!(NAIL_BITER_CASH_BONUS < VICTORY_CASH_PURSE);
+/// Airtight dominance must out-earn a last-gasp scrape, enforced at compile
+/// time.
+const _: () = assert!(NAIL_BITER_CASH_BONUS < CLEAN_SHEET_CASH_BONUS);
+/// The clean sheet (beaten team on zero) and the nail-biter (beaten team on
+/// [`CAPTURES_TO_WIN`] `- 1`) are disjoint conditions, so a single win never
+/// banks both. Holds as long as a round needs more than one capture to win,
+/// enforced at compile time.
+const _: () = assert!(CAPTURES_TO_WIN > 1);
 /// Fixed update frames a CTF round runs before it resolves on time.
 ///
 /// Caps stalemates so a match always ends even if neither team reaches
@@ -811,26 +839,51 @@ const fn clean_sheet_bonus(winner: CtfMatchWinner, captures: CaptureScore) -> u3
     }
 }
 
+/// Cash a decisive winner banks for a nail-biter given the final capture tally:
+/// [`NAIL_BITER_CASH_BONUS`] if the beaten team finished on match point
+/// ([`CAPTURES_TO_WIN`] `- 1`), else 0.
+///
+/// A capture ends the round, so a beaten team left a single capture short
+/// genuinely had its decider denied. A level [`CtfMatchWinner::Draw`] never
+/// earns the bonus, and the condition is disjoint from [`clean_sheet_bonus`]
+/// (beaten team on zero), so a win banks at most one of the two win-quality
+/// bonuses.
+#[must_use]
+const fn nail_biter_bonus(winner: CtfMatchWinner, captures: CaptureScore) -> u32 {
+    let nail_biter = match winner {
+        CtfMatchWinner::Player => captures.opponents == CAPTURES_TO_WIN - 1,
+        CtfMatchWinner::Opponents => captures.player == CAPTURES_TO_WIN - 1,
+        CtfMatchWinner::Draw => false,
+    };
+    if nail_biter {
+        NAIL_BITER_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Banks the end-of-match purse to whichever side the result favours.
 ///
-/// A win pays the victor [`VICTORY_CASH_PURSE`], plus a
-/// [`CLEAN_SHEET_CASH_BONUS`] when the beaten team never captured (see
-/// [`clean_sheet_bonus`]); a draw pays both teams the smaller
-/// [`DRAW_CASH_PURSE`] for fighting to a standstill. Pure cash, banked on top of
-/// every in-match bounty.
+/// A win pays the victor [`VICTORY_CASH_PURSE`], topped by a win-quality bonus:
+/// a [`CLEAN_SHEET_CASH_BONUS`] when the beaten team never captured (see
+/// [`clean_sheet_bonus`]), or a [`NAIL_BITER_CASH_BONUS`] when it finished on
+/// match point (see [`nail_biter_bonus`]). The two are disjoint, so a win banks
+/// at most one. A draw pays both teams the smaller [`DRAW_CASH_PURSE`] for
+/// fighting to a standstill. Pure cash, banked on top of every in-match bounty.
 const fn award_match_purse(
     winner: CtfMatchWinner,
     captures: CaptureScore,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
-    let clean_sheet = clean_sheet_bonus(winner, captures);
+    let win_quality_bonus =
+        clean_sheet_bonus(winner, captures) + nail_biter_bonus(winner, captures);
     match winner {
         CtfMatchWinner::Player => {
-            player_economy.bank_match_purse(VICTORY_CASH_PURSE + clean_sheet);
+            player_economy.bank_match_purse(VICTORY_CASH_PURSE + win_quality_bonus);
         }
         CtfMatchWinner::Opponents => {
-            opponent_economy.bank_match_purse(VICTORY_CASH_PURSE + clean_sheet);
+            opponent_economy.bank_match_purse(VICTORY_CASH_PURSE + win_quality_bonus);
         }
         CtfMatchWinner::Draw => {
             player_economy.bank_match_purse(DRAW_CASH_PURSE);
@@ -2888,6 +2941,116 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_nail_biter_win_tops_the_purse_with_the_bonus_for_the_player() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // The beaten opponents finished on match point: a nail-biter win.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: CAPTURES_TO_WIN,
+                opponents: CAPTURES_TO_WIN - 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS,
+            "denying the enemy at match point must top the purse with the nail-biter bonus"
+        );
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_nail_biter_win_tops_the_purse_with_the_bonus_for_the_opponents() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // The beaten player team finished on match point: a nail-biter win.
+        award_match_purse(
+            CtfMatchWinner::Opponents,
+            CaptureScore {
+                player: CAPTURES_TO_WIN - 1,
+                opponents: CAPTURES_TO_WIN,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            opponent_economy.cash,
+            VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS
+        );
+        assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn finishing_a_single_capture_short_earns_the_nail_biter_bonus() {
+        assert_eq!(
+            nail_biter_bonus(
+                CtfMatchWinner::Player,
+                CaptureScore {
+                    player: CAPTURES_TO_WIN,
+                    opponents: CAPTURES_TO_WIN - 1,
+                },
+            ),
+            NAIL_BITER_CASH_BONUS,
+            "leaving the loser on match point is a nail-biter"
+        );
+    }
+
+    #[test]
+    fn winning_with_two_captures_to_spare_forfeits_the_nail_biter_bonus() {
+        // The loser finished two captures short, not on match point, so the win
+        // is comfortable rather than a nail-biter.
+        assert_eq!(
+            nail_biter_bonus(
+                CtfMatchWinner::Player,
+                CaptureScore {
+                    player: CAPTURES_TO_WIN,
+                    opponents: CAPTURES_TO_WIN - 2,
+                },
+            ),
+            0,
+            "a two-capture cushion is no nail-biter"
+        );
+    }
+
+    #[test]
+    fn a_clean_sheet_win_never_also_earns_the_nail_biter_bonus() {
+        // The two win-quality bonuses sit at opposite ends of the spectrum: a
+        // beaten team on zero captures is the airtight clean sheet, never the
+        // match-point nail-biter, so a single win never double-dips.
+        let captures = CaptureScore {
+            player: CAPTURES_TO_WIN,
+            opponents: 0,
+        };
+        assert_eq!(nail_biter_bonus(CtfMatchWinner::Player, captures), 0);
+        assert_eq!(
+            clean_sheet_bonus(CtfMatchWinner::Player, captures),
+            CLEAN_SHEET_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_draw_never_earns_a_nail_biter_bonus() {
+        // A level result is no win, however close the scoreline ran.
+        assert_eq!(
+            nail_biter_bonus(
+                CtfMatchWinner::Draw,
+                CaptureScore {
+                    player: CAPTURES_TO_WIN - 1,
+                    opponents: CAPTURES_TO_WIN - 1,
+                },
+            ),
+            0
+        );
+    }
+
     fn purse_app() -> App {
         let mut app = App::new();
         app.init_resource::<Score>();
@@ -2913,10 +3076,12 @@ mod tests {
     #[test]
     fn resolved_match_banks_the_purse_and_latches_it() {
         let mut app = purse_app();
-        // A conceded capture keeps this a bare-purse win, not a clean sheet.
+        // Winning by two captures keeps this a bare-purse win: the loser sat
+        // clear of zero (no clean sheet) and clear of match point (no
+        // nail-biter).
         app.insert_resource(CaptureScore {
             player: 3,
-            opponents: 2,
+            opponents: 1,
         });
         app.insert_resource(CtfMatchResult {
             winner: Some(CtfMatchWinner::Player),
@@ -2934,9 +3099,11 @@ mod tests {
     #[test]
     fn a_resolved_match_pays_the_purse_only_once() {
         let mut app = purse_app();
-        // A conceded capture keeps this a bare-purse win, not a clean sheet.
+        // Winning by two captures keeps this a bare-purse win: the loser sat
+        // clear of zero (no clean sheet) and clear of match point (no
+        // nail-biter).
         app.insert_resource(CaptureScore {
-            player: 2,
+            player: 1,
             opponents: 3,
         });
         app.insert_resource(CtfMatchResult {
@@ -2972,6 +3139,27 @@ mod tests {
         assert_eq!(
             app.world.resource::<Score>().cash,
             VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_resolved_nail_biter_banks_the_bonus_through_the_system() {
+        let mut app = purse_app();
+        // The beaten opponents finished on match point: the resolution system
+        // must bank the nail-biter bonus on top of the victory purse.
+        app.insert_resource(CaptureScore {
+            player: CAPTURES_TO_WIN,
+            opponents: CAPTURES_TO_WIN - 1,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS
         );
     }
 }
