@@ -140,6 +140,31 @@ const _: () = assert!(WRECK_SURGE_SPEED_MULTIPLIER > 1.0);
 /// Nitro must stay the fastest a car can go, enforced at compile time.
 const _: () =
     assert!(WRECK_SURGE_SPEED_MULTIPLIER < crate::gameplay::pickup::NITRO_SPEED_MULTIPLIER);
+/// Extra durability the enemy of a surging car loses each frame the two are
+/// trading paint.
+///
+/// The offensive companion to [`WRECK_SURGE_SPEED_MULTIPLIER`] and the mirror of
+/// [`NITRO_RAM_DAMAGE_PER_FRAME`]: where a fresh wreck speeds the wrecking team's
+/// cars up, it also lets them ram the *next* enemy harder, the adrenaline of the
+/// kill carried into the next hit. This closes the wreck -> surge -> chain loop the
+/// surge was built for: its window is matched frame-for-frame to the victim's
+/// spin-out precisely so a team can "chain a second wreck", and now the surging
+/// team both reaches the next foe quicker *and* grinds it down faster. Like the
+/// nitro charge it needs no aim, landing on whoever the surging car is trading
+/// paint with, so it rewards pressing a reeling enemy in the opening the kill made.
+/// Priced below the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a nitro burst stays
+/// the single hardest bite, exactly as the surge speed stays below the nitro speed,
+/// and the anti-snowball levers (the capped [`WRECK_STREAK_BONUS`] and the trailing
+/// team's [`MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD`]) keep a rampage in check. Fires
+/// for whichever team is surging, so a trailing side landing a most-wanted kill
+/// chains its comeback just as a leader presses its advantage.
+pub const SURGE_RAM_DAMAGE_PER_FRAME: f32 = 0.25;
+/// A surge ram must be a real bite, enforced at compile time.
+const _: () = assert!(SURGE_RAM_DAMAGE_PER_FRAME > 0.0);
+/// A surge ram must stay under the earned nitro charge, enforced at compile time,
+/// so a boosted ram remains the single hardest source of wear, mirroring how the
+/// surge speed stays under the nitro speed.
+const _: () = assert!(SURGE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
 /// Extra durability a flag-carrying car's team loses each frame it is trading
 /// paint with an enemy.
 ///
@@ -959,6 +984,36 @@ impl RamBoost {
     }
 }
 
+/// Which teams are surging from a fresh wreck this frame, for offensive ram
+/// bonuses.
+///
+/// The wreck-reward mirror of [`RamBoost`]: where a nitro boost makes a team's
+/// rams bite, a wreck surge does the same for the team that just landed a kill,
+/// carrying the kill's adrenaline into its next hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RamSurge {
+    pub player: bool,
+    pub opponent: bool,
+}
+
+impl RamSurge {
+    /// Reads the live surge timers into the teams that are currently surging.
+    #[must_use]
+    pub const fn from_surges(surges: WreckSurges) -> Self {
+        Self {
+            player: surges.player_frames > 0,
+            opponent: surges.opponent_frames > 0,
+        }
+    }
+
+    const fn is_team_surging(self, team: AiTeam) -> bool {
+        match team {
+            AiTeam::Blue => self.player,
+            AiTeam::Red => self.opponent,
+        }
+    }
+}
+
 /// Which teams have their shield up this frame, for defensive damage mitigation.
 ///
 /// The defensive mirror of [`RamBoost`]: where a boost makes a team's rams bite,
@@ -999,6 +1054,36 @@ pub fn armour_mitigated_damage(damage: TeamDamage, shield: RamShield) -> TeamDam
             damage.opponent
         },
     }
+}
+
+/// Sums every ram-damage source for the frame and applies shield mitigation.
+///
+/// Folds the base scrape together with the nitro charge, the wreck surge, the
+/// flag-carrier bleed and every directional bonus (aggressor, broadside,
+/// rear-end, head-on, pincer, wall and corner crush), then blunts the total for
+/// any shielded team. Pulled out of [`ram_damage_system`] so the system stays
+/// under the line gate and the whole damage stack can be exercised in isolation.
+#[must_use]
+fn frame_ram_damage(
+    cars: &[RamCar],
+    boost: RamBoost,
+    surge: RamSurge,
+    shield: RamShield,
+    half_extents: Vec2,
+) -> TeamDamage {
+    let raw_damage = ram_damage(cars)
+        .combined(nitro_ram_damage(cars, boost))
+        .combined(surge_ram_damage(cars, surge))
+        .combined(carrier_ram_damage(cars))
+        .combined(aggressor_ram_damage(cars))
+        .combined(broadside_ram_damage(cars))
+        .combined(rear_end_ram_damage(cars))
+        .combined(head_on_ram_damage(cars))
+        .combined(pincer_ram_damage(cars))
+        .combined(wall_crush_ram_damage(cars, half_extents))
+        .combined(corner_crush_ram_damage(cars, half_extents));
+    // A team with its shield up shrugs off part of every ram it eats this frame.
+    armour_mitigated_damage(raw_damage, shield)
 }
 
 /// Computes the ram damage each team takes from the current car positions.
@@ -1060,6 +1145,47 @@ pub fn nitro_ram_damage(cars: &[RamCar], boost: RamBoost) -> TeamDamage {
             match car.team {
                 AiTeam::Blue => damage.opponent += NITRO_RAM_DAMAGE_PER_FRAME,
                 AiTeam::Red => damage.player += NITRO_RAM_DAMAGE_PER_FRAME,
+            }
+        }
+    }
+
+    damage
+}
+
+/// Computes the bonus ram damage cars surging from a fresh wreck inflict on the
+/// enemy.
+///
+/// The wreck-reward mirror of [`nitro_ram_damage`]: for every surging car in
+/// contact with an opposing car, the *enemy* team bleeds
+/// [`SURGE_RAM_DAMAGE_PER_FRAME`] on top of the base [`ram_damage`] scrape, so the
+/// adrenaline of a kill is carried into the surging team's next hit. The hit lands
+/// on whoever the surging car is trading paint with, the same contact rule the
+/// nitro charge uses and needing no aim, so it rewards pressing a reeling enemy in
+/// the surge window the wreck opened. Charged once per surging car in contact,
+/// mirroring the per-aggressor model of [`nitro_ram_damage`].
+#[must_use]
+pub fn surge_ram_damage(cars: &[RamCar], surge: RamSurge) -> TeamDamage {
+    let radius_sq = RAM_RADIUS * RAM_RADIUS;
+    let mut damage = TeamDamage {
+        player: 0.0,
+        opponent: 0.0,
+    };
+
+    for (index, car) in cars.iter().enumerate() {
+        if !surge.is_team_surging(car.team) {
+            continue;
+        }
+
+        let in_contact = cars.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other.team != car.team
+                && other.position.distance_squared(car.position) <= radius_sq
+        });
+        if in_contact {
+            // The enemy of the surging car eats the extra hit.
+            match car.team {
+                AiTeam::Blue => damage.opponent += SURGE_RAM_DAMAGE_PER_FRAME,
+                AiTeam::Red => damage.player += SURGE_RAM_DAMAGE_PER_FRAME,
             }
         }
     }
@@ -1706,18 +1832,15 @@ pub fn ram_damage_system(
         .as_deref()
         .map(RamShield::from_armour)
         .unwrap_or_default();
-    let raw_damage = ram_damage(&cars)
-        .combined(nitro_ram_damage(&cars, boost))
-        .combined(carrier_ram_damage(&cars))
-        .combined(aggressor_ram_damage(&cars))
-        .combined(broadside_ram_damage(&cars))
-        .combined(rear_end_ram_damage(&cars))
-        .combined(head_on_ram_damage(&cars))
-        .combined(pincer_ram_damage(&cars))
-        .combined(wall_crush_ram_damage(&cars, BOUNDS / 2.0))
-        .combined(corner_crush_ram_damage(&cars, BOUNDS / 2.0));
-    // A team with its shield up shrugs off part of every ram it eats this frame.
-    let damage = armour_mitigated_damage(raw_damage, shield);
+    // Read the surge state *before* this frame's wreck is resolved, so only a
+    // surge earned by a *prior* kill bites this frame: a team that wrecks an enemy
+    // this frame surges from the next one on.
+    let surge = wreck_surges
+        .as_deref()
+        .copied()
+        .map(RamSurge::from_surges)
+        .unwrap_or_default();
+    let damage = frame_ram_damage(&cars, boost, surge, shield, BOUNDS / 2.0);
 
     let before = *integrity;
     integrity.apply_damage(damage);
@@ -2357,6 +2480,128 @@ mod tests {
         );
         assert_near(damage.player, 2.0 * NITRO_RAM_DAMAGE_PER_FRAME);
         assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn no_surge_means_no_ram_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(&cars, RamSurge::default());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_surging_player_ram_wears_the_opponent() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, SURGE_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_surging_opponent_ram_wears_the_player() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, SURGE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_surging_car_out_of_contact_deals_no_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS + 1.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn same_team_contact_deals_no_surge_bonus() {
+        let cars = [blue(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn surge_bonus_scales_per_surging_car_in_contact() {
+        // Two surging reds bracket a single blue: both reds are pressing the lone
+        // blue, so the player team eats two surge hits this frame.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 2.0 * SURGE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn ram_surge_reads_active_surge_timers() {
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        let surge = RamSurge::from_surges(surges);
+        assert!(!surge.player, "an idle team should not be surging");
+        assert!(surge.opponent, "a freshly-wrecking team should be surging");
+    }
+
+    #[test]
+    fn frame_ram_damage_folds_the_surge_into_the_stack_then_shields() {
+        // A surging, shielded player car trading paint with a red: the frame total
+        // is base scrape + surge, halved for the shielded player, proving the helper
+        // both folds the surge into the stack and mitigates the whole frame.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = frame_ram_damage(
+            &cars,
+            RamBoost::default(),
+            RamSurge {
+                player: true,
+                opponent: false,
+            },
+            RamShield {
+                player: true,
+                opponent: false,
+            },
+            BOUNDS / 2.0,
+        );
+        assert_near(
+            damage.player,
+            RAM_DAMAGE_PER_FRAME * SHIELD_DAMAGE_MULTIPLIER,
+        );
+        assert_near(
+            damage.opponent,
+            RAM_DAMAGE_PER_FRAME + SURGE_RAM_DAMAGE_PER_FRAME,
+        );
     }
 
     #[test]
@@ -3498,6 +3743,63 @@ mod tests {
             MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - NITRO_RAM_DAMAGE_PER_FRAME,
         );
         assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn system_adds_surge_ram_bonus_when_a_surging_team_collides() {
+        let mut app = App::new();
+        app.init_resource::<VehicleIntegrity>();
+        // The reds are surging from a prior wreck (set up before this frame), so
+        // their ongoing scrape with the player bites for the surge bonus on top.
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        app.insert_resource(surges);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        // Base scrape wears both teams 0.25; the surging reds also ram the player
+        // team for the surge bonus on top.
+        assert_near(
+            integrity.player,
+            MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME - SURGE_RAM_DAMAGE_PER_FRAME,
+        );
+        assert_near(integrity.opponent, MAX_INTEGRITY - RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_freshly_wrecking_team_surges_into_a_harder_next_ram() {
+        // The wreck -> surge -> chain loop end to end: the opponents grind a lone
+        // player car to a wreck this frame and, because they were *already* surging
+        // from a prior kill, the same frame's scrape on the player also lands the
+        // surge bite. Proves the surge a prior kill earned bites the next contact.
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: RAM_DAMAGE_PER_FRAME + SURGE_RAM_DAMAGE_PER_FRAME,
+            opponent: MAX_INTEGRITY,
+        });
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        app.insert_resource(surges);
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let integrity = app.world.resource::<VehicleIntegrity>();
+        assert_near(integrity.player, 0.0);
     }
 
     #[test]
