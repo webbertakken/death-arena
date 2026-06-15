@@ -133,6 +133,25 @@ const _: () = assert!(SHUTDOWN_BOUNTY_PER_STREAK_STEP > 0);
 /// bonuses respect.
 const _: () =
     assert!(SHUTDOWN_MAX_STREAK_STEPS * SHUTDOWN_BOUNTY_PER_STREAK_STEP < CAPTURE_CASH_BOUNTY);
+/// Cash a team banks for drawing first blood: the round's opening wreck.
+///
+/// The classic arcade "first blood" reward, the opening-kill payday. Where every
+/// other wreck bonus prices an *ongoing* situation, a rampage
+/// ([`WRECK_STREAK_BONUS`]), the capture leader ([`most_wanted_wreck_bonus`]), a
+/// flag carrier ([`carrier_takedown_wreck_bonus`]), or a run being ended
+/// ([`shutdown_wreck_bonus`]), this rewards being the side that gets stuck in
+/// first, so the opening of a round is a scramble for the kill rather than a tame
+/// lap farming pickups. Paid once per round, on the very first wreck, on top of
+/// the base [`WRECK_CASH_BOUNTY`] and any other bonus that frame. A simultaneous
+/// double wreck on the opening frame pays both sides, mirroring how the base
+/// bounty and rampage both restart for each team at once.
+pub const FIRST_BLOOD_CASH_BONUS: u32 = 100;
+/// First blood must be a real payday, not a token, enforced at compile time.
+const _: () = assert!(FIRST_BLOOD_CASH_BONUS > 0);
+/// Drawing first blood must never out-earn scoring a capture, enforced at compile
+/// time, so the opening-kill reward never eclipses the objective, mirroring the
+/// ceiling every other wreck bonus respects.
+const _: () = assert!(FIRST_BLOOD_CASH_BONUS < CAPTURE_CASH_BOUNTY);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -752,6 +771,21 @@ pub const fn shutdown_wreck_bonus(victim_streak: u32) -> u32 {
     capped * SHUTDOWN_BOUNTY_PER_STREAK_STEP
 }
 
+/// Cash bonus a team banks for drawing first blood by wrecking an enemy car.
+///
+/// `available` is whether the round's first blood is still unclaimed, `dealt_wreck`
+/// whether this team ground an enemy car down to a full wreck this frame. The
+/// [`FIRST_BLOOD_CASH_BONUS`] is paid only on the opening wreck of the round; once
+/// drawn it is spent, so every later wreck pays nothing extra here.
+#[must_use]
+pub const fn first_blood_wreck_bonus(available: bool, dealt_wreck: bool) -> u32 {
+    if available && dealt_wreck {
+        FIRST_BLOOD_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Every cash reward a frame's wrecks pay each team, with the bonus breakdown
 /// preserved for logging.
 ///
@@ -779,17 +813,23 @@ pub struct WreckBounties {
     /// Shutdown bonus (for ending the player team's rampage) folded into
     /// `opponent`.
     pub opponent_shutdown: u32,
+    /// First-blood bonus (for the round's opening wreck) folded into `player`.
+    pub player_first_blood: u32,
+    /// First-blood bonus (for the round's opening wreck) folded into `opponent`.
+    pub opponent_first_blood: u32,
 }
 
 /// Resolves every cash reward a frame's wrecks pay: the rampage streak payout,
-/// the most-wanted leader bonus, the carrier-takedown bonus, and the shutdown
-/// bonus for ending an enemy rampage.
+/// the most-wanted leader bonus, the carrier-takedown bonus, the shutdown bonus
+/// for ending an enemy rampage, and the first-blood bonus for the opening wreck.
 ///
 /// The player team deals a wreck when the opponents fall (and vice versa), so it
 /// collects on the opponents' capture lead, on a wrecked opponent carrier, and on
 /// ending the opponents' rampage.
 /// `player_was_carrying`/`opponent_was_carrying` say whether each team had a car
-/// hauling the enemy flag the frame it fell. Bonuses are folded into the per-team
+/// hauling the enemy flag the frame it fell. `first_blood_available` is whether
+/// the round's opening wreck is still up for grabs; when it is, whichever side(s)
+/// deal a wreck this frame draw first blood. Bonuses are folded into the per-team
 /// totals and also returned individually for the wreck log.
 #[must_use]
 pub const fn resolve_wreck_bounties(
@@ -798,6 +838,7 @@ pub const fn resolve_wreck_bounties(
     captures: CaptureScore,
     player_was_carrying: bool,
     opponent_was_carrying: bool,
+    first_blood_available: bool,
 ) -> WreckBounties {
     let payout = resolve_wreck_streaks(before_streaks, wrecks);
 
@@ -837,22 +878,32 @@ pub const fn resolve_wreck_bounties(
         0
     };
 
+    // The opening wreck of the round draws first blood for whichever side dealt
+    // it: a wrecked opponent means the player team landed the kill, and vice
+    // versa. A simultaneous double wreck pays both, since each dealt a wreck.
+    let player_first_blood = first_blood_wreck_bonus(first_blood_available, wrecks.opponent);
+    let opponent_first_blood = first_blood_wreck_bonus(first_blood_available, wrecks.player);
+
     WreckBounties {
         streaks: payout.streaks,
         player: payout.player_bounty
             + player_most_wanted
             + player_carrier_takedown
-            + player_shutdown,
+            + player_shutdown
+            + player_first_blood,
         opponent: payout.opponent_bounty
             + opponent_most_wanted
             + opponent_carrier_takedown
-            + opponent_shutdown,
+            + opponent_shutdown
+            + opponent_first_blood,
         player_most_wanted,
         opponent_most_wanted,
         player_carrier_takedown,
         opponent_carrier_takedown,
         player_shutdown,
         opponent_shutdown,
+        player_first_blood,
+        opponent_first_blood,
     }
 }
 
@@ -1004,6 +1055,16 @@ impl WreckSurges {
         self.opponent_frames = self.opponent_frames.saturating_sub(1);
     }
 }
+
+/// Tracks whether first blood has been drawn in the current round.
+///
+/// First blood is the round's opening wreck, so its [`FIRST_BLOOD_CASH_BONUS`] is
+/// paid exactly once. This latch flips the frame any wreck lands while it is still
+/// unclaimed and resets when a fresh match begins, mirroring
+/// [`crate::gameplay::ctf::MatchPursePaid`]: a one-shot per-round flag read by its
+/// own system rather than diffed at each award site.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstBloodClaimed(pub bool);
 
 /// Maps a durability value onto the linear speed penalty it imposes.
 fn integrity_speed_multiplier(integrity: f32) -> f32 {
@@ -1854,6 +1915,37 @@ fn drop_wrecked_carriers_flags(
     }
 }
 
+/// Logs the full bounty breakdown for any frame that produced a wreck.
+///
+/// A quiet frame logs nothing; otherwise it attributes every reward each team
+/// banked, including the first-blood opening-kill bonus, so the wreck economy is
+/// auditable from the logs alone.
+fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
+    if !wrecks.any() {
+        return;
+    }
+    info!(
+        "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
+         most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
+         opponent={}; shutdown bonus player={} opponent={}; first-blood bonus player={} \
+         opponent={}; banking player_bounty={} opponent_bounty={}",
+        wrecks.player,
+        wrecks.opponent,
+        bounties.streaks.player,
+        bounties.streaks.opponent,
+        bounties.player_most_wanted,
+        bounties.opponent_most_wanted,
+        bounties.player_carrier_takedown,
+        bounties.opponent_carrier_takedown,
+        bounties.player_shutdown,
+        bounties.opponent_shutdown,
+        bounties.player_first_blood,
+        bounties.opponent_first_blood,
+        bounties.player,
+        bounties.opponent,
+    );
+}
+
 /// Wears down both teams whenever their cars are trading paint, and pays a
 /// wreck bounty to whichever team grinds an enemy down to zero this frame.
 #[allow(clippy::too_many_arguments)]
@@ -1866,6 +1958,7 @@ pub fn ram_damage_system(
     mut wreck_streaks: Option<ResMut<WreckStreaks>>,
     mut wreck_stuns: Option<ResMut<WreckStuns>>,
     mut wreck_surges: Option<ResMut<WreckSurges>>,
+    mut first_blood: Option<ResMut<FirstBloodClaimed>>,
     mut score: Option<ResMut<Score>>,
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
@@ -1952,37 +2045,27 @@ pub fn ram_damage_system(
     // so they still reflect who was actually hauling when the wreck landed.
     let before_streaks = wreck_streaks.as_deref().copied().unwrap_or_default();
     let captures = captures.as_deref().copied().unwrap_or_default();
+    // First blood is the round's opening wreck: available only while its latch is
+    // present and unclaimed. An absent latch leaves the bonus off, mirroring how
+    // every other optional combat resource degrades when missing.
+    let first_blood_available = first_blood.as_deref().is_some_and(|claimed| !claimed.0);
     let bounties = resolve_wreck_bounties(
         before_streaks,
         wrecks,
         captures,
         team_was_carrying(&cars, AiTeam::Blue),
         team_was_carrying(&cars, AiTeam::Red),
+        first_blood_available,
     );
     if let Some(streaks) = wreck_streaks.as_deref_mut() {
         *streaks = bounties.streaks;
     }
-
-    if wrecks.any() {
-        info!(
-            "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
-             most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
-             opponent={}; shutdown bonus player={} opponent={}; banking player_bounty={} \
-             opponent_bounty={}",
-            wrecks.player,
-            wrecks.opponent,
-            bounties.streaks.player,
-            bounties.streaks.opponent,
-            bounties.player_most_wanted,
-            bounties.opponent_most_wanted,
-            bounties.player_carrier_takedown,
-            bounties.opponent_carrier_takedown,
-            bounties.player_shutdown,
-            bounties.opponent_shutdown,
-            bounties.player,
-            bounties.opponent,
-        );
+    // Spend the round's first blood the frame it is drawn, so it pays exactly once.
+    if let Some(claimed) = first_blood.as_deref_mut() {
+        claimed.0 |= first_blood_available && wrecks.any();
     }
+
+    log_wreck_bounties(wrecks, bounties);
 
     // The wrecking team banks the bounty: a wrecked opponent pays the player
     // team, a wrecked player team pays the opponents.
@@ -2063,6 +2146,10 @@ fn reset_wreck_surges(mut surges: ResMut<WreckSurges>) {
     *surges = WreckSurges::default();
 }
 
+fn reset_first_blood(mut first_blood: ResMut<FirstBloodClaimed>) {
+    *first_blood = FirstBloodClaimed::default();
+}
+
 /// Winds every team's wreck spin-out down by one frame.
 ///
 /// Runs before [`ram_damage_system`] each frame so a spin-out triggered this
@@ -2088,12 +2175,14 @@ impl Plugin for CombatPlugin {
             .init_resource::<WreckStreaks>()
             .init_resource::<WreckStuns>()
             .init_resource::<WreckSurges>()
+            .init_resource::<FirstBloodClaimed>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
                     .with_system(reset_vehicle_integrity)
                     .with_system(reset_wreck_streaks)
                     .with_system(reset_wreck_stuns)
-                    .with_system(reset_wreck_surges),
+                    .with_system(reset_wreck_surges)
+                    .with_system(reset_first_blood),
             )
             .add_system(wreck_stun_decay_system.before(ram_damage_system))
             .add_system(wreck_surge_decay_system.before(ram_damage_system))
@@ -4058,6 +4147,82 @@ mod tests {
     }
 
     #[test]
+    fn system_draws_first_blood_for_the_opening_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<FirstBloodClaimed>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS,
+            "the round's opening wreck banks first blood on top of the base bounty"
+        );
+        assert_eq!(score.wrecks, 1, "first blood rides the same wreck");
+        assert!(
+            app.world.resource::<FirstBloodClaimed>().0,
+            "drawing first blood spends it for the rest of the round"
+        );
+    }
+
+    #[test]
+    fn system_draws_first_blood_only_once_per_round() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        // First blood has already been drawn earlier this round.
+        app.insert_resource(FirstBloodClaimed(true));
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            WRECK_CASH_BOUNTY,
+            "a wreck after first blood is spent pays only the base bounty"
+        );
+    }
+
+    #[test]
+    fn entering_a_match_clears_first_blood_for_the_new_round() {
+        let mut app = App::new();
+        app.insert_resource(FirstBloodClaimed(true));
+        app.add_system(reset_first_blood);
+
+        app.update();
+
+        assert!(
+            !app.world.resource::<FirstBloodClaimed>().0,
+            "a fresh round must put first blood back up for grabs"
+        );
+    }
+
+    #[test]
     fn system_pays_a_most_wanted_bonus_for_wrecking_the_capture_leader() {
         let mut app = App::new();
         app.insert_resource(VehicleIntegrity {
@@ -4520,6 +4685,7 @@ mod tests {
             CaptureScore::default(),
             false,
             false,
+            false,
         );
 
         assert_eq!(bounties.player_shutdown, shutdown_wreck_bonus(3));
@@ -4545,6 +4711,7 @@ mod tests {
             CaptureScore::default(),
             false,
             false,
+            false,
         );
 
         assert_eq!(bounties.player_shutdown, 0);
@@ -4568,6 +4735,7 @@ mod tests {
             },
             false,
             true,
+            false,
         );
 
         assert_eq!(bounties.player_most_wanted, most_wanted_wreck_bonus(2, 0));
@@ -4598,11 +4766,124 @@ mod tests {
             CaptureScore::default(),
             false,
             false,
+            false,
         );
 
         assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
         assert_eq!(bounties.player_most_wanted, 0);
         assert_eq!(bounties.player_carrier_takedown, 0);
+    }
+
+    #[test]
+    fn first_blood_pays_the_opening_wreck() {
+        assert_eq!(
+            first_blood_wreck_bonus(true, true),
+            FIRST_BLOOD_CASH_BONUS,
+            "dealing the round's first wreck while first blood is up draws it"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_once_spent() {
+        assert_eq!(
+            first_blood_wreck_bonus(false, true),
+            0,
+            "first blood is spent once drawn, so a later wreck pays nothing extra"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            first_blood_wreck_bonus(true, false),
+            0,
+            "first blood needs an actual wreck to be drawn"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_when_spent_and_no_wreck() {
+        assert_eq!(first_blood_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn drawing_first_blood_is_a_real_payday_below_a_capture() {
+        let bonus = first_blood_wreck_bonus(true, true);
+        assert!(bonus > 0, "first blood must be a real opening-kill payday");
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the opening-kill reward must never eclipse scoring a capture"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_first_blood_on_the_opening_wreck() {
+        // The player team lands the round's opening wreck while first blood is up.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            true,
+        );
+
+        assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS,
+            "the opening wreck folds first blood into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_first_blood, 0,
+            "the side that fell drew no first blood"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_no_first_blood_once_spent() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(bounties.player_first_blood, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_first_blood_for_both_on_a_double_opening_wreck() {
+        // Both teams are ground out on the same opening frame: each dealt a wreck,
+        // so each draws first blood, mirroring how the base bounty restarts for both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            true,
+        );
+
+        assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(bounties.opponent_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(
+            bounties.opponent,
+            WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS
+        );
     }
 
     #[test]
