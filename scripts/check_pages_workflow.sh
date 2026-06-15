@@ -38,3 +38,23 @@ Use: bash scripts/check_pages_dist.sh
 ERROR
   exit 1
 fi
+
+# Trunk must be installed from a pinned release binary, never a third-party action
+# resolving "latest" via the GitHub API: that lookup intermittently returns an HTML
+# error page instead of JSON and breaks the deploy with no code change.
+if grep -Eq "jetli/trunk-action|version:\s*'?latest'?" "${workflow}"; then
+  cat >&2 <<'ERROR'
+Pages workflow must not install Trunk via an action resolving "latest".
+That GitHub API lookup is flaky (HTML instead of JSON) and breaks the deploy.
+Pin a release binary instead, e.g. TRUNK_VERSION: x.y.z with a curl download.
+ERROR
+  exit 1
+fi
+
+if ! grep -Eq "TRUNK_VERSION:\s*[0-9]+\.[0-9]+\.[0-9]+" "${workflow}"; then
+  cat >&2 <<'ERROR'
+Pages workflow must pin the Trunk version it installs.
+Set an explicit TRUNK_VERSION: x.y.z used by the curl download step.
+ERROR
+  exit 1
+fi

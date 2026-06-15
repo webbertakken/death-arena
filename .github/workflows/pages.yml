@@ -67,11 +67,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      # Generate build for web-target.
+      # Generate build for web-target. Install Trunk from a pinned release binary
+      # rather than a third-party action resolving "latest" via the GitHub API:
+      # that lookup intermittently returns an HTML error page instead of JSON and
+      # breaks the deploy. A pinned download is reproducible and mirrors the
+      # actionlint install in the CI workflow.
       - name: Install trunk
-        uses: jetli/trunk-action@v0.5.0
-        with:
-          version: 'latest'
+        env:
+          TRUNK_VERSION: 0.21.14
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/trunk.tar.gz
+          tar -xzf /tmp/trunk.tar.gz -C /tmp trunk
+          sudo install -m 0755 /tmp/trunk /usr/local/bin/trunk
+          trunk --version
 
       - name: Build Release
         run: |
