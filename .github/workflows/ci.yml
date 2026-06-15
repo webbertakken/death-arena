@@ -253,6 +253,9 @@ jobs:
       - name: Check temporary-fix markers (no TODO/FIXME/HACK/XXX in source)
         run: bash scripts/check_temporary_fix_markers.sh
 
+      - name: Check duplicate comment blocks (no comment pasted twice in a row)
+        run: bash scripts/check_duplicate_comment_blocks.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:

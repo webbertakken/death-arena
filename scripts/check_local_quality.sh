@@ -13,6 +13,7 @@ bash scripts/check_rust_suppressions.sh
 bash scripts/check_never_ship_lints.sh
 bash scripts/check_debug_leftovers.sh
 bash scripts/check_temporary_fix_markers.sh
+bash scripts/check_duplicate_comment_blocks.sh
 bash scripts/check_unused_dependencies.sh
 bash scripts/check_wasm_rng_backend.sh
 cargo fmt --all -- --check

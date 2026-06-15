@@ -660,9 +660,6 @@ pub fn finish_off_car(
     // In the closing stretch a trailing team chases the clutch wreck that can win
     // the decider, so it presses a merely worn leader, not only a badly reeling
     // one. Every other situation holds to the standard reeling gate.
-    // In the closing stretch a trailing team chases the clutch wreck that can win
-    // the decider, so it presses a merely worn leader, not only a badly reeling
-    // one. Every other situation holds to the standard reeling gate.
     let reeling_ceiling = if closing_time && behind_on_captures {
         CLUTCH_FINISH_OFF_ENEMY_INTEGRITY_FRACTION
     } else {
