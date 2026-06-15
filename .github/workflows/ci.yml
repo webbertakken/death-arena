@@ -208,6 +208,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep shellcheck
 
+      # shfmt is not in apt, so pin a release binary like actionlint below. It
+      # backs the formatting half of scripts/check_shell_scripts.sh (shellcheck
+      # = correctness, shfmt = style), and that guard fails loudly if it is
+      # missing, so this install must stay ahead of the guard step.
+      - name: Install shfmt
+        env:
+          SHFMT_VERSION: 3.13.1
+        run: |
+          curl -fsSL "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64" -o /tmp/shfmt
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+          shfmt --version
+
       - name: Validate Pages workflow
         run: bash scripts/check_pages_workflow.sh
 

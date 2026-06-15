@@ -21,9 +21,9 @@ fi
 
 # Pull crate-level allow lines, strip clippy:: lint names, then look for a bare
 # rustc unused/dead_code lint left behind.
-matches="$(rg --line-number --color never '#!\[allow\(' "${root_files[@]}" \
-  | sed -E 's/clippy::[a-z_]+//g' \
-  | rg --color never '\b(unused[a-z_]*|dead_code)\b' || true)"
+matches="$(rg --line-number --color never '#!\[allow\(' "${root_files[@]}" |
+  sed -E 's/clippy::[a-z_]+//g' |
+  rg --color never '\b(unused[a-z_]*|dead_code)\b' || true)"
 
 if [[ -n "${matches}" ]]; then
   cat >&2 <<ERROR

@@ -16,6 +16,14 @@ ERROR
   exit 1
 fi
 
+if ! command -v shfmt >/dev/null 2>&1; then
+  cat >&2 <<'ERROR'
+shfmt is required to check shell-script formatting but was not found on PATH.
+Install it (e.g. mise use -g shfmt, or download a pinned release binary) and retry.
+ERROR
+  exit 1
+fi
+
 for script in "${shell_scripts[@]}"; do
   bash -n "${script}"
 
@@ -41,5 +49,18 @@ done
 # see. Run at shellcheck's default (strictest) severity so even info- and
 # style-level findings gate; the tree is clean at this level.
 shellcheck -- "${shell_scripts[@]}"
+
+# Formatting: enforce one canonical shell style (shfmt's default) across every
+# tracked script, the shell-side mirror of `cargo fmt --all -- --check` for Rust.
+# The static analysis above catches correctness bugs; shfmt catches drift in
+# indentation, pipe-continuation and spacing so a review never argues style. The
+# diff is printed so a failing run shows exactly what to fix.
+if ! shfmt -d -- "${shell_scripts[@]}"; then
+  cat >&2 <<'ERROR'
+Shell scripts are not shfmt-formatted (see the diff above).
+Run: shfmt -w $(git ls-files '*.sh')
+ERROR
+  exit 1
+fi
 
 echo "Checked ${#shell_scripts[@]} shell scripts."
