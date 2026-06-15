@@ -4,10 +4,22 @@ use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
+use crate::gameplay::slipstream::{slipstream_speed_multiplier, LeadingCar};
+use crate::gameplay::virtual_player::VirtualPlayer;
+use bevy::math::Vec3Swizzles;
 use bevy::prelude::*;
 
 type FilterFrontLeftWheel = (Without<Player>, Without<FrontRightWheel>);
 type FilterFrontRightWheel = (Without<Player>, Without<FrontLeftWheel>);
+/// Read-only filter for the other cars whose wake the human can draft. The
+/// `Without` bounds make the query provably disjoint from the mutable `Transform`
+/// access of the player and wheel queries, so the borrow checker is satisfied.
+type OtherCarTransform = (
+    With<VirtualPlayer>,
+    Without<Player>,
+    Without<FrontLeftWheel>,
+    Without<FrontRightWheel>,
+);
 
 /// Optional per-match resources the player movement system reads, bundled into
 /// one system parameter to keep the signature legible (mirrors the CTF systems).
@@ -26,6 +38,7 @@ pub fn car_movement_system(
     context: PlayerMovementContext,
     mut query: Query<(Entity, &Player, &mut Transform)>,
     flag_query: Query<&CtfFlag>,
+    other_car_query: Query<&Transform, OtherCarTransform>,
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
@@ -68,13 +81,32 @@ pub fn car_movement_system(
         .iter()
         .any(|flag| flag.holder == Some(player_entity));
     let carry_multiplier = flag_carrier_speed_multiplier(carrying_flag);
+    // A flag carrier never drafts: the bulky flag spoils the tow, so the slipstream
+    // can never speed a flag run home, mirroring the field in the drive system.
+    let draft_multiplier = if carrying_flag {
+        1.0
+    } else {
+        let leaders: Vec<LeadingCar> = other_car_query
+            .iter()
+            .map(|other| LeadingCar {
+                position: other.translation.xy(),
+                heading: (other.rotation * Vec3::Y).xy(),
+            })
+            .collect();
+        slipstream_speed_multiplier(
+            transform.translation.xy(),
+            (transform.rotation * Vec3::Y).xy(),
+            &leaders,
+        )
+    };
     let speed_multiplier = player.engine_max_speed_multiplier
         * nitro_multiplier
         * integrity_multiplier
         * stun_multiplier
         * surge_multiplier
         * sabotage_multiplier
-        * carry_multiplier;
+        * carry_multiplier
+        * draft_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 

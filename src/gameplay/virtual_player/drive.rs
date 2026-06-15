@@ -5,6 +5,7 @@ use crate::gameplay::ctf::{
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
+use crate::gameplay::slipstream::{slipstream_speed_multiplier, LeadingCar};
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
     finish_off_aim, finish_off_car, lead_defence_car, next_waypoint, pincer_partner,
@@ -201,6 +202,8 @@ pub fn virtual_player_drive_system(
         match_clock.as_deref(),
     );
     let teammate_positions = virtual_player_positions(&query);
+    // Every car's tail line this frame, so a driver can catch a leader's slipstream.
+    let draft_lines = car_draft_lines(&query, &player_query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
         &assigned_ctf_targets,
@@ -259,8 +262,8 @@ pub fn virtual_player_drive_system(
 
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
-        let carry_multiplier =
-            flag_carrier_speed_multiplier(carries_enemy_flag(entity, ai.team, &flags));
+        let carry_and_draft =
+            carry_and_draft_multiplier(entity, ai.team, position, forward, &flags, &draft_lines);
         let movement_distance = intent.throttle
             * ai.movement_speed
             * team_movement_multiplier(
@@ -271,7 +274,7 @@ pub fn virtual_player_drive_system(
                 wreck_surges.as_deref(),
                 sabotage_effects.as_deref(),
             )
-            * carry_multiplier
+            * carry_and_draft
             * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
@@ -345,6 +348,74 @@ fn virtual_player_positions(
             (entity, virtual_player.team, transform.translation.xy())
         })
         .collect()
+}
+
+/// Every car's tail line (position and heading) this frame: the field plus the
+/// human, so any driver can catch the slipstream of a car ahead of it regardless
+/// of team. Gathered immutably before the drive loop, mirroring
+/// [`virtual_player_positions`].
+fn car_draft_lines(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    player_query: &Query<(Entity, &Transform), HumanPlayerTransform>,
+) -> Vec<(Entity, Vec2, Vec2)> {
+    let mut lines: Vec<(Entity, Vec2, Vec2)> = query
+        .iter()
+        .map(|(entity, _, transform)| {
+            (
+                entity,
+                transform.translation.xy(),
+                (transform.rotation * Vec3::Y).xy(),
+            )
+        })
+        .collect();
+    if let Ok((entity, transform)) = player_query.get_single() {
+        lines.push((
+            entity,
+            transform.translation.xy(),
+            (transform.rotation * Vec3::Y).xy(),
+        ));
+    }
+    lines
+}
+
+/// Combined per-car speed multiplier from the flag-carry tax and any slipstream
+/// tow, computing the carrier state once. A flag carrier pays the carry tax and
+/// earns no tow, so the slipstream can never speed a flag run home.
+fn carry_and_draft_multiplier(
+    entity: Entity,
+    team: AiTeam,
+    position: Vec2,
+    heading: Vec2,
+    flags: &[FlagTarget],
+    draft_lines: &[(Entity, Vec2, Vec2)],
+) -> f32 {
+    let is_carrier = carries_enemy_flag(entity, team, flags);
+    flag_carrier_speed_multiplier(is_carrier)
+        * car_draft_multiplier(is_carrier, entity, position, heading, draft_lines)
+}
+
+/// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`
+/// when it is a flag carrier (the flag spoils the draft, keeping the tow off a
+/// flag run home). Leaders are every car's tail line bar its own.
+fn car_draft_multiplier(
+    is_carrier: bool,
+    entity: Entity,
+    position: Vec2,
+    heading: Vec2,
+    draft_lines: &[(Entity, Vec2, Vec2)],
+) -> f32 {
+    if is_carrier {
+        return 1.0;
+    }
+    let leaders: Vec<LeadingCar> = draft_lines
+        .iter()
+        .filter(|(candidate, _, _)| *candidate != entity)
+        .map(|(_, leader_position, leader_heading)| LeadingCar {
+            position: *leader_position,
+            heading: *leader_heading,
+        })
+        .collect();
+    slipstream_speed_multiplier(position, heading, &leaders)
 }
 
 fn teammate_spacing_target(
@@ -2116,6 +2187,88 @@ mod tests {
         assert!(
             (carrier_y - free_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
             "carrier should drive at the flag-carrier multiplier: free={free_y}, carrier={carrier_y}"
+        );
+    }
+
+    #[test]
+    fn a_virtual_player_drafts_behind_a_car_running_ahead() {
+        // Lone control: with no car ahead there is no wake to catch.
+        let mut lone_app = app_with_system();
+        let lone = spawn_ai_at(
+            &mut lone_app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        lone_app.update();
+        let lone_y = lone_app.world.get::<Transform>(lone).unwrap().translation.y;
+
+        // Drafting: a leader sits directly ahead on the same heading, so the
+        // trailing car catches its slipstream and covers more ground in the frame.
+        let mut draft_app = app_with_system();
+        spawn_ai_at(
+            &mut draft_app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 200.0, 4.0),
+        );
+        let trailing = spawn_ai_at(
+            &mut draft_app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        draft_app.update();
+        let drafting_y = draft_app
+            .world
+            .get::<Transform>(trailing)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            drafting_y > lone_y,
+            "a car tucked in behind a leader should be towed further: lone={lone_y}, \
+             drafting={drafting_y}"
+        );
+    }
+
+    #[test]
+    fn a_flag_carrier_catches_no_slipstream() {
+        // A red carrier running the blue flag home, measured with and without a
+        // team-mate planted directly on its run-home line. A non-carrier in that
+        // slot would be towed, but the flag spoils the draft, so the carrier covers
+        // the identical ground either way: the slipstream can never speed a flag run.
+        fn carrier_y(with_leader: bool) -> f32 {
+            let mut app = app_with_system();
+            let carrier = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::new(0.0, 1000.0),
+                Vec3::new(0.0, 1000.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, -1000.0),
+                Vec3::new(0.0, -1000.0, 4.0),
+                Some(carrier),
+            );
+            if with_leader {
+                spawn_ai_at(
+                    &mut app,
+                    vec![Vec2::new(0.0, 1000.0)],
+                    Vec3::new(0.0, 200.0, 4.0),
+                );
+            }
+            app.update();
+            app.world.get::<Transform>(carrier).unwrap().translation.y
+        }
+
+        let alone = carrier_y(false);
+        let with_leader = carrier_y(true);
+        assert!(
+            (alone - with_leader).abs() <= 1e-3,
+            "a flag carrier must catch no slipstream: alone={alone}, with_leader={with_leader}"
         );
     }
 

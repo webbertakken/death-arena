@@ -7,6 +7,8 @@ mod tests {
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
     use crate::gameplay::player::movement::car_movement_system;
     use crate::gameplay::player::Player;
+    use crate::gameplay::virtual_player::ai::AiTeam;
+    use crate::gameplay::virtual_player::VirtualPlayer;
     use bevy::prelude::*;
 
     fn setup_test_app() -> App {
@@ -49,6 +51,26 @@ mod tests {
         // This means the front_left_wheel entity must NOT have a Player component and NOT have a FrontRightWheel component.
 
         (left_wheel_id, right_wheel_id)
+    }
+
+    /// Spawns a virtual car the human can draft behind, facing straight up the
+    /// arena (identity rotation) so its wake points along `+Y`.
+    fn spawn_leading_car(app: &mut App, translation: Vec3) -> Entity {
+        app.world
+            .spawn((
+                VirtualPlayer {
+                    team: AiTeam::Red,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints: vec![Vec2::new(0.0, 1000.0)],
+                    current_waypoint: 0,
+                    player_pursuit_radius: 500.0,
+                    pickup_pursuit_radius: 450.0,
+                    corner_throttle: 0.3,
+                },
+                Transform::from_translation(translation),
+            ))
+            .id()
     }
 
     #[test]
@@ -154,6 +176,75 @@ mod tests {
         assert!(
             boosted_y > normal_y,
             "normal={normal_y}, boosted={boosted_y}"
+        );
+    }
+
+    #[test]
+    fn drafting_behind_a_car_ahead_increases_forward_distance() {
+        // Control: no car ahead, so there is no wake to catch.
+        let mut lone_app = setup_test_app();
+        let lone = spawn_player(&mut lone_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut lone_app, lone);
+        lone_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        lone_app.update();
+        let lone_y = lone_app.world.get::<Transform>(lone).unwrap().translation.y;
+
+        // Drafting: a virtual car sits directly ahead on the same heading, so the
+        // human catches its slipstream and is towed further in the frame.
+        let mut draft_app = setup_test_app();
+        let drafter = spawn_player(&mut draft_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut draft_app, drafter);
+        spawn_leading_car(&mut draft_app, Vec3::new(0.0, 200.0, 4.0));
+        draft_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        draft_app.update();
+        let drafting_y = draft_app
+            .world
+            .get::<Transform>(drafter)
+            .unwrap()
+            .translation
+            .y;
+
+        assert!(
+            drafting_y > lone_y,
+            "drafting should tow the human further: lone={lone_y}, drafting={drafting_y}"
+        );
+    }
+
+    #[test]
+    fn a_flag_carrying_human_catches_no_slipstream() {
+        // The human hauling a flag, measured with and without a virtual car planted
+        // directly ahead. The flag spoils the draft, so the human covers the
+        // identical ground either way: the slipstream never speeds a flag run.
+        fn carrier_y(with_leader: bool) -> f32 {
+            let mut app = setup_test_app();
+            let player = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+            spawn_wheels(&mut app, player);
+            app.world.spawn(CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(0.0, -1000.0),
+                holder: Some(player),
+            });
+            if with_leader {
+                spawn_leading_car(&mut app, Vec3::new(0.0, 200.0, 4.0));
+            }
+            app.world
+                .resource_mut::<Input<KeyCode>>()
+                .press(KeyCode::Up);
+            app.update();
+            app.world.get::<Transform>(player).unwrap().translation.y
+        }
+
+        let alone = carrier_y(false);
+        let with_leader = carrier_y(true);
+        assert!(
+            (alone - with_leader).abs() <= 1e-3,
+            "a flag-carrying human must catch no slipstream: alone={alone}, with_leader={with_leader}"
         );
     }
 

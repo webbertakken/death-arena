@@ -14,6 +14,7 @@ mod ctf;
 mod main;
 mod pickup;
 mod player;
+mod slipstream;
 mod virtual_player;
 
 pub struct GameplayPlugins;
