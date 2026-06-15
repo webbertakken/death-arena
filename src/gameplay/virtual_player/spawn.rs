@@ -33,32 +33,41 @@ struct DriverProfile {
     /// more eagerly but abandons the patrol lap and the flag objective sooner, so
     /// it trades discipline for aggression rather than being a strict upgrade.
     player_pursuit_radius: f32,
+    /// World-space radius within which the driver breaks off to scavenge a
+    /// trackside pickup. The personality's greed axis: a wider radius detours for
+    /// loot more eagerly but abandons the patrol lap and the flag objective sooner,
+    /// so it trades discipline for greed rather than being a strict upgrade.
+    pickup_pursuit_radius: f32,
 }
 
 impl DriverProfile {
     /// Balanced baseline driver, preserving the original uniform 420 m/s,
-    /// 300 deg/s, 500-unit-pursuit feel. The neutral all-rounder every other
-    /// archetype is measured against, and the filler opposite the human player so
-    /// the AI rosters stay perfectly mirrored.
+    /// 300 deg/s, 500-unit-pursuit, 450-unit-greed feel. The neutral all-rounder
+    /// every other archetype is measured against, and the filler opposite the human
+    /// player so the AI rosters stay perfectly mirrored.
     const ALL_ROUNDER: Self = Self {
         movement_speed: 420.0,
         turn_degrees: 300.0,
         player_pursuit_radius: 500.0,
+        pickup_pursuit_radius: 450.0,
     };
     /// Straight-line specialist: quicker down the open lane, lazier through a
-    /// corner, and a hot-headed hunter that runs the player down from further out.
+    /// corner, a hot-headed hunter that runs the player down from further out, and
+    /// the greediest scavenger, breaking off for loot from the widest range.
     const SPRINTER: Self = Self {
         movement_speed: 450.0,
         turn_degrees: 280.0,
         player_pursuit_radius: 580.0,
+        pickup_pursuit_radius: 520.0,
     };
-    /// Cornering specialist: sharper turn-in, a touch slower flat out, and the
-    /// most disciplined of the three, staying on its line until the player is
-    /// genuinely close.
+    /// Cornering specialist: sharper turn-in, a touch slower flat out, the most
+    /// disciplined of the three, staying on its line until the player is genuinely
+    /// close, and the least greedy, leaving distant pickups for the objective.
     const TECHNICIAN: Self = Self {
         movement_speed: 390.0,
         turn_degrees: 320.0,
         player_pursuit_radius: 420.0,
+        pickup_pursuit_radius: 380.0,
     };
 }
 
@@ -103,6 +112,28 @@ const _: () = assert!(
 const _: () = assert!(
     DriverProfile::SPRINTER.player_pursuit_radius <= 640.0
         && DriverProfile::TECHNICIAN.player_pursuit_radius >= 360.0
+);
+/// Pickup greed is the personality's fourth trade-off axis and lines up with the
+/// others: the impulsive sprinter that struggles in corners is also the keenest
+/// to peel off and scavenge a bag, while the disciplined technician scavenges most
+/// conservatively and the all-rounder sits between. More greed is bought with less
+/// objective discipline, never a strict upgrade, enforced at compile time so the
+/// roster can never drift into an archetype that scavenges wider *and* corners
+/// better.
+const _: () = assert!(
+    DriverProfile::SPRINTER.pickup_pursuit_radius
+        > DriverProfile::ALL_ROUNDER.pickup_pursuit_radius
+        && DriverProfile::ALL_ROUNDER.pickup_pursuit_radius
+            > DriverProfile::TECHNICIAN.pickup_pursuit_radius
+);
+/// Greed stays in a tight band around the 450-unit baseline (the former uniform
+/// global) so personality is felt without breaking the tuned pickup-contest
+/// balance: even the greediest sprinter never scavenges from absurd range, and
+/// even the most disciplined technician never ignores a bag it drives right past.
+/// Enforced at compile time.
+const _: () = assert!(
+    DriverProfile::SPRINTER.pickup_pursuit_radius <= 580.0
+        && DriverProfile::TECHNICIAN.pickup_pursuit_radius >= 340.0
 );
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,6 +227,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 waypoints: route.clone(),
                 current_waypoint: spawn.start_waypoint,
                 player_pursuit_radius: spawn.profile.player_pursuit_radius,
+                pickup_pursuit_radius: spawn.profile.pickup_pursuit_radius,
             },
             SpriteBundle {
                 texture: chassis.clone(),
@@ -306,11 +338,12 @@ mod tests {
     #[test]
     fn the_all_rounder_preserves_the_original_uniform_driver() {
         // The neutral baseline keeps the pre-personality 420 m/s, 300 deg/s,
-        // 500-unit-pursuit feel, so only the sprinter and technician depart from
-        // it and the human's mirror is untouched.
+        // 500-unit-pursuit, 450-unit-greed feel, so only the sprinter and
+        // technician depart from it and the human's mirror is untouched.
         assert_near(DriverProfile::ALL_ROUNDER.movement_speed, 420.0);
         assert_near(DriverProfile::ALL_ROUNDER.turn_degrees, 300.0);
         assert_near(DriverProfile::ALL_ROUNDER.player_pursuit_radius, 500.0);
+        assert_near(DriverProfile::ALL_ROUNDER.pickup_pursuit_radius, 450.0);
     }
 
     #[test]
@@ -323,6 +356,20 @@ mod tests {
         assert!(
             sprinter > all_rounder && all_rounder > technician,
             "expected distinct hunting eagerness, got sprinter={sprinter}, \
+             all_rounder={all_rounder}, technician={technician}"
+        );
+    }
+
+    #[test]
+    fn personalities_scavenge_with_distinct_greed() {
+        // Greed is a real personality axis, not flavour text: the three archetypes
+        // each break off for a trackside pickup at a genuinely different range.
+        let sprinter = DriverProfile::SPRINTER.pickup_pursuit_radius;
+        let all_rounder = DriverProfile::ALL_ROUNDER.pickup_pursuit_radius;
+        let technician = DriverProfile::TECHNICIAN.pickup_pursuit_radius;
+        assert!(
+            sprinter > all_rounder && all_rounder > technician,
+            "expected distinct scavenging greed, got sprinter={sprinter}, \
              all_rounder={all_rounder}, technician={technician}"
         );
     }
@@ -399,6 +446,25 @@ mod tests {
         assert!(
             (blue_pursuit - red_pursuit).abs() <= f32::EPSILON,
             "aggregate player pursuit must be level: blue={blue_pursuit}, red={red_pursuit}"
+        );
+    }
+
+    #[test]
+    fn ai_rosters_balance_aggregate_pickup_pursuit_with_the_human() {
+        // The new greed axis is balanced on the same terms as speed, cornering and
+        // player pursuit: counting the human as the baseline all-rounder, neither
+        // team fields more total scavenging greed than the other, so one side is
+        // never systematically keener to peel off for loot.
+        let human = DriverProfile::ALL_ROUNDER;
+        let blue = ai_profiles(AiTeam::Blue);
+        let red = ai_profiles(AiTeam::Red);
+
+        let blue_greed: f32 =
+            blue.iter().map(|p| p.pickup_pursuit_radius).sum::<f32>() + human.pickup_pursuit_radius;
+        let red_greed: f32 = red.iter().map(|p| p.pickup_pursuit_radius).sum();
+        assert!(
+            (blue_greed - red_greed).abs() <= f32::EPSILON,
+            "aggregate pickup pursuit must be level: blue={blue_greed}, red={red_greed}"
         );
     }
 }

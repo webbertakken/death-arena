@@ -5148,6 +5148,7 @@ mod tests {
             waypoints: vec![],
             current_waypoint: 0,
             player_pursuit_radius: 0.0,
+            pickup_pursuit_radius: 0.0,
         }
     }
 }

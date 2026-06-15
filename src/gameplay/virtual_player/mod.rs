@@ -27,6 +27,14 @@ pub struct VirtualPlayer {
     /// its own eagerness: an aggressive sprinter runs the player down from further
     /// out than a disciplined technician that stays glued to its line.
     pub player_pursuit_radius: f32,
+    /// World-space radius within which this driver breaks off to scavenge a
+    /// trackside pickup. Set from the car's driving personality so each opponent
+    /// plays the pickup contest with its own greed: an impulsive sprinter detours
+    /// for loot from further out than a disciplined technician that stays on its
+    /// line. A behavioural trait, not a power stat: a wider radius scavenges more
+    /// eagerly but abandons the patrol lap and the flag objective sooner, so it
+    /// trades discipline for greed rather than being a strict upgrade.
+    pub pickup_pursuit_radius: f32,
 }
 
 #[derive(Default)]

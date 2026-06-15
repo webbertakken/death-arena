@@ -33,7 +33,11 @@ const _: () = assert!(PURSUIT_ARRIVE_RADIUS < WAYPOINT_ARRIVE_RADIUS);
 /// A ram run-down must close well inside true ram range, enforced at compile
 /// time, so the car is genuinely trading paint before it ever idles.
 const _: () = assert!(PURSUIT_ARRIVE_RADIUS < RAM_RADIUS);
-const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
+/// The human player's pickup-scavenging reach, used when deciding whether the
+/// human has a better claim on a bag than a blue teammate. Each virtual player
+/// scavenges at its own personality-driven [`VirtualPlayer::pickup_pursuit_radius`];
+/// the human has no driving personality, so it mirrors the all-rounder baseline.
+const PLAYER_PICKUP_PURSUIT_RADIUS: f32 = 450.0;
 const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
 const MIDFIELD_LANE_GUARD_FACTOR: f32 = 0.5;
 const TEAMMATE_SPACING_RADIUS: f32 = 90.0;
@@ -127,7 +131,7 @@ pub fn virtual_player_drive_system(
                 current_waypoint: ai.current_waypoint,
                 ctf_target,
                 pickups: &entity_pickups,
-                pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
+                pickup_pursuit_radius: ai.pickup_pursuit_radius,
                 player_position: player_position_for_team(ai.team, player_position),
                 player_pursuit_radius: ai.player_pursuit_radius,
                 closing_time_discipline: discipline.for_team(ai.team),
@@ -568,7 +572,7 @@ fn closest_eligible_pickup_claimant(
                     current_waypoint: ai.current_waypoint,
                     ctf_target,
                     pickups: &pickup_candidates,
-                    pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: ai.pickup_pursuit_radius,
                     player_position: player_position_for_team(ai.team, player_position),
                     player_pursuit_radius: ai.player_pursuit_radius,
                     closing_time_discipline: discipline.for_team(ai.team),
@@ -632,7 +636,7 @@ fn player_has_better_pickup_claim(
     };
 
     let player_distance_sq = player_position.distance_squared(pickup.position);
-    if player_distance_sq > PICKUP_PURSUIT_RADIUS * PICKUP_PURSUIT_RADIUS {
+    if player_distance_sq > PLAYER_PICKUP_PURSUIT_RADIUS * PLAYER_PICKUP_PURSUIT_RADIUS {
         return false;
     }
 
@@ -1280,6 +1284,11 @@ mod tests {
     /// against.
     const TEST_PURSUIT_RADIUS: f32 = 500.0;
 
+    /// Baseline pickup-scavenging radius for test fixtures: matches the all-rounder
+    /// driving personality and the former uniform global, the neutral greed every
+    /// pickup-behaviour assertion is measured against.
+    const TEST_PICKUP_PURSUIT_RADIUS: f32 = 450.0;
+
     fn spawn_ai_on_team(app: &mut App, team: AiTeam, waypoints: Vec<Vec2>) -> Entity {
         spawn_ai_with_pursuit(app, team, waypoints, TEST_PURSUIT_RADIUS)
     }
@@ -1299,6 +1308,31 @@ mod tests {
                     waypoints,
                     current_waypoint: 0,
                     player_pursuit_radius,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                },
+                Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
+            ))
+            .id()
+    }
+
+    /// Spawns a Red driver with a bespoke pickup-scavenging radius (and the
+    /// baseline player-pursuit reach), so a test can pit a greedy personality
+    /// against a disciplined one on the same pickup.
+    fn spawn_ai_with_pickup_pursuit(
+        app: &mut App,
+        waypoints: Vec<Vec2>,
+        pickup_pursuit_radius: f32,
+    ) -> Entity {
+        app.world
+            .spawn((
+                VirtualPlayer {
+                    team: AiTeam::Red,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints,
+                    current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius,
                 },
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             ))
@@ -1315,6 +1349,7 @@ mod tests {
                     waypoints,
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(translation),
             ))
@@ -2037,6 +2072,7 @@ mod tests {
                     waypoints: vec![Vec2::new(0.0, -2000.0)],
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2095,6 +2131,7 @@ mod tests {
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -500.0, 4.0)),
         ));
@@ -2143,6 +2180,7 @@ mod tests {
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
         ));
@@ -2190,6 +2228,7 @@ mod tests {
                     waypoints: vec![Vec2::new(0.0, -2000.0)],
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2272,6 +2311,7 @@ mod tests {
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -60.0, 4.0)),
         ));
@@ -2319,6 +2359,7 @@ mod tests {
                 waypoints: vec![Vec2::new(hunter_start_x, -2000.0)],
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(hunter_start_x, -300.0, 4.0)),
         ));
@@ -2388,6 +2429,7 @@ mod tests {
                     waypoints: vec![Vec2::new(BOUNDS.x, BOUNDS.y)],
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(edge),
             ))
@@ -2496,6 +2538,58 @@ mod tests {
             eager_transform.translation.x > 0.0,
             "an eager driver runs down a player within its reach, x={}",
             eager_transform.translation.x
+        );
+    }
+
+    #[test]
+    fn a_greedy_personality_scavenges_a_pickup_a_disciplined_one_ignores() {
+        // Same pickup, same patrol route, two different driving personalities. A
+        // cash bag sits 480 units to the right, just outside the former uniform
+        // 450-unit reach; the patrol waypoint is far up the y-axis the car already
+        // faces. The drive system must honour each car's own pickup-scavenging
+        // radius, not a shared global, so greed is a genuine personality trait
+        // rather than uniform across the roster.
+        fn spawn_cash(app: &mut App, position: Vec3) {
+            app.world.spawn((
+                Pickup {
+                    kind: PickupKind::Cash,
+                },
+                Transform::from_translation(position),
+            ));
+        }
+        let pickup = Vec3::new(480.0, 0.0, 2.0);
+
+        // Disciplined technician-style car: 380-unit greed falls short of the bag,
+        // so it stays on its line and keeps lapping its patrol route.
+        let mut disciplined_app = app_with_system();
+        let disciplined =
+            spawn_ai_with_pickup_pursuit(&mut disciplined_app, vec![Vec2::new(0.0, 1000.0)], 380.0);
+        spawn_cash(&mut disciplined_app, pickup);
+        disciplined_app.update();
+        let disciplined_transform = disciplined_app.world.get::<Transform>(disciplined).unwrap();
+        assert!(
+            disciplined_transform.translation.x.abs() < 1e-4,
+            "a disciplined driver leaves a pickup beyond its reach alone, x={}",
+            disciplined_transform.translation.x
+        );
+        assert!(
+            disciplined_transform.translation.y > 0.0,
+            "a disciplined driver keeps lapping its patrol route, y={}",
+            disciplined_transform.translation.y
+        );
+
+        // Greedy sprinter-style car: 520-unit greed covers the same bag, so it
+        // breaks off the route to scavenge it.
+        let mut greedy_app = app_with_system();
+        let greedy =
+            spawn_ai_with_pickup_pursuit(&mut greedy_app, vec![Vec2::new(0.0, 1000.0)], 520.0);
+        spawn_cash(&mut greedy_app, pickup);
+        greedy_app.update();
+        let greedy_transform = greedy_app.world.get::<Transform>(greedy).unwrap();
+        assert!(
+            greedy_transform.translation.x > 0.0,
+            "a greedy driver breaks off to scavenge a pickup within its reach, x={}",
+            greedy_transform.translation.x
         );
     }
 
