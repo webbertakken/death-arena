@@ -89,6 +89,7 @@ required_guards=(
   "bash scripts/check_workflow_lint.sh"
   "bash scripts/check_rust_safety.sh"
   "bash scripts/check_rust_suppressions.sh"
+  "bash scripts/check_debug_leftovers.sh"
   "bash scripts/check_unused_dependencies.sh"
 )
 for guard in "${required_guards[@]}"; do
