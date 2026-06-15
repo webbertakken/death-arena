@@ -10,7 +10,7 @@ use crate::gameplay::virtual_player::ai::{
     finish_off_car, finish_off_wall_crush_aim, lead_defence_car, next_waypoint, pincer_partner,
     pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices, DrivingTarget,
     FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget, PitRetreatCandidate,
-    ThreatTarget,
+    ThreatTarget, MIN_THROTTLE,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -19,21 +19,49 @@ use bevy::prelude::*;
 /// Distance (world units) at which a virtual player considers a waypoint
 /// reached and advances to the next one.
 const WAYPOINT_ARRIVE_RADIUS: f32 = 80.0;
-/// Tighter arrive radius for a target a car means to *ram*: chasing the human
-/// player or hunting a reeling enemy down.
+/// Baseline arrive radius for a target a car means to *ram*: chasing the human
+/// player or hunting a reeling enemy down, as committed by a driver cornering on
+/// the neutral [`MIN_THROTTLE`] floor.
 ///
 /// The wide [`WAYPOINT_ARRIVE_RADIUS`] sits outside true ram range
 /// ([`RAM_RADIUS`]), so a car that idles the instant it reaches it coasts to a
 /// halt short of contact and the chase stutters. Kept well inside ram range
 /// instead, so a hunter drives all the way through to a hard hit and shoves its
-/// victim, the aggressive Death Rally run-down rather than a polite stop.
+/// victim, the aggressive Death Rally run-down rather than a polite stop. Each
+/// driver then flexes this baseline by its cornering commitment (see
+/// [`pursuit_arrive_radius`]).
 const PURSUIT_ARRIVE_RADIUS: f32 = 30.0;
-/// A ram run-down must commit deeper than a waypoint stop, enforced at compile
-/// time.
-const _: () = assert!(PURSUIT_ARRIVE_RADIUS < WAYPOINT_ARRIVE_RADIUS);
-/// A ram run-down must close well inside true ram range, enforced at compile
-/// time, so the car is genuinely trading paint before it ever idles.
-const _: () = assert!(PURSUIT_ARRIVE_RADIUS < RAM_RADIUS);
+/// How far a driver's run-down depth shifts per unit of cornering commitment away
+/// from the neutral [`MIN_THROTTLE`] baseline.
+///
+/// A reckless driver (a higher [`VirtualPlayer::corner_throttle`]) commits a
+/// *deeper* run-down: a tighter arrive radius, so it noses further through to
+/// contact before it idles. A disciplined driver eases off a touch sooner. The
+/// run-down depth is thus the chase mirror of the same commitment axis that sets
+/// how hard a driver stays on the gas through a corner, so a keen hunter presses
+/// a kill as relentlessly as it barrels a bend.
+const PURSUIT_COMMITMENT_DEPTH_GAIN: f32 = 40.0;
+/// Tightest run-down the keenest driver ever commits to.
+const PURSUIT_ARRIVE_RADIUS_MIN: f32 = 18.0;
+/// Shallowest run-down the most disciplined driver eases off to.
+const PURSUIT_ARRIVE_RADIUS_MAX: f32 = 42.0;
+/// A ram run-down must commit deeper than a waypoint stop across the whole
+/// commitment band, enforced at compile time.
+const _: () = assert!(PURSUIT_ARRIVE_RADIUS_MAX < WAYPOINT_ARRIVE_RADIUS);
+/// A ram run-down must close well inside true ram range even at its shallowest,
+/// enforced at compile time, so the car is genuinely trading paint before it ever
+/// idles.
+const _: () = assert!(PURSUIT_ARRIVE_RADIUS_MAX < RAM_RADIUS);
+/// The keenest run-down must still be a positive distance, enforced at compile
+/// time, so even a relentless hunter idles on contact rather than driving through
+/// its victim forever.
+const _: () = assert!(PURSUIT_ARRIVE_RADIUS_MIN > 0.0);
+/// The neutral baseline must sit inside the commitment band, enforced at compile
+/// time, so a reckless rival flexes it deeper and a disciplined one shallower.
+const _: () = assert!(
+    PURSUIT_ARRIVE_RADIUS_MIN < PURSUIT_ARRIVE_RADIUS
+        && PURSUIT_ARRIVE_RADIUS < PURSUIT_ARRIVE_RADIUS_MAX
+);
 /// The human player's pickup-scavenging reach, used when deciding whether the
 /// human has a better claim on a bag than a blue teammate. Each virtual player
 /// scavenges at its own personality-driven [`VirtualPlayer::pickup_pursuit_radius`];
@@ -149,7 +177,7 @@ pub fn virtual_player_drive_system(
             position,
             forward,
             target_position,
-            arrive_radius_for_target(target),
+            arrive_radius_for_target(target, ai.corner_throttle),
             ai.corner_throttle,
         );
 
@@ -1228,18 +1256,36 @@ fn team_movement_multiplier(
     nitro * integrity * stun * surge * sabotage
 }
 
-/// Arrive radius a car uses to reach `target`.
+/// Arrive radius a car uses to reach `target`, flexed by its cornering
+/// commitment.
 ///
 /// Positional and patrol targets keep the wide [`WAYPOINT_ARRIVE_RADIUS`] so a
 /// car settles on them cleanly (and a waypoint advances). Targets that *are* an
 /// enemy car to ram, chasing the human player or finishing a reeling enemy off,
-/// take the tight [`PURSUIT_ARRIVE_RADIUS`] instead, so the car drives through
-/// to hard contact rather than idling just outside ram range.
-const fn arrive_radius_for_target(target: DrivingTarget) -> f32 {
+/// take the tight commitment-flexed [`pursuit_arrive_radius`] instead, so the car
+/// drives through to hard contact rather than idling just outside ram range, and
+/// a reckless driver presses that run-down deeper than a disciplined one.
+fn arrive_radius_for_target(target: DrivingTarget, corner_throttle: f32) -> f32 {
     match target {
-        DrivingTarget::Player(_) | DrivingTarget::FinishWreck(_) => PURSUIT_ARRIVE_RADIUS,
+        DrivingTarget::Player(_) | DrivingTarget::FinishWreck(_) => {
+            pursuit_arrive_radius(corner_throttle)
+        }
         _ => WAYPOINT_ARRIVE_RADIUS,
     }
+}
+
+/// Arrive radius a driver commits to when running a foe down, flexed by its
+/// cornering commitment around the [`PURSUIT_ARRIVE_RADIUS`] baseline.
+///
+/// A reckless driver commits a deeper run-down (a tighter radius, nosing further
+/// through to contact), a disciplined one eases off a touch sooner, and the
+/// neutral [`MIN_THROTTLE`] all-rounder keeps the exact baseline. Clamped to the
+/// [`PURSUIT_ARRIVE_RADIUS_MIN`]..=[`PURSUIT_ARRIVE_RADIUS_MAX`] band so the depth
+/// is always a positive distance well inside ram range, however extreme the
+/// driver's commitment.
+fn pursuit_arrive_radius(corner_throttle: f32) -> f32 {
+    let depth = (corner_throttle - MIN_THROTTLE) * PURSUIT_COMMITMENT_DEPTH_GAIN;
+    (PURSUIT_ARRIVE_RADIUS - depth).clamp(PURSUIT_ARRIVE_RADIUS_MIN, PURSUIT_ARRIVE_RADIUS_MAX)
 }
 
 const fn should_coordinate_ctf_target(target: DrivingTarget) -> bool {
@@ -2361,22 +2407,24 @@ mod tests {
     #[test]
     fn ram_targets_arrive_tighter_than_positional_ones() {
         // Ramming an enemy car means driving through it, so chase targets close
-        // far tighter than the waypoint/positional boundary. The tighter < wider
-        // invariant itself is enforced at compile time on PURSUIT_ARRIVE_RADIUS.
+        // far tighter than the waypoint/positional boundary. Measured at the neutral
+        // MIN_THROTTLE baseline so the commitment flex is held constant; the
+        // tighter < wider invariant itself is enforced at compile time on the
+        // PURSUIT_ARRIVE_RADIUS band.
         assert_arrive_radius_eq(
-            arrive_radius_for_target(DrivingTarget::FinishWreck(Vec2::ZERO)),
+            arrive_radius_for_target(DrivingTarget::FinishWreck(Vec2::ZERO), MIN_THROTTLE),
             PURSUIT_ARRIVE_RADIUS,
         );
         assert_arrive_radius_eq(
-            arrive_radius_for_target(DrivingTarget::Player(Vec2::ZERO)),
+            arrive_radius_for_target(DrivingTarget::Player(Vec2::ZERO), MIN_THROTTLE),
             PURSUIT_ARRIVE_RADIUS,
         );
         assert_arrive_radius_eq(
-            arrive_radius_for_target(DrivingTarget::PatrolWaypoint(Vec2::ZERO)),
+            arrive_radius_for_target(DrivingTarget::PatrolWaypoint(Vec2::ZERO), MIN_THROTTLE),
             WAYPOINT_ARRIVE_RADIUS,
         );
         assert_arrive_radius_eq(
-            arrive_radius_for_target(DrivingTarget::EnemyFlag(Vec2::ZERO)),
+            arrive_radius_for_target(DrivingTarget::EnemyFlag(Vec2::ZERO), MIN_THROTTLE),
             WAYPOINT_ARRIVE_RADIUS,
         );
     }
@@ -4747,6 +4795,103 @@ mod tests {
         assert!(
             wrecked_x > 5.0,
             "a wrecked blue attacker should peel off toward the repair, x={wrecked_x}"
+        );
+    }
+
+    /// One drive frame for a Red chaser with the given cornering commitment, the
+    /// human player sitting dead ahead at `player_distance`. Returns how far up the
+    /// +Y line the chaser advanced: zero means it idled (eased off its run-down),
+    /// positive means it kept closing.
+    fn run_down_advance_y(corner_throttle: f32, player_distance: f32) -> f32 {
+        let mut app = app_with_system();
+        spawn_player(&mut app, Vec3::new(0.0, player_distance, 4.0));
+        let chaser = app
+            .world
+            .spawn((
+                VirtualPlayer {
+                    team: AiTeam::Red,
+                    movement_speed: 500.0,
+                    rotation_speed: f32::to_radians(360.0),
+                    waypoints: Vec::new(),
+                    current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                    pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle,
+                },
+                Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
+            ))
+            .id();
+
+        app.update();
+
+        app.world.get::<Transform>(chaser).unwrap().translation.y
+    }
+
+    #[test]
+    fn the_all_rounder_runs_a_foe_down_at_the_baseline_depth() {
+        assert!(
+            (pursuit_arrive_radius(MIN_THROTTLE) - PURSUIT_ARRIVE_RADIUS).abs() <= f32::EPSILON,
+            "a driver cornering on the neutral floor must run a foe down at the exact baseline"
+        );
+    }
+
+    #[test]
+    fn a_reckless_driver_commits_a_deeper_run_down() {
+        let reckless = pursuit_arrive_radius(0.45);
+        let baseline = pursuit_arrive_radius(MIN_THROTTLE);
+        let disciplined = pursuit_arrive_radius(0.20);
+        assert!(
+            reckless < baseline && baseline < disciplined,
+            "commitment must deepen the run-down: reckless={reckless}, baseline={baseline}, \
+             disciplined={disciplined}"
+        );
+    }
+
+    #[test]
+    fn every_run_down_depth_stays_inside_ram_range() {
+        // Across the whole personality commitment band the run-down depth stays a
+        // positive distance well inside ram range, so even the shyest chaser is
+        // still trading paint when it idles and the keenest never noses clean past
+        // its foe.
+        for throttle in [0.15, 0.20, 0.30, 0.38, 0.42, 0.45, 0.50] {
+            let radius = pursuit_arrive_radius(throttle);
+            assert!(
+                radius > 0.0 && radius < RAM_RADIUS && radius < WAYPOINT_ARRIVE_RADIUS,
+                "run-down radius {radius} for throttle {throttle} left the safe band"
+            );
+        }
+    }
+
+    #[test]
+    fn run_down_depth_is_clamped_for_out_of_band_commitment() {
+        // A degenerate throttle can never invert the radius or send it past the
+        // clamp, so even an absurd personality still idles on contact.
+        assert!(
+            (pursuit_arrive_radius(10.0) - PURSUIT_ARRIVE_RADIUS_MIN).abs() <= f32::EPSILON,
+            "an extreme reckless throttle must clamp to the tightest run-down"
+        );
+        assert!(
+            (pursuit_arrive_radius(-10.0) - PURSUIT_ARRIVE_RADIUS_MAX).abs() <= f32::EPSILON,
+            "an extreme disciplined throttle must clamp to the shallowest run-down"
+        );
+    }
+
+    #[test]
+    fn a_reckless_chaser_drives_deeper_than_a_disciplined_one_eases_off() {
+        // The human sits at a distance that falls between the two drivers' run-down
+        // depths: the reckless chaser is still inside its (tighter) arrive radius so
+        // it keeps closing, while the disciplined one has already reached its (wider)
+        // one and eases off. Same speed, same line; only commitment differs.
+        let distance = 30.0;
+        let reckless = run_down_advance_y(0.45, distance);
+        let disciplined = run_down_advance_y(0.20, distance);
+        assert!(
+            reckless > 0.0,
+            "a reckless chaser must keep closing at distance {distance}, advanced {reckless}"
+        );
+        assert!(
+            disciplined.abs() <= f32::EPSILON,
+            "a disciplined chaser must ease off at distance {distance}, advanced {disciplined}"
         );
     }
 }
