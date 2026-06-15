@@ -50,15 +50,18 @@ done
 # style-level findings gate; the tree is clean at this level.
 shellcheck -- "${shell_scripts[@]}"
 
-# Formatting: enforce one canonical shell style (shfmt's default) across every
-# tracked script, the shell-side mirror of `cargo fmt --all -- --check` for Rust.
-# The static analysis above catches correctness bugs; shfmt catches drift in
-# indentation, pipe-continuation and spacing so a review never argues style. The
-# diff is printed so a failing run shows exactly what to fix.
-if ! shfmt -d -- "${shell_scripts[@]}"; then
+# Formatting: enforce one canonical shell style across every tracked script, the
+# shell-side mirror of `cargo fmt --all -- --check` for Rust. The static analysis
+# above catches correctness bugs; shfmt catches drift in indentation,
+# pipe-continuation and spacing so a review never argues style. The 2-space indent
+# (-i 2) is pinned on the command line, not left to shfmt's tab default or an
+# ambient .editorconfig, so the result is identical on every machine and in CI
+# (which has no .editorconfig to read). The diff is printed so a failing run shows
+# exactly what to fix.
+if ! shfmt -i 2 -d -- "${shell_scripts[@]}"; then
   cat >&2 <<'ERROR'
 Shell scripts are not shfmt-formatted (see the diff above).
-Run: shfmt -w $(git ls-files '*.sh')
+Run: shfmt -i 2 -w $(git ls-files '*.sh')
 ERROR
   exit 1
 fi
