@@ -11,7 +11,10 @@ ERROR
   exit 1
 fi
 
-if ! grep -Fq 'trunk build --release --public-url "/${GITHUB_REPOSITORY#*/}/"' "${workflow}"; then
+# The ${GITHUB_REPOSITORY#*/} below is a literal to match: it expands inside the
+# Pages runner at build time, not here. Escaped double quotes keep it an exact
+# literal pattern that stays shellcheck-clean without a disable directive.
+if ! grep -Fq "trunk build --release --public-url \"/\${GITHUB_REPOSITORY#*/}/\"" "${workflow}"; then
   cat >&2 <<'ERROR'
 Pages workflow must build with an absolute GitHub Pages base path.
 Use: trunk build --release --public-url "/${GITHUB_REPOSITORY#*/}/"

@@ -8,6 +8,14 @@ if ((${#shell_scripts[@]} == 0)); then
   exit 0
 fi
 
+if ! command -v shellcheck >/dev/null 2>&1; then
+  cat >&2 <<'ERROR'
+shellcheck is required to lint shell scripts but was not found on PATH.
+Install it (e.g. mise use -g shellcheck, or apt-get install shellcheck) and retry.
+ERROR
+  exit 1
+fi
+
 for script in "${shell_scripts[@]}"; do
   bash -n "${script}"
 
@@ -27,5 +35,11 @@ ERROR
     exit 1
   fi
 done
+
+# Static analysis: catch quoting, word-splitting, masked return codes, and other
+# latent shell bugs that the bash -n parse and the convention greps above cannot
+# see. Run at shellcheck's default (strictest) severity so even info- and
+# style-level findings gate; the tree is clean at this level.
+shellcheck -- "${shell_scripts[@]}"
 
 echo "Checked ${#shell_scripts[@]} shell scripts."

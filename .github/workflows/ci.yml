@@ -194,10 +194,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ripgrep
+      - name: Install ripgrep + shellcheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep
+          sudo apt-get install -y ripgrep shellcheck
 
       - name: Validate Pages workflow
         run: bash scripts/check_pages_workflow.sh
