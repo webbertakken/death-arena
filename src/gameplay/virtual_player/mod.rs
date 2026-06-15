@@ -51,7 +51,11 @@ pub struct VirtualPlayerPlugin;
 
 impl Plugin for VirtualPlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_startup_system(spawn::setup)
+        app.init_resource::<drive::PlayerVelocity>()
+            .add_startup_system(spawn::setup)
+            .add_system(
+                drive::track_player_velocity_system.before(drive::virtual_player_drive_system),
+            )
             .add_system(drive::virtual_player_drive_system);
     }
 }

@@ -212,9 +212,11 @@ pub struct ThreatTarget {
     pub position: Vec2,
     /// Instantaneous velocity (heading times top speed), so a defender can lead a
     /// moving thief to where it will breach the defensive ring rather than
-    /// body-block the spot it has already left. A stationary or unknown threat
-    /// (e.g. the human player, who has no entry here) carries a zero velocity, for
-    /// which the lead falls back to a plain body-block.
+    /// body-block the spot it has already left. The human player carries its own
+    /// tracked velocity here too (see
+    /// [`crate::gameplay::virtual_player::drive::PlayerVelocity`]); a genuinely
+    /// stationary threat, or one whose track is unavailable, carries a zero
+    /// velocity, for which the lead falls back to a plain body-block.
     pub velocity: Vec2,
 }
 

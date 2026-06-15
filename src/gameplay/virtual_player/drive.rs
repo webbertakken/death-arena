@@ -73,6 +73,68 @@ const TEAMMATE_SPACING_RADIUS: f32 = 90.0;
 
 type HumanPlayerTransform = (With<Player>, Without<VirtualPlayer>);
 
+/// The human player's tracked velocity, so virtual players can lead and intercept
+/// the human exactly as they already lead virtual enemies.
+///
+/// The one car the AI could never lead was the human: the threat list and the kill
+/// press both fed it a zero velocity, so every defensive body-block met the spot it
+/// had already left and every run-down tail-chased it. This resource closes that
+/// gap. [`track_player_velocity_system`] refreshes it each fixed frame from the
+/// human's movement, and the drive system reads it into the human's threat entry so
+/// the existing lead machinery (the ring-breach and interception solves in
+/// [`crate::gameplay::virtual_player::ai`]) finally applies to the human too: a red
+/// defender cuts off a juking human thief, and a kill press heads a fleeing human
+/// carrier off at the pass.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct PlayerVelocity {
+    /// The human's position last fixed frame, or `None` before the first sample (or
+    /// while the human is absent), so the first frame estimates a neutral zero.
+    pub previous_position: Option<Vec2>,
+    /// The human's velocity estimated across the most recent fixed frame.
+    pub velocity: Vec2,
+}
+
+/// Estimates the human player's instantaneous velocity from its movement across a
+/// single fixed frame: the position delta over [`TIME_STEP`].
+///
+/// The first frame (or any frame the human was absent) has no previous position to
+/// difference against, so the estimate is a neutral zero, exactly the body-block
+/// fallback the lead logic already handles.
+#[must_use]
+fn player_velocity_estimate(previous_position: Option<Vec2>, current_position: Vec2) -> Vec2 {
+    previous_position.map_or(Vec2::ZERO, |previous| {
+        (current_position - previous) / TIME_STEP
+    })
+}
+
+/// The human's tracked velocity, or a neutral zero when the tracker is absent (e.g.
+/// a combat-light test app), which the lead logic resolves to a plain body-block.
+#[must_use]
+fn human_velocity(player_velocity: Option<&PlayerVelocity>) -> Vec2 {
+    player_velocity.map_or(Vec2::ZERO, |tracker| tracker.velocity)
+}
+
+/// Refreshes [`PlayerVelocity`] from the human player's movement each fixed frame.
+///
+/// Runs before [`virtual_player_drive_system`] so the drive reads a velocity
+/// sampled this very frame. With no human present the estimate resets to a neutral
+/// zero and the previous position is cleared, so a human that despawns and respawns
+/// never registers a phantom teleport velocity on its return.
+pub fn track_player_velocity_system(
+    mut tracker: ResMut<PlayerVelocity>,
+    player_query: Query<&Transform, HumanPlayerTransform>,
+) {
+    let Ok(transform) = player_query.get_single() else {
+        tracker.previous_position = None;
+        tracker.velocity = Vec2::ZERO;
+        return;
+    };
+
+    let position = transform.translation.xy();
+    tracker.velocity = player_velocity_estimate(tracker.previous_position, position);
+    tracker.previous_position = Some(position);
+}
+
 /// Optional per-match resources the drive system reads, bundled into one system
 /// parameter to keep the signature under clippy's argument limit (mirrors the
 /// player movement system's [`crate::gameplay::player`] context tuple).
@@ -99,6 +161,7 @@ pub fn virtual_player_drive_system(
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
     sabotage_effects: Option<Res<SabotageEffects>>,
+    player_velocity: Option<Res<PlayerVelocity>>,
     context: VirtualPlayerDriveContext,
 ) {
     let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures, match_clock) =
@@ -120,7 +183,10 @@ pub fn virtual_player_drive_system(
         .ok()
         .map(|(entity, transform)| (entity, transform.translation.xy()));
     let player_position = player.map(|(_, position)| position);
-    let threats = threat_targets(&query, player_position);
+    // The human's tracked velocity feeds the threat list (and the kill press), so
+    // the human is led exactly as a virtual car is.
+    let tracked_velocity = human_velocity(player_velocity.as_deref());
+    let threats = threat_targets(&query, player_position, tracked_velocity);
     let visible_pickups = arena_pickups(&pickup_query);
     let holder_positions = holder_positions(&query, player);
     let flags = flag_targets(&flag_query, &holder_positions);
@@ -322,6 +388,7 @@ const fn deterministic_spacing_direction(entity: Entity, other_entity: Entity) -
 fn threat_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     player_position: Option<Vec2>,
+    player_velocity: Vec2,
 ) -> Vec<ThreatTarget> {
     let mut threats: Vec<ThreatTarget> = query
         .iter()
@@ -336,12 +403,14 @@ fn threat_targets(
         .collect();
 
     if let Some(position) = player_position {
-        // The human player has no velocity entry here, so a defence against a human
-        // thief falls back to a plain body-block, mirroring the kill press.
+        // The human carries its tracked velocity (see [`PlayerVelocity`]), so a
+        // defence against a human thief leads it to the ring crossing exactly as it
+        // would a virtual one; a stale or absent track is a neutral zero, which the
+        // lead logic resolves to the plain body-block fallback.
         threats.push(ThreatTarget {
             team: AiTeam::Blue,
             position,
-            velocity: Vec2::ZERO,
+            velocity: player_velocity,
         });
     }
 
@@ -860,20 +929,15 @@ fn finish_off_targets(
             .filter(|threat| threat.team == team.enemy())
             .map(|threat| threat.position)
             .collect();
-        // Each enemy virtual player's instantaneous velocity (its heading times its
-        // own top speed), so the kill press can lead a fleeing prey rather than
-        // tail-chase the spot it has left. The human player has no entry here, so a
-        // hunt aimed at the human falls back to a plain pursuit (zero velocity).
-        let enemy_velocities: Vec<(Vec2, Vec2)> = query
+        // Each enemy's instantaneous velocity, paired with its position, so the kill
+        // press can lead a fleeing prey rather than tail-chase the spot it has left.
+        // Read from the shared threat list (not the raw virtual-player query) so the
+        // human flag-runner, which the query never sees, is led too: the threat list
+        // now carries the human's tracked velocity (see [`PlayerVelocity`]).
+        let enemy_velocities: Vec<(Vec2, Vec2)> = threats
             .iter()
-            .filter(|(_, virtual_player, _)| virtual_player.team == team.enemy())
-            .map(|(_, virtual_player, transform)| {
-                let forward = (transform.rotation * Vec3::Y).xy();
-                (
-                    transform.translation.xy(),
-                    forward * virtual_player.movement_speed,
-                )
-            })
+            .filter(|threat| threat.team == team.enemy())
+            .map(|threat| (threat.position, threat.velocity))
             .collect();
         // An enemy hauling this team's flag away is the single most valuable kill
         // on the board: a held flag sits at its carrier, so the team's own stolen
@@ -4985,6 +5049,233 @@ mod tests {
         assert!(
             disciplined.abs() <= f32::EPSILON,
             "a disciplined chaser must ease off at distance {distance}, advanced {disciplined}"
+        );
+    }
+
+    #[test]
+    fn the_first_velocity_sample_is_a_neutral_zero() {
+        // No previous position to difference against, so a freshly spawned (or
+        // freshly respawned) human reads as stationary rather than as a teleport.
+        assert_eq!(
+            player_velocity_estimate(None, Vec2::new(123.0, -45.0)),
+            Vec2::ZERO,
+            "the first sample must estimate a neutral zero velocity"
+        );
+    }
+
+    #[test]
+    fn velocity_is_the_position_delta_over_the_fixed_frame() {
+        let previous = Vec2::new(10.0, -20.0);
+        let current = Vec2::new(10.0 + 5.0, -20.0 - 3.0);
+        let expected = Vec2::new(5.0, -3.0) / TIME_STEP;
+        assert!(
+            player_velocity_estimate(Some(previous), current).distance(expected) <= 1e-3,
+            "velocity must be the per-frame delta divided by the fixed time step"
+        );
+    }
+
+    #[test]
+    fn the_tracker_samples_then_differences_the_humans_movement() {
+        // First frame: no previous sample, so the estimate is zero but the position
+        // is banked. Second frame: the human has moved, so the estimate is the delta
+        // over the fixed step. Driving the system twice mirrors the real loop.
+        let mut app = App::new();
+        app.init_resource::<PlayerVelocity>();
+        app.add_system(track_player_velocity_system);
+        let human = spawn_player(&mut app, Vec3::new(100.0, 200.0, 5.0));
+
+        app.update();
+        let after_first = *app.world.resource::<PlayerVelocity>();
+        assert_eq!(
+            after_first.velocity,
+            Vec2::ZERO,
+            "the first sample must read the human as stationary"
+        );
+        assert_eq!(after_first.previous_position, Some(Vec2::new(100.0, 200.0)));
+
+        app.world.get_mut::<Transform>(human).unwrap().translation =
+            Vec3::new(100.0 + 8.0, 200.0 - 2.0, 5.0);
+        app.update();
+
+        let after_second = *app.world.resource::<PlayerVelocity>();
+        let expected = Vec2::new(8.0, -2.0) / TIME_STEP;
+        assert!(
+            after_second.velocity.distance(expected) <= 1e-3,
+            "the second sample must be the movement delta over the frame: {:?}",
+            after_second.velocity
+        );
+    }
+
+    #[test]
+    fn the_tracker_resets_when_the_human_is_absent() {
+        // A despawned human clears the previous position, so its return never reads
+        // as one giant teleport-velocity spike.
+        let mut app = App::new();
+        app.insert_resource(PlayerVelocity {
+            previous_position: Some(Vec2::new(50.0, 50.0)),
+            velocity: Vec2::new(999.0, 999.0),
+        });
+        app.add_system(track_player_velocity_system);
+
+        app.update();
+
+        let tracker = *app.world.resource::<PlayerVelocity>();
+        assert_eq!(
+            tracker.velocity,
+            Vec2::ZERO,
+            "an absent human reads as still"
+        );
+        assert_eq!(
+            tracker.previous_position, None,
+            "an absent human must clear the previous sample"
+        );
+    }
+
+    #[test]
+    fn a_defender_leads_a_juking_human_thief_to_the_ring_crossing() {
+        // A red home defender already sitting on the static body-block point of its
+        // home flag. A human thief sweeps in toward the flag, juking hard to one
+        // side. Without a tracked human velocity the defender holds the body-block
+        // (it is already there); once the human's velocity is known it shifts to cut
+        // the thief off where it will actually breach the defensive ring, the same
+        // lead it already runs against a virtual thief.
+        //
+        // Red home (and flag) sit at the origin, so the static block is 140 straight
+        // up the human's bearing and the defender starts exactly there. The juking
+        // human sits at (0, 300) inside the home-flag threat radius, sweeping
+        // down-left, so its ring crossing lies off to negative x.
+        fn defender_x(with_velocity: bool) -> f32 {
+            let mut app = app_with_system();
+            let defender = app
+                .world
+                .spawn((
+                    VirtualPlayer {
+                        team: AiTeam::Red,
+                        movement_speed: 500.0,
+                        rotation_speed: f32::to_radians(360.0),
+                        waypoints: vec![Vec2::new(0.0, 2000.0)],
+                        current_waypoint: 0,
+                        player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                        pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                        corner_throttle: 0.3,
+                    },
+                    Transform {
+                        translation: Vec3::new(0.0, 140.0, 4.0),
+                        rotation: Quat::from_rotation_z(std::f32::consts::PI),
+                        ..default()
+                    },
+                ))
+                .id();
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::ZERO,
+                Vec3::new(0.0, 0.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 1000.0),
+                Vec3::new(0.0, 1000.0, 4.0),
+                None,
+            );
+            spawn_player(&mut app, Vec3::new(0.0, 300.0, 5.0));
+            if with_velocity {
+                app.insert_resource(PlayerVelocity {
+                    previous_position: Some(Vec2::new(0.0, 300.0)),
+                    velocity: Vec2::new(-150.0, -300.0),
+                });
+            }
+
+            for _ in 0..30 {
+                app.update();
+            }
+
+            app.world.get::<Transform>(defender).unwrap().translation.x
+        }
+
+        let held = defender_x(false);
+        let led = defender_x(true);
+
+        assert!(
+            held.abs() < 1e-3,
+            "with no tracked velocity the defender holds the body-block: {held}"
+        );
+        assert!(
+            led < -1.0,
+            "knowing the human's velocity, the defender shifts to cut off the ring crossing: {led}"
+        );
+    }
+
+    #[test]
+    fn a_kill_press_heads_a_fleeing_human_off_at_the_pass() {
+        // A healthy red hunter against a reeling human team. The human flees
+        // laterally across the hunter's nose. Without a tracked human velocity the
+        // hunter tail-chases the spot the human currently sits; once that velocity
+        // is known it leads the human to where it is heading, the same interception
+        // it already runs against a fleeing virtual prey.
+        fn hunter_x(with_velocity: bool) -> f32 {
+            let mut app = app_with_system();
+            app.insert_resource(VehicleIntegrity {
+                player: 20.0,
+                opponent: MAX_INTEGRITY,
+            });
+            // The hunter at the origin already facing the prey (-Y), so the lateral
+            // lead reads as a clean sideways drift rather than a U-turn.
+            let hunter = app
+                .world
+                .spawn((
+                    VirtualPlayer {
+                        team: AiTeam::Red,
+                        movement_speed: 500.0,
+                        rotation_speed: f32::to_radians(360.0),
+                        waypoints: vec![Vec2::new(0.0, 2000.0)],
+                        current_waypoint: 0,
+                        player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                        pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                        corner_throttle: 0.3,
+                    },
+                    Transform {
+                        translation: Vec3::new(0.0, 0.0, 4.0),
+                        rotation: Quat::from_rotation_z(std::f32::consts::PI),
+                        ..default()
+                    },
+                ))
+                .id();
+            // A second red car keeps the team above the lone-hunter guard and sits
+            // far from the prey so the origin car is the chosen hunter.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 2000.0)],
+                Vec3::new(0.0, 1500.0, 4.0),
+            );
+            // The reeling human prey, fleeing to the right across the hunter's nose.
+            spawn_player(&mut app, Vec3::new(0.0, -300.0, 5.0));
+            if with_velocity {
+                app.insert_resource(PlayerVelocity {
+                    previous_position: Some(Vec2::new(0.0, -300.0)),
+                    velocity: Vec2::new(300.0, 0.0),
+                });
+            }
+
+            for _ in 0..20 {
+                app.update();
+            }
+
+            app.world.get::<Transform>(hunter).unwrap().translation.x
+        }
+
+        let tail_chased = hunter_x(false);
+        let led = hunter_x(true);
+
+        assert!(
+            tail_chased.abs() < 1e-3,
+            "with no tracked velocity the hunter tail-chases straight at the human: {tail_chased}"
+        );
+        assert!(
+            led > 1.0,
+            "knowing the human's velocity, the hunter leads it, veering to cut it off: {led}"
         );
     }
 }
