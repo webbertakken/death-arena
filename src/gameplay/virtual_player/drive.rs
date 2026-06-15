@@ -7,7 +7,7 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    finish_off_car, finish_off_wall_crush_aim, lead_defence_car, next_waypoint, pincer_partner,
+    finish_off_aim, finish_off_car, lead_defence_car, next_waypoint, pincer_partner,
     pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices, DrivingTarget,
     FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget, PitRetreatCandidate,
     ThreatTarget, MIN_THROTTLE,
@@ -853,6 +853,21 @@ fn finish_off_targets(
             .filter(|threat| threat.team == team.enemy())
             .map(|threat| threat.position)
             .collect();
+        // Each enemy virtual player's instantaneous velocity (its heading times its
+        // own top speed), so the kill press can lead a fleeing prey rather than
+        // tail-chase the spot it has left. The human player has no entry here, so a
+        // hunt aimed at the human falls back to a plain pursuit (zero velocity).
+        let enemy_velocities: Vec<(Vec2, Vec2)> = query
+            .iter()
+            .filter(|(_, virtual_player, _)| virtual_player.team == team.enemy())
+            .map(|(_, virtual_player, transform)| {
+                let forward = (transform.rotation * Vec3::Y).xy();
+                (
+                    transform.translation.xy(),
+                    forward * virtual_player.movement_speed,
+                )
+            })
+            .collect();
         // An enemy hauling this team's flag away is the single most valuable kill
         // on the board: a held flag sits at its carrier, so the team's own stolen
         // flag marks where the thief is. Hand it to the hunter so the kill press
@@ -871,16 +886,32 @@ fn finish_off_targets(
             &enemy_positions,
             enemy_flag_carrier,
         ) {
-            // When the prey is pinned near a wall, aim past it into the boundary so
-            // the charge shoves it in and springs the combat wall (or corner) crush
-            // rather than scraping it in the open (see [`finish_off_wall_crush_aim`]).
-            let aim = finish_off_wall_crush_aim(prey, BOUNDS / 2.0);
+            // Lead a prey loose in the open to where it is heading so the hunter
+            // cuts it off, but shove a wall-pinned prey straight into the boundary to
+            // spring the combat wall (or corner) crush instead (see [`finish_off_aim`]).
+            let (hunter_position, hunter_speed) = query
+                .iter()
+                .find(|(candidate, _, _)| *candidate == entity)
+                .map_or((prey, 0.0), |(_, virtual_player, transform)| {
+                    (transform.translation.xy(), virtual_player.movement_speed)
+                });
+            let prey_velocity = enemy_velocities
+                .iter()
+                .find(|(position, _)| position.distance_squared(prey) <= f32::EPSILON)
+                .map_or(Vec2::ZERO, |(_, velocity)| *velocity);
+            let aim = finish_off_aim(
+                hunter_position,
+                prey,
+                prey_velocity,
+                hunter_speed,
+                BOUNDS / 2.0,
+            );
             targets.push((entity, DrivingTarget::FinishWreck(aim)));
             // Pile a second spare car onto the same victim when the team can field
             // one without abandoning the objective, springing the combat pincer so
             // the kill lands faster (see [`pincer_partner`]). The partner is picked
-            // by its proximity to the real prey, then aimed at the same wall-crush
-            // point so both hunters shove the victim into the boundary together.
+            // by its proximity to the real prey, then aimed at the same cut-off (or
+            // wall-crush) point so both hunters converge on the victim together.
             if let Some(partner) = pincer_partner(entity, prey, &candidates) {
                 targets.push((partner, DrivingTarget::FinishWreck(aim)));
             }
@@ -2521,6 +2552,61 @@ mod tests {
             x > hunter_start_x + 1e-3,
             "a hunter must bend its charge toward the wall to crush a pinned prey, \
              not drive straight at it: {x}"
+        );
+    }
+
+    #[test]
+    fn a_hunter_cuts_off_a_reeling_prey_fleeing_across_its_path() {
+        // A reeling blue prey sits straight ahead of the red hunter but is fleeing to
+        // the right (facing +x) at half the hunter's speed, out in the open with no
+        // wall to crush against. Aiming at the spot it occupies now would send the
+        // hunter due north; leading it to where it is heading bends the charge toward
+        // +x to cut it off. A rightward drift is the tell that the kill press is
+        // heading the runner off rather than tail-chasing it.
+        let mut app = app_with_system();
+        app.insert_resource(VehicleIntegrity {
+            player: 20.0,
+            opponent: MAX_INTEGRITY,
+        });
+        let hunter = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        // A distant second red car keeps the team above the lone-car guard (yet short
+        // of the three needed to spare a pincer partner) and sits far from the prey so
+        // the origin car is the chosen hunter.
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 1000.0)],
+            Vec3::new(0.0, 1500.0, 4.0),
+        );
+        // The reeling blue prey, straight ahead of the hunter, fleeing rightward (+x)
+        // at half the hunter's top speed so the interception is comfortably solvable.
+        app.world.spawn((
+            VirtualPlayer {
+                team: AiTeam::Blue,
+                movement_speed: 250.0,
+                rotation_speed: f32::to_radians(360.0),
+                waypoints: vec![Vec2::new(2000.0, 300.0)],
+                current_waypoint: 0,
+                player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                corner_throttle: 0.3,
+            },
+            Transform::from_translation(Vec3::new(0.0, 300.0, 4.0))
+                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+        ));
+
+        app.update();
+
+        let transform = app.world.get::<Transform>(hunter).unwrap();
+        assert!(
+            transform.translation.x > 1e-3,
+            "a hunter must bend its charge toward where the prey is fleeing, \
+             not drive straight at the spot it has left: {}",
+            transform.translation.x
+        );
+        assert!(
+            transform.translation.y > 0.0,
+            "the hunter still drives forward onto the prey while cutting it off: {}",
+            transform.translation.y
         );
     }
 

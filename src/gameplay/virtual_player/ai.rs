@@ -632,6 +632,140 @@ pub fn finish_off_wall_crush_aim(prey: Vec2, half_extents: Vec2) -> Vec2 {
     )
 }
 
+/// Whether `prey` sits within the wall-crush band of an arena wall on either
+/// axis, the precondition for [`finish_off_wall_crush_aim`] to shove it in.
+///
+/// The "any axis pinned" companion to the per-axis shove inside
+/// [`finish_off_wall_crush_aim`]: it answers only *whether* a wall crush is on
+/// (so [`finish_off_aim`] can pick between the crush and the open-field lead),
+/// reading the same [`crate::gameplay::combat::WALL_CRUSH_MARGIN`] band the combat
+/// [`crate::gameplay::combat::wall_crush_ram_damage`] rewards.
+fn prey_is_wall_pinned(prey: Vec2, half_extents: Vec2) -> bool {
+    use crate::gameplay::combat::WALL_CRUSH_MARGIN;
+
+    let pinned = |coordinate: f32, half: f32| coordinate.abs() >= half - WALL_CRUSH_MARGIN;
+    pinned(prey.x, half_extents.x) || pinned(prey.y, half_extents.y)
+}
+
+/// Picks the aim a [`finish_off_car`] hunter charges at: shove a wall-pinned prey
+/// into the boundary, otherwise head a fleeing prey off in the open.
+///
+/// Composes the two finishing aims so the kill press always sets up the best
+/// available finisher. When the prey is pinned against a wall the wall crush
+/// out-damages an open ram, so [`finish_off_wall_crush_aim`] wins and the
+/// `prey_velocity` is irrelevant (a pinned car has nowhere to run). Out in the
+/// open the hunter instead leads the prey with [`finish_off_lead_aim`], cutting
+/// the runner off rather than tail-chasing the spot it has already left.
+#[must_use]
+pub fn finish_off_aim(
+    hunter: Vec2,
+    prey: Vec2,
+    prey_velocity: Vec2,
+    hunter_speed: f32,
+    half_extents: Vec2,
+) -> Vec2 {
+    if prey_is_wall_pinned(prey, half_extents) {
+        finish_off_wall_crush_aim(prey, half_extents)
+    } else {
+        finish_off_lead_aim(hunter, prey, prey_velocity, hunter_speed)
+    }
+}
+
+/// Aims a [`finish_off_car`] hunter at where a fleeing prey is heading so it cuts
+/// the runner off instead of tail-chasing the spot it has already left.
+///
+/// The interception ("lead the target") counterpart to pure pursuit: given the
+/// prey's instantaneous `prey_velocity` and the hunter's own `hunter_speed`, it
+/// solves for the earliest point along the prey's path the hunter can reach at the
+/// same moment (see [`interception_time`]), the classic Death Rally "head them off,
+/// you cannot outrun the finisher".
+///
+/// The lead is deliberately *extend-only*: the cut-off point is taken only when it
+/// sits at least as far from the hunter as the prey itself does. Leading a prey
+/// that is fleeing or crossing therefore pushes the aim ahead of it, while a prey
+/// closing straight onto the hunter (where an interception point would fall short
+/// and stall the charge before contact) keeps the pure-pursuit aim at the prey.
+/// It also falls back to the prey's current spot whenever the prey is barely moving
+/// or no real interception exists (an equal-or-faster prey fleeing dead away), so a
+/// kill press is never worse than the tail chase it replaces. The aim is recomputed
+/// every frame, so an over-lead (the prey is slowed while reeling, so its true speed
+/// is below the `prey_velocity` magnitude) self-corrects as the prey's real position
+/// updates.
+#[must_use]
+pub fn finish_off_lead_aim(
+    hunter: Vec2,
+    prey: Vec2,
+    prey_velocity: Vec2,
+    hunter_speed: f32,
+) -> Vec2 {
+    let Some(time) = interception_time(prey - hunter, prey_velocity, hunter_speed) else {
+        return prey;
+    };
+
+    let aim = prey + prey_velocity * time;
+    // Extend-only: never pull the aim closer than the prey, so the hunter always
+    // drives through to contact rather than stalling short of where the prey is.
+    if aim.distance_squared(hunter) >= prey.distance_squared(hunter) {
+        aim
+    } else {
+        prey
+    }
+}
+
+/// Earliest time `t >= 0` at which a pursuer of speed `speed` starting at the
+/// origin can reach a target that starts at `offset` and travels at constant
+/// `velocity`.
+///
+/// Solves `|offset + velocity * t| = speed * t` for the smallest non-negative
+/// root, the standard constant-velocity interception. Returns `None` when no such
+/// time exists (the target outruns the pursuer, or the geometry is degenerate), so
+/// the caller can fall back to a plain tail chase.
+fn interception_time(offset: Vec2, velocity: Vec2, speed: f32) -> Option<f32> {
+    let leading = speed.mul_add(-speed, velocity.length_squared());
+    let linear = 2.0 * offset.dot(velocity);
+    let constant = offset.length_squared();
+
+    // A near-zero leading term means the target travels at (almost) the pursuer's
+    // speed, so the quadratic degenerates to the line `linear * t + constant = 0`.
+    if leading.abs() <= f32::EPSILON {
+        if linear.abs() <= f32::EPSILON {
+            return None;
+        }
+        let time = -constant / linear;
+        return (time >= 0.0).then_some(time);
+    }
+
+    let discriminant = linear.mul_add(linear, -4.0 * leading * constant);
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let root = discriminant.sqrt();
+    let denominator = 2.0 * leading;
+    earliest_non_negative(
+        (-linear - root) / denominator,
+        (-linear + root) / denominator,
+    )
+}
+
+/// The smaller of two candidate interception times that is still non-negative, or
+/// `None` when both lie in the past.
+fn earliest_non_negative(first: f32, second: f32) -> Option<f32> {
+    let (lower, higher) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+
+    if lower >= 0.0 {
+        Some(lower)
+    } else if higher >= 0.0 {
+        Some(higher)
+    } else {
+        None
+    }
+}
+
 /// Closest position in `positions` to `from`, with the shared deterministic
 /// `x`-then-`y` tie-break so the pick never wavers between equidistant targets.
 fn nearest_position(from: Vec2, positions: &[Vec2]) -> Option<Vec2> {
@@ -3607,5 +3741,95 @@ mod tests {
         // the AI never shoves a foe that the combat layer would not crush.
         let just_outside = Vec2::new(half.x - margin - 1.0, 0.0);
         assert_eq!(finish_off_wall_crush_aim(just_outside, half), just_outside);
+    }
+
+    #[test]
+    fn lead_aim_holds_on_a_stationary_prey() {
+        // A prey that is not moving has nowhere to be led to, so the hunter just
+        // drives at it: pure pursuit, no aim shift.
+        let aim = finish_off_lead_aim(Vec2::ZERO, Vec2::new(100.0, 0.0), Vec2::ZERO, 500.0);
+        assert_vec2_near(aim, Vec2::new(100.0, 0.0));
+    }
+
+    #[test]
+    fn lead_aim_cuts_off_a_crossing_prey() {
+        // A reeling prey crosses the hunter's sight line to the right; the hunter
+        // aims ahead of it, at the point on its path both reach at once, rather than
+        // at the spot it has already left. With a hunter twice the prey's speed the
+        // geometry resolves to a 30-60-90 lead: 100*sqrt(3) to the side.
+        let aim = finish_off_lead_aim(
+            Vec2::ZERO,
+            Vec2::new(0.0, 300.0),
+            Vec2::new(250.0, 0.0),
+            500.0,
+        );
+        assert_vec2_near(aim, Vec2::new(3.0_f32.sqrt() * 100.0, 300.0));
+        assert!(
+            aim.x > 0.0,
+            "the hunter must lead a rightward-crossing prey to its right: {aim}"
+        );
+    }
+
+    #[test]
+    fn lead_aim_extends_ahead_of_a_slower_fleeing_prey() {
+        // A reeling prey flees straight away at half the hunter's speed; the cut-off
+        // sits further down its escape line than the prey itself, so the hunter
+        // charges through to run it down rather than trailing the spot it left.
+        let aim = finish_off_lead_aim(
+            Vec2::ZERO,
+            Vec2::new(0.0, 300.0),
+            Vec2::new(0.0, 250.0),
+            500.0,
+        );
+        assert_vec2_near(aim, Vec2::new(0.0, 600.0));
+    }
+
+    #[test]
+    fn lead_aim_never_shortens_against_a_closing_prey() {
+        // A prey charging straight back onto the hunter would yield an interception
+        // point nearer than the prey, which would stall the charge short of contact.
+        // The extend-only rule keeps the aim on the prey so the hunter drives through.
+        let prey = Vec2::new(0.0, 300.0);
+        let aim = finish_off_lead_aim(Vec2::ZERO, prey, Vec2::new(0.0, -250.0), 500.0);
+        assert_vec2_near(aim, prey);
+    }
+
+    #[test]
+    fn lead_aim_tail_chases_a_prey_it_cannot_catch() {
+        // A prey fleeing dead away at the hunter's own speed can never be intercepted,
+        // so the lead falls back to a plain tail chase at the prey's current spot.
+        let prey = Vec2::new(0.0, 300.0);
+        let aim = finish_off_lead_aim(Vec2::ZERO, prey, Vec2::new(0.0, 500.0), 500.0);
+        assert_vec2_near(aim, prey);
+    }
+
+    #[test]
+    fn finish_off_aim_crushes_a_wall_pinned_prey_regardless_of_its_flight() {
+        // A prey pinned against a wall has nowhere to run, so the aim ignores its
+        // velocity and shoves it into the boundary exactly as the wall crush would.
+        let half = Vec2::new(1000.0, 600.0);
+        let prey = Vec2::new(half.x, 0.0);
+        let aim = finish_off_aim(
+            Vec2::new(half.x, -400.0),
+            prey,
+            Vec2::new(0.0, 500.0),
+            500.0,
+            half,
+        );
+        assert_eq!(aim, finish_off_wall_crush_aim(prey, half));
+    }
+
+    #[test]
+    fn finish_off_aim_leads_a_prey_loose_in_the_open() {
+        // Out in the open there is no wall to crush against, so the aim heads the
+        // prey off with the lead interception instead.
+        let half = Vec2::new(1000.0, 600.0);
+        let hunter = Vec2::new(0.0, -100.0);
+        let prey = Vec2::new(100.0, -50.0);
+        let velocity = Vec2::new(250.0, 0.0);
+        assert_eq!(
+            finish_off_aim(hunter, prey, velocity, 500.0, half),
+            finish_off_lead_aim(hunter, prey, velocity, 500.0)
+        );
     }
 }
