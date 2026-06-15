@@ -8,8 +8,9 @@ use crate::gameplay::player::Player;
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
     finish_off_car, finish_off_wall_crush_aim, lead_defence_car, next_waypoint, pincer_partner,
-    pit_retreat_car, AiTeam, DrivingChoices, DrivingTarget, FinishOffCandidate, FlagTarget,
-    LeadDefenceCandidate, PickupTarget, PitRetreatCandidate, ThreatTarget,
+    pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices, DrivingTarget,
+    FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget, PitRetreatCandidate,
+    ThreatTarget,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::math::Vec3Swizzles;
@@ -210,7 +211,7 @@ fn overlay_targets(
     captures: CaptureScore,
     clock: Option<&MatchClock>,
 ) -> Vec<(Entity, DrivingTarget)> {
-    pit_retreat_targets(query, flags, integrity)
+    pit_retreat_targets(query, flags, threats, integrity)
         .into_iter()
         .chain(finish_off_targets(
             query, flags, threats, integrity, captures,
@@ -734,12 +735,16 @@ fn assigned_ctf_targets(
 ///
 /// Each team is priced against its own vehicle integrity: a team at or below
 /// [`crate::gameplay::virtual_player::ai::PIT_RETREAT_INTEGRITY_FRACTION`] breaks
-/// off its home-most non-carrier (see [`pit_retreat_car`]), which then drives
-/// home and parks in the base zone to recover. Without an integrity resource (no
-/// combat loaded) no team ever retreats.
+/// off its home-most non-carrier (see [`pit_retreat_car`]), which then limps home
+/// and parks in the base zone to recover. The retreating car weaves around any
+/// enemy planted on its run home (see [`pit_retreat_home_run_aim`]) rather than
+/// ramming into the very foe that battered it, the same way a flag carrier jukes a
+/// roadblock on its scoring run. Without an integrity resource (no combat loaded)
+/// no team ever retreats.
 fn pit_retreat_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     flags: &[FlagTarget],
+    threats: &[ThreatTarget],
     integrity: Option<&VehicleIntegrity>,
 ) -> Vec<(Entity, DrivingTarget)> {
     let Some(integrity) = integrity else {
@@ -766,7 +771,12 @@ fn pit_retreat_targets(
             })
             .collect();
         if let Some(entity) = pit_retreat_car(integrity.fraction_for_team(team), &candidates) {
-            targets.push((entity, DrivingTarget::HomeBase(home)));
+            let position = candidates
+                .iter()
+                .find(|candidate| candidate.entity == entity)
+                .map_or(home, |candidate| candidate.position);
+            let aim = pit_retreat_home_run_aim(position, home, team, threats);
+            targets.push((entity, DrivingTarget::HomeBase(aim)));
         }
     }
     targets
@@ -2016,6 +2026,82 @@ mod tests {
         assert!(
             (battered_far - 1500.0).abs() > 0.001,
             "the distant car keeps playing rather than retreating: {battered_far}"
+        );
+    }
+
+    #[test]
+    fn a_battered_retreating_car_weaves_around_a_blocker_on_its_run_home() {
+        // Red home sits at the origin. A battered red team sends its home-most car
+        // back to pit-recover from straight above its base. With a stationary enemy
+        // planted on the run home it weaves off the line to dodge a ram it can least
+        // afford; with the lane clear it limps straight back. One frame loop is run
+        // twice to compare the retreating car's sideways drift.
+        fn run(with_blocker: bool) -> f32 {
+            let mut app = app_with_system();
+            app.insert_resource(VehicleIntegrity {
+                player: MAX_INTEGRITY,
+                opponent: 20.0,
+            });
+            let near = spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 0.0)],
+                Vec3::new(0.0, 600.0, 4.0),
+            );
+            // A distant second red car keeps the team above the lone-car guard.
+            spawn_ai_at(
+                &mut app,
+                vec![Vec2::new(0.0, 0.0)],
+                Vec3::new(0.0, 1400.0, 4.0),
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::ZERO,
+                Vec3::new(0.0, 0.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, 2000.0),
+                Vec3::new(0.0, 2000.0, 4.0),
+                None,
+            );
+            if with_blocker {
+                // A stationary enemy dead on the run home, between the retreating
+                // car and its base, so it stays a fixed roadblock every frame.
+                app.world.spawn((
+                    VirtualPlayer {
+                        team: AiTeam::Blue,
+                        movement_speed: 0.0,
+                        rotation_speed: 0.0,
+                        waypoints: vec![Vec2::new(0.0, 300.0)],
+                        current_waypoint: 0,
+                        player_pursuit_radius: TEST_PURSUIT_RADIUS,
+                        pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                        corner_throttle: 0.3,
+                    },
+                    Transform::from_translation(Vec3::new(0.0, 300.0, 4.0)),
+                ));
+            }
+
+            for _ in 0..20 {
+                app.update();
+            }
+
+            app.world.get::<Transform>(near).unwrap().translation.x
+        }
+
+        let weaved = run(true);
+        let straight = run(false);
+
+        assert!(
+            straight.abs() < 0.001,
+            "with the lane clear the limping car should track straight home: {straight}"
+        );
+        assert!(
+            weaved.abs() > 1.0,
+            "with an enemy on the line the limping car should weave off it: {weaved}"
         );
     }
 

@@ -75,6 +75,18 @@ pub const CTF_WIDE_DETOUR_MIN_PRIORITY: u32 = 150;
 /// pickup is on its lane, the reliable recovery the home-base pit opened up.
 pub const PIT_RETREAT_INTEGRITY_FRACTION: f32 = 0.30;
 
+/// Distance from its own base within which a limping car on a pit retreat stops
+/// weaving and commits straight into the recovery zone.
+///
+/// The pit-retreat mirror of [`FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE`]: a battered
+/// car weaves around an enemy planted on its run home (see
+/// [`pit_retreat_home_run_aim`]) right up until it reaches its base, then
+/// straightens up so it parks cleanly in the pit rather than circling it dodging
+/// a blocker it has already cleared. Set to the base recovery radius
+/// ([`crate::gameplay::combat::BASE_REPAIR_RADIUS`], the same zone the car settles
+/// into to heal), so the weave ends exactly as the recovery begins.
+pub const PIT_RETREAT_HOME_COMMIT_DISTANCE: f32 = crate::gameplay::combat::BASE_REPAIR_RADIUS;
+
 /// Enemy team durability fraction (`0.0`..=`1.0`) at or below which a *healthier*
 /// team presses one car off the objective to hunt the reeling enemy down.
 ///
@@ -780,13 +792,64 @@ pub fn carrier_home_run_aim(
         return home;
     };
 
-    // Swing the aim to the side opposite the blocker. `perp` is `direction`
-    // rotated a quarter turn left, so a blocker on the left (positive side) sends
-    // the aim right and vice versa; one dead on the line (side `0.0`) swings left.
+    juke_aim_around_blocker(carrier, home, direction, blocker)
+}
+
+/// Swings the aim to the side opposite a `blocker` so a car arcs around it on its
+/// straight run home rather than ramming straight into it.
+///
+/// Shared by the flag carrier's home run ([`carrier_home_run_aim`]) and a
+/// battered car's pit retreat ([`pit_retreat_home_run_aim`]): both weave around an
+/// enemy planted on the line home the exact same way. `perp` is the run-home
+/// `direction` rotated a quarter turn left, so a blocker on the left (positive
+/// side) sends the aim right and vice versa; one dead on the line (side `0.0`)
+/// swings left, a deterministic pick so the car never stalls head-on into it.
+fn juke_aim_around_blocker(from: Vec2, home: Vec2, direction: Vec2, blocker: Vec2) -> Vec2 {
     let perp = Vec2::new(-direction.y, direction.x);
-    let blocker_side = (blocker - carrier).dot(perp);
+    let blocker_side = (blocker - from).dot(perp);
     let juke = if blocker_side > 0.0 { -1.0 } else { 1.0 };
     home + perp * juke * CARRIER_JUKE_OFFSET
+}
+
+/// The aim a battered car drives at on its pit retreat home.
+///
+/// The survival mirror of [`carrier_home_run_aim`]: a team ground down to
+/// [`PIT_RETREAT_INTEGRITY_FRACTION`] sends its home-most car back to recover, and
+/// rather than limp straight into the enemy that battered it, the car weaves
+/// around a foe planted on its run home, arcing out by [`CARRIER_JUKE_OFFSET`] to
+/// dodge a ram it can least afford while already on the ropes. The classic Death
+/// Rally "shake the tail on the limp home".
+///
+/// It reuses the carrier's lane-blocker read ([`nearest_lane_blocker`]) and juke
+/// geometry ([`juke_aim_around_blocker`]) verbatim, so a retreating car judges "in
+/// my way home" and swerves exactly as a carrier does. The only difference is
+/// where it straightens up: inside [`PIT_RETREAT_HOME_COMMIT_DISTANCE`] it commits
+/// straight into its base recovery zone, so the final approach is always a clean
+/// park in the pit. Recomputed every frame, so the aim snaps back to base the
+/// moment the blocker clears the lane.
+#[must_use]
+pub fn pit_retreat_home_run_aim(
+    position: Vec2,
+    home: Vec2,
+    team: AiTeam,
+    threats: &[ThreatTarget],
+) -> Vec2 {
+    let to_home = home - position;
+    if to_home.length_squared()
+        <= PIT_RETREAT_HOME_COMMIT_DISTANCE * PIT_RETREAT_HOME_COMMIT_DISTANCE
+    {
+        return home;
+    }
+
+    let Some(direction) = to_home.try_normalize() else {
+        return home;
+    };
+
+    let Some(blocker) = nearest_lane_blocker(position, home, team, threats) else {
+        return home;
+    };
+
+    juke_aim_around_blocker(position, home, direction, blocker)
 }
 
 /// Nearest enemy planted on a flag carrier's straight line home, between it and
@@ -2124,6 +2187,97 @@ mod tests {
     #[test]
     fn carrier_home_run_aim_ignores_enemies_outside_the_lane() {
         let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_targets_base_when_the_lane_is_clear() {
+        let aim =
+            pit_retreat_home_run_aim(Vec2::new(0.0, 0.0), Vec2::new(400.0, 0.0), AiTeam::Red, &[]);
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_jukes_around_an_enemy_dead_on_the_line() {
+        let aim = pit_retreat_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 0.0),
+            }],
+        );
+
+        // A blocker dead on the limp home picks a deterministic side, so the
+        // battered car still commits to a dodge rather than stalling head-on into
+        // the very foe it is trying to escape.
+        assert_vec2_near(aim, Vec2::new(400.0, CARRIER_JUKE_OFFSET));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_swings_away_from_an_enemy_off_to_one_side() {
+        let aim = pit_retreat_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 40.0),
+            }],
+        );
+
+        // Blocker is to the left of the run home, so the limping car swings right.
+        assert_vec2_near(aim, Vec2::new(400.0, -CARRIER_JUKE_OFFSET));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_commits_straight_inside_the_recovery_zone() {
+        // Once within its base recovery zone the car straightens up and parks in
+        // the pit, ignoring a blocker it has effectively already cleared, so it
+        // never circles home dodging a tail.
+        let close = PIT_RETREAT_HOME_COMMIT_DISTANCE - 10.0;
+        let aim = pit_retreat_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(close, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(close / 2.0, 0.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(close, 0.0));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_ignores_friendly_cars_on_the_line() {
+        let aim = pit_retreat_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[ThreatTarget {
+                team: AiTeam::Red,
+                position: Vec2::new(200.0, 0.0),
+            }],
+        );
+
+        assert_vec2_near(aim, Vec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn pit_retreat_home_run_aim_ignores_enemies_outside_the_lane() {
+        let aim = pit_retreat_home_run_aim(
             Vec2::new(0.0, 0.0),
             Vec2::new(400.0, 0.0),
             AiTeam::Red,
