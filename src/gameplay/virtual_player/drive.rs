@@ -34,7 +34,6 @@ const _: () = assert!(PURSUIT_ARRIVE_RADIUS < WAYPOINT_ARRIVE_RADIUS);
 /// time, so the car is genuinely trading paint before it ever idles.
 const _: () = assert!(PURSUIT_ARRIVE_RADIUS < RAM_RADIUS);
 const PICKUP_PURSUIT_RADIUS: f32 = 450.0;
-const PLAYER_PURSUIT_RADIUS: f32 = 500.0;
 const HOME_LANE_GUARD_DISTANCE: f32 = 220.0;
 const MIDFIELD_LANE_GUARD_FACTOR: f32 = 0.5;
 const TEAMMATE_SPACING_RADIUS: f32 = 90.0;
@@ -130,7 +129,7 @@ pub fn virtual_player_drive_system(
                 pickups: &entity_pickups,
                 pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                 player_position: player_position_for_team(ai.team, player_position),
-                player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+                player_pursuit_radius: ai.player_pursuit_radius,
                 closing_time_discipline: discipline.for_team(ai.team),
             },
         ) else {
@@ -571,7 +570,7 @@ fn closest_eligible_pickup_claimant(
                     pickups: &pickup_candidates,
                     pickup_pursuit_radius: PICKUP_PURSUIT_RADIUS,
                     player_position: player_position_for_team(ai.team, player_position),
-                    player_pursuit_radius: PLAYER_PURSUIT_RADIUS,
+                    player_pursuit_radius: ai.player_pursuit_radius,
                     closing_time_discipline: discipline.for_team(ai.team),
                 },
             );
@@ -1276,7 +1275,21 @@ mod tests {
         spawn_ai_on_team(app, AiTeam::Red, waypoints)
     }
 
+    /// Baseline pursuit radius for test fixtures: matches the all-rounder driving
+    /// personality, the neutral feel every behavioural assertion is measured
+    /// against.
+    const TEST_PURSUIT_RADIUS: f32 = 500.0;
+
     fn spawn_ai_on_team(app: &mut App, team: AiTeam, waypoints: Vec<Vec2>) -> Entity {
+        spawn_ai_with_pursuit(app, team, waypoints, TEST_PURSUIT_RADIUS)
+    }
+
+    fn spawn_ai_with_pursuit(
+        app: &mut App,
+        team: AiTeam,
+        waypoints: Vec<Vec2>,
+        player_pursuit_radius: f32,
+    ) -> Entity {
         app.world
             .spawn((
                 VirtualPlayer {
@@ -1285,6 +1298,7 @@ mod tests {
                     rotation_speed: f32::to_radians(360.0),
                     waypoints,
                     current_waypoint: 0,
+                    player_pursuit_radius,
                 },
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             ))
@@ -1300,6 +1314,7 @@ mod tests {
                     rotation_speed: f32::to_radians(360.0),
                     waypoints,
                     current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(translation),
             ))
@@ -2021,6 +2036,7 @@ mod tests {
                     rotation_speed: f32::to_radians(360.0),
                     waypoints: vec![Vec2::new(0.0, -2000.0)],
                     current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2078,6 +2094,7 @@ mod tests {
                 rotation_speed: f32::to_radians(360.0),
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
+                player_pursuit_radius: TEST_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -500.0, 4.0)),
         ));
@@ -2125,6 +2142,7 @@ mod tests {
                 rotation_speed: f32::to_radians(360.0),
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
+                player_pursuit_radius: TEST_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
         ));
@@ -2171,6 +2189,7 @@ mod tests {
                     rotation_speed: f32::to_radians(360.0),
                     waypoints: vec![Vec2::new(0.0, -2000.0)],
                     current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2252,6 +2271,7 @@ mod tests {
                 rotation_speed: f32::to_radians(360.0),
                 waypoints: vec![Vec2::new(0.0, -2000.0)],
                 current_waypoint: 0,
+                player_pursuit_radius: TEST_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(0.0, -60.0, 4.0)),
         ));
@@ -2298,6 +2318,7 @@ mod tests {
                 rotation_speed: f32::to_radians(360.0),
                 waypoints: vec![Vec2::new(hunter_start_x, -2000.0)],
                 current_waypoint: 0,
+                player_pursuit_radius: TEST_PURSUIT_RADIUS,
             },
             Transform::from_translation(Vec3::new(hunter_start_x, -300.0, 4.0)),
         ));
@@ -2366,6 +2387,7 @@ mod tests {
                     rotation_speed: f32::to_radians(360.0),
                     waypoints: vec![Vec2::new(BOUNDS.x, BOUNDS.y)],
                     current_waypoint: 0,
+                    player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 },
                 Transform::from_translation(edge),
             ))
@@ -2423,6 +2445,57 @@ mod tests {
             transform.translation.x > 0.0,
             "expected opponent to turn towards player, x={}",
             transform.translation.x
+        );
+    }
+
+    #[test]
+    fn an_eager_personality_hunts_a_player_a_cautious_one_leaves_alone() {
+        // Same player, same patrol route, two different driving personalities. The
+        // human sits 300 units to the right; the patrol waypoint is far up the
+        // y-axis the car already faces. The drive system must honour each car's own
+        // pursuit radius, not a shared global, so eagerness is a genuine
+        // personality trait rather than uniform across the roster.
+        let player = Vec3::new(300.0, 0.0, 5.0);
+
+        // Cautious technician-style car: 200-unit reach falls short of the player,
+        // so it stays disciplined and keeps lapping its patrol route.
+        let mut cautious_app = app_with_system();
+        let cautious = spawn_ai_with_pursuit(
+            &mut cautious_app,
+            AiTeam::Red,
+            vec![Vec2::new(0.0, 1000.0)],
+            200.0,
+        );
+        spawn_player(&mut cautious_app, player);
+        cautious_app.update();
+        let cautious_transform = cautious_app.world.get::<Transform>(cautious).unwrap();
+        assert!(
+            cautious_transform.translation.x.abs() < 1e-4,
+            "a cautious driver leaves a player beyond its reach alone, x={}",
+            cautious_transform.translation.x
+        );
+        assert!(
+            cautious_transform.translation.y > 0.0,
+            "a cautious driver keeps lapping its patrol route, y={}",
+            cautious_transform.translation.y
+        );
+
+        // Eager sprinter-style car: 400-unit reach covers the same player, so it
+        // breaks off the route to run the player down.
+        let mut eager_app = app_with_system();
+        let eager = spawn_ai_with_pursuit(
+            &mut eager_app,
+            AiTeam::Red,
+            vec![Vec2::new(0.0, 1000.0)],
+            400.0,
+        );
+        spawn_player(&mut eager_app, player);
+        eager_app.update();
+        let eager_transform = eager_app.world.get::<Transform>(eager).unwrap();
+        assert!(
+            eager_transform.translation.x > 0.0,
+            "an eager driver runs down a player within its reach, x={}",
+            eager_transform.translation.x
         );
     }
 

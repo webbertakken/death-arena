@@ -22,6 +22,11 @@ pub struct VirtualPlayer {
     pub waypoints: Vec<Vec2>,
     /// Index into `waypoints` the car is currently driving towards.
     pub current_waypoint: usize,
+    /// World-space radius within which this driver peels off to hunt the human
+    /// player. Set from the car's driving personality so each opponent hunts with
+    /// its own eagerness: an aggressive sprinter runs the player down from further
+    /// out than a disciplined technician that stays glued to its line.
+    pub player_pursuit_radius: f32,
 }
 
 #[derive(Default)]

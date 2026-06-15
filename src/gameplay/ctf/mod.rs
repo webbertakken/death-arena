@@ -2413,6 +2413,7 @@ mod tests {
                     rotation_speed: 0.0,
                     waypoints: vec![],
                     current_waypoint: 0,
+                    player_pursuit_radius: 0.0,
                 },
                 Transform::from_translation(Vec3::ZERO),
             ))
@@ -2483,6 +2484,7 @@ mod tests {
                     rotation_speed: 0.0,
                     waypoints: vec![],
                     current_waypoint: 0,
+                    player_pursuit_radius: 0.0,
                 },
                 Transform::from_translation(Vec3::new(-500.0, 0.0, 4.0)),
             ))

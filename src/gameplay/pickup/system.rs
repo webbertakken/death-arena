@@ -338,6 +338,7 @@ mod tests {
                     rotation_speed: 0.0,
                     waypoints: vec![],
                     current_waypoint: 0,
+                    player_pursuit_radius: 0.0,
                 },
                 Transform::from_translation(position),
             ))
