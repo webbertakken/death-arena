@@ -99,6 +99,40 @@ const _: () = assert!(CARRIER_TAKEDOWN_WRECK_BONUS > FLAG_RETURN_CASH_BOUNTY);
 /// Denying a capture must never out-earn scoring one, enforced at compile time,
 /// so the takedown rewards defence without eclipsing the objective.
 const _: () = assert!(CARRIER_TAKEDOWN_WRECK_BONUS < CAPTURE_CASH_BOUNTY);
+/// Extra cash a team banks per rampage step it ends by wrecking a car of a team
+/// on a wreck streak: the bounty on a dangerous driver's head.
+///
+/// The third anti-snowball lever, completing the set. The capped
+/// [`WRECK_STREAK_BONUS`] stops a rampaging team *earning* its way out of reach;
+/// the [`most_wanted_wreck_bonus`] bankrolls the side trailing on *captures*; this
+/// rewards the side that actually *ends* a rampage. Where most-wanted prices the
+/// capture leader's head, this prices the wreck leader's: cutting down a car that
+/// has been racking up kills pays extra, so a team being ground down in the scrum
+/// can still buy its comeback by stopping the run. Paid on top of the base
+/// [`WRECK_CASH_BOUNTY`], any rampage [`WRECK_STREAK_BONUS`], the
+/// [`most_wanted_wreck_bonus`] and the [`carrier_takedown_wreck_bonus`], and only
+/// when the wrecked team was genuinely on a rampage the frame it fell.
+pub const SHUTDOWN_BOUNTY_PER_STREAK_STEP: u32 = 50;
+/// Smallest rampage (consecutive wrecks) that still puts a bounty on a team's
+/// head.
+///
+/// A lone single wreck is no rampage, so a shutdown pays from the *second*
+/// consecutive wreck on, exactly where a rampage's own escalating
+/// [`WRECK_STREAK_BONUS`] snowball begins, so the lever counters precisely the
+/// run it is meant to.
+pub const SHUTDOWN_MIN_STREAK: u32 = 1;
+/// Deepest rampage the shutdown bounty still scales with, matched to
+/// [`WRECK_STREAK_BONUS_CAP`] so the reward for ending a rampage tops out exactly
+/// where the rampage's own earnings do.
+pub const SHUTDOWN_MAX_STREAK_STEPS: u32 = WRECK_STREAK_BONUS_CAP;
+/// Each rampage step ended must pay a real bounty, enforced at compile time.
+const _: () = assert!(SHUTDOWN_BOUNTY_PER_STREAK_STEP > 0);
+/// Ending a rampage must never out-earn scoring a capture, enforced at compile
+/// time, so the comeback lever rewards the shutdown without eclipsing the
+/// objective, mirroring the same ceiling the most-wanted and carrier-takedown
+/// bonuses respect.
+const _: () =
+    assert!(SHUTDOWN_MAX_STREAK_STEPS * SHUTDOWN_BOUNTY_PER_STREAK_STEP < CAPTURE_CASH_BOUNTY);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -698,6 +732,26 @@ pub const fn carrier_takedown_wreck_bonus(victim_was_carrying: bool) -> u32 {
     }
 }
 
+/// Cash bonus a team banks for ending an enemy rampage by wrecking one of its
+/// cars.
+///
+/// `victim_streak` is the number of consecutive wrecks the wrecked team had racked
+/// up on the frame it fell. The bonus scales with how deep that rampage was, paid
+/// per step above [`SHUTDOWN_MIN_STREAK`] up to [`SHUTDOWN_MAX_STREAK_STEPS`];
+/// wrecking a car of a team that was not on a rampage pays nothing. The combat
+/// mirror of [`most_wanted_wreck_bonus`]: where that prices the capture leader's
+/// head, this prices the wreck leader's.
+#[must_use]
+pub const fn shutdown_wreck_bonus(victim_streak: u32) -> u32 {
+    let rampage = victim_streak.saturating_sub(SHUTDOWN_MIN_STREAK);
+    let capped = if rampage > SHUTDOWN_MAX_STREAK_STEPS {
+        SHUTDOWN_MAX_STREAK_STEPS
+    } else {
+        rampage
+    };
+    capped * SHUTDOWN_BOUNTY_PER_STREAK_STEP
+}
+
 /// Every cash reward a frame's wrecks pay each team, with the bonus breakdown
 /// preserved for logging.
 ///
@@ -720,13 +774,20 @@ pub struct WreckBounties {
     pub player_carrier_takedown: u32,
     /// Carrier-takedown bonus folded into `opponent`.
     pub opponent_carrier_takedown: u32,
+    /// Shutdown bonus (for ending the opponents' rampage) folded into `player`.
+    pub player_shutdown: u32,
+    /// Shutdown bonus (for ending the player team's rampage) folded into
+    /// `opponent`.
+    pub opponent_shutdown: u32,
 }
 
 /// Resolves every cash reward a frame's wrecks pay: the rampage streak payout,
-/// the most-wanted leader bonus, and the carrier-takedown bonus.
+/// the most-wanted leader bonus, the carrier-takedown bonus, and the shutdown
+/// bonus for ending an enemy rampage.
 ///
 /// The player team deals a wreck when the opponents fall (and vice versa), so it
-/// collects on the opponents' capture lead and on a wrecked opponent carrier.
+/// collects on the opponents' capture lead, on a wrecked opponent carrier, and on
+/// ending the opponents' rampage.
 /// `player_was_carrying`/`opponent_was_carrying` say whether each team had a car
 /// hauling the enemy flag the frame it fell. Bonuses are folded into the per-team
 /// totals and also returned individually for the wreck log.
@@ -762,14 +823,36 @@ pub const fn resolve_wreck_bounties(
         0
     };
 
+    // The wrecked team's *pre-frame* streak is the rampage this wreck just ended,
+    // so the shutdown bonus reads `before_streaks` rather than the post-reset
+    // `payout.streaks`.
+    let player_shutdown = if wrecks.opponent {
+        shutdown_wreck_bonus(before_streaks.opponent)
+    } else {
+        0
+    };
+    let opponent_shutdown = if wrecks.player {
+        shutdown_wreck_bonus(before_streaks.player)
+    } else {
+        0
+    };
+
     WreckBounties {
         streaks: payout.streaks,
-        player: payout.player_bounty + player_most_wanted + player_carrier_takedown,
-        opponent: payout.opponent_bounty + opponent_most_wanted + opponent_carrier_takedown,
+        player: payout.player_bounty
+            + player_most_wanted
+            + player_carrier_takedown
+            + player_shutdown,
+        opponent: payout.opponent_bounty
+            + opponent_most_wanted
+            + opponent_carrier_takedown
+            + opponent_shutdown,
         player_most_wanted,
         opponent_most_wanted,
         player_carrier_takedown,
         opponent_carrier_takedown,
+        player_shutdown,
+        opponent_shutdown,
     }
 }
 
@@ -1884,7 +1967,8 @@ pub fn ram_damage_system(
         info!(
             "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
              most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
-             opponent={}; banking player_bounty={} opponent_bounty={}",
+             opponent={}; shutdown bonus player={} opponent={}; banking player_bounty={} \
+             opponent_bounty={}",
             wrecks.player,
             wrecks.opponent,
             bounties.streaks.player,
@@ -1893,6 +1977,8 @@ pub fn ram_damage_system(
             bounties.opponent_most_wanted,
             bounties.player_carrier_takedown,
             bounties.opponent_carrier_takedown,
+            bounties.player_shutdown,
+            bounties.opponent_shutdown,
             bounties.player,
             bounties.opponent,
         );
@@ -4124,6 +4210,49 @@ mod tests {
     }
 
     #[test]
+    fn system_pays_a_shutdown_bonus_for_ending_an_enemy_rampage() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips the opponent to a wreck.
+            opponent: 0.2,
+        });
+        // The opponents are three wrecks deep into a rampage: a price on the
+        // dangerous driver's head that the player team collects by ending the run.
+        app.insert_resource(WreckStreaks {
+            player: 0,
+            opponent: 3,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + shutdown_wreck_bonus(3),
+            "ending the opponents' rampage must add the shutdown bounty"
+        );
+        assert_eq!(
+            score.wrecks, 1,
+            "the shutdown bonus rides the same wreck, not a phantom second one"
+        );
+        assert_eq!(
+            app.world.resource::<WreckStreaks>().opponent,
+            0,
+            "the wreck resets the rampage it ended"
+        );
+    }
+
+    #[test]
     fn system_pays_no_bounty_while_both_teams_stay_operational() {
         let mut app = App::new();
         app.init_resource::<VehicleIntegrity>();
@@ -4316,6 +4445,110 @@ mod tests {
             takedown < CAPTURE_CASH_BOUNTY,
             "denying a capture must never out-earn scoring one: {takedown}"
         );
+    }
+
+    #[test]
+    fn shutdown_pays_nothing_for_wrecking_a_team_not_on_a_rampage() {
+        assert_eq!(
+            shutdown_wreck_bonus(0),
+            0,
+            "a team with no kills has no price on its head"
+        );
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK),
+            0,
+            "a lone single wreck is no rampage, so ending it pays nothing"
+        );
+    }
+
+    #[test]
+    fn shutdown_bonus_scales_with_the_rampage_depth() {
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + 1),
+            SHUTDOWN_BOUNTY_PER_STREAK_STEP,
+            "ending a two-wreck rampage is worth a single step"
+        );
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + 2),
+            2 * SHUTDOWN_BOUNTY_PER_STREAK_STEP,
+            "a deeper rampage is worth proportionally more to end"
+        );
+    }
+
+    #[test]
+    fn shutdown_bonus_is_capped_at_the_max_rampage() {
+        let capped = SHUTDOWN_MAX_STREAK_STEPS * SHUTDOWN_BOUNTY_PER_STREAK_STEP;
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + SHUTDOWN_MAX_STREAK_STEPS + 5),
+            capped,
+            "the shutdown reward tops out at the capped rampage depth"
+        );
+        assert_eq!(shutdown_wreck_bonus(u32::MAX), capped);
+    }
+
+    #[test]
+    fn the_shutdown_caps_where_the_rampage_earnings_do() {
+        assert_eq!(
+            SHUTDOWN_MAX_STREAK_STEPS, WRECK_STREAK_BONUS_CAP,
+            "ending a rampage must scale exactly as deep as the rampage's own payday"
+        );
+    }
+
+    #[test]
+    fn ending_a_rampage_never_out_earns_a_capture() {
+        assert!(
+            shutdown_wreck_bonus(u32::MAX) < CAPTURE_CASH_BOUNTY,
+            "the comeback lever must stay below the value of a capture"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_shutdown_for_ending_an_enemy_rampage() {
+        // The opponents were three wrecks deep into a rampage when the player team
+        // finally cut one of their cars down: ending the run pays the shutdown
+        // bounty on top of the base wreck bounty.
+        let before = WreckStreaks {
+            player: 0,
+            opponent: 3,
+        };
+        let bounties = resolve_wreck_bounties(
+            before,
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+        );
+
+        assert_eq!(bounties.player_shutdown, shutdown_wreck_bonus(3));
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + shutdown_wreck_bonus(3),
+            "ending the opponents' rampage must fold its shutdown bonus into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_shutdown, 0,
+            "the side that fell ended no run"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_shutdown_for_wrecking_a_calm_team() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+        );
+
+        assert_eq!(bounties.player_shutdown, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
     }
 
     #[test]
