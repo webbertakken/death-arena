@@ -76,6 +76,62 @@ pub const CARRIER_JUKE_LANE_WIDTH: f32 = 90.0;
 /// straight commit to the capture.
 pub const CARRIER_JUKE_OFFSET: f32 = 160.0;
 
+/// How far a driver's run-home juke line tightens per unit of cornering
+/// commitment away from the neutral [`MIN_THROTTLE`] baseline.
+///
+/// A reckless driver (a higher
+/// [`crate::gameplay::virtual_player::VirtualPlayer::corner_throttle`]) commits to a
+/// *tighter* line home: a smaller juke offset, so it squeezes past a roadblock on a
+/// shorter, faster arc that shaves the time its fragile flag run stays exposed, at
+/// the cost of passing closer to the very ram it is dodging. A disciplined driver
+/// swings a wider, safer berth. The run-home mirror of the same commitment axis that
+/// sets how hard a driver stays on the gas through a corner and how deep it noses a
+/// kill home (`pursuit_arrive_radius`), so a keen driver commits to its line
+/// everywhere: into a bend, onto a kill, and past a blocker on the scoring run.
+const CARRIER_JUKE_COMMITMENT_GAIN: f32 = 100.0;
+
+/// Tightest run-home line the keenest driver ever squeezes: a safety net so a
+/// degenerate `corner_throttle` can never collapse the juke into aiming straight
+/// through the blocker. The asserted roster commitment band (`0.15..=0.5`, see
+/// [`crate::gameplay::virtual_player::spawn`]) maps strictly inside this offset band,
+/// so the clamp only ever guards a garbage throttle, never a legal driver.
+const CARRIER_JUKE_OFFSET_MIN: f32 = 145.0;
+
+/// Widest run-home berth the most disciplined driver ever swings.
+const CARRIER_JUKE_OFFSET_MAX: f32 = 180.0;
+
+/// The keenest juke must still aim at or outside true ram range, enforced at compile
+/// time, so even the most reckless squeeze arcs around the blocker rather than
+/// straight into it.
+const _: () = assert!(CARRIER_JUKE_OFFSET_MIN >= crate::gameplay::combat::RAM_RADIUS);
+
+/// The neutral baseline must sit inside the commitment band, enforced at compile
+/// time, so a reckless rival flexes a tighter line and a disciplined one a wider
+/// berth.
+const _: () = assert!(
+    CARRIER_JUKE_OFFSET_MIN < CARRIER_JUKE_OFFSET && CARRIER_JUKE_OFFSET < CARRIER_JUKE_OFFSET_MAX
+);
+
+/// The juke must genuinely tighten with commitment, never widen or stay flat,
+/// enforced at compile time.
+const _: () = assert!(CARRIER_JUKE_COMMITMENT_GAIN > 0.0);
+
+/// Sideways distance a car swings its aim away from a lane blocker on its run home,
+/// flexed by the driver's cornering commitment.
+///
+/// A driver cornering on the neutral [`MIN_THROTTLE`] floor swings the exact
+/// [`CARRIER_JUKE_OFFSET`] baseline, so the human's mirror and every pre-commitment
+/// juke are unchanged. A reckless driver (a higher `corner_throttle`) tightens it
+/// toward [`CARRIER_JUKE_OFFSET_MIN`]; a disciplined one widens it toward
+/// [`CARRIER_JUKE_OFFSET_MAX`]. The affine map is clamped to the
+/// [[`CARRIER_JUKE_OFFSET_MIN`], [`CARRIER_JUKE_OFFSET_MAX`]] band as a safety net
+/// for a degenerate throttle.
+#[must_use]
+fn carrier_juke_offset(corner_throttle: f32) -> f32 {
+    let tighten = (corner_throttle - MIN_THROTTLE) * CARRIER_JUKE_COMMITMENT_GAIN;
+    (CARRIER_JUKE_OFFSET - tighten).clamp(CARRIER_JUKE_OFFSET_MIN, CARRIER_JUKE_OFFSET_MAX)
+}
+
 /// Distance around home base where an enemy blocks a carried-flag capture.
 pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
 
@@ -352,6 +408,7 @@ pub fn choose_capture_the_flag_target(
     team: AiTeam,
     flags: &[FlagTarget],
     threats: &[ThreatTarget],
+    corner_throttle: f32,
 ) -> Option<DrivingTarget> {
     let own_flag = flags.iter().find(|flag| flag.team == team)?;
     let enemy_flag = flags.iter().find(|flag| flag.team == team.enemy())?;
@@ -379,6 +436,7 @@ pub fn choose_capture_the_flag_target(
             own_flag.home,
             team,
             threats,
+            corner_throttle,
         )));
     }
 
@@ -1154,6 +1212,7 @@ pub fn carrier_home_run_aim(
     home: Vec2,
     team: AiTeam,
     threats: &[ThreatTarget],
+    corner_throttle: f32,
 ) -> Vec2 {
     let to_home = home - carrier;
     if to_home.length_squared()
@@ -1170,7 +1229,7 @@ pub fn carrier_home_run_aim(
         return home;
     };
 
-    juke_aim_around_blocker(carrier, home, direction, blocker)
+    juke_aim_around_blocker(carrier, home, direction, blocker, corner_throttle)
 }
 
 /// Swings the aim to the side opposite a `blocker` so a car arcs around it on its
@@ -1181,12 +1240,20 @@ pub fn carrier_home_run_aim(
 /// enemy planted on the line home the exact same way. `perp` is the run-home
 /// `direction` rotated a quarter turn left, so a blocker on the left (positive
 /// side) sends the aim right and vice versa; one dead on the line (side `0.0`)
-/// swings left, a deterministic pick so the car never stalls head-on into it.
-fn juke_aim_around_blocker(from: Vec2, home: Vec2, direction: Vec2, blocker: Vec2) -> Vec2 {
+/// swings left, a deterministic pick so the car never stalls head-on into it. How
+/// far it swings out is the driver's commitment-flexed [`carrier_juke_offset`]: a
+/// reckless car squeezes a tighter line, a disciplined one a wider berth.
+fn juke_aim_around_blocker(
+    from: Vec2,
+    home: Vec2,
+    direction: Vec2,
+    blocker: Vec2,
+    corner_throttle: f32,
+) -> Vec2 {
     let perp = Vec2::new(-direction.y, direction.x);
     let blocker_side = (blocker - from).dot(perp);
     let juke = if blocker_side > 0.0 { -1.0 } else { 1.0 };
-    home + perp * juke * CARRIER_JUKE_OFFSET
+    home + perp * juke * carrier_juke_offset(corner_throttle)
 }
 
 /// The aim a battered car drives at on its pit retreat home.
@@ -1211,6 +1278,7 @@ pub fn pit_retreat_home_run_aim(
     home: Vec2,
     team: AiTeam,
     threats: &[ThreatTarget],
+    corner_throttle: f32,
 ) -> Vec2 {
     let to_home = home - position;
     if to_home.length_squared()
@@ -1227,7 +1295,7 @@ pub fn pit_retreat_home_run_aim(
         return home;
     };
 
-    juke_aim_around_blocker(position, home, direction, blocker)
+    juke_aim_around_blocker(position, home, direction, blocker, corner_throttle)
 }
 
 /// Nearest enemy planted on a flag carrier's straight line home, between it and
@@ -2783,6 +2851,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(target, Some(DrivingTarget::HomeBase(Vec2::new(500.0, 0.0))));
@@ -2790,8 +2859,13 @@ mod tests {
 
     #[test]
     fn carrier_home_run_aim_targets_base_when_the_lane_is_clear() {
-        let aim =
-            carrier_home_run_aim(Vec2::new(0.0, 0.0), Vec2::new(400.0, 0.0), AiTeam::Red, &[]);
+        let aim = carrier_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[],
+            MIN_THROTTLE,
+        );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
     }
@@ -2807,11 +2881,111 @@ mod tests {
                 position: Vec2::new(200.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         // A blocker dead on the line picks a deterministic side so the carrier
         // still commits to a dodge rather than stalling head-on into it.
         assert_vec2_near(aim, Vec2::new(400.0, CARRIER_JUKE_OFFSET));
+    }
+
+    #[test]
+    fn carrier_juke_offset_at_the_neutral_floor_is_the_baseline() {
+        // A driver cornering on the neutral MIN_THROTTLE floor (the all-rounder and
+        // the human's mirror) swings the exact, unchanged baseline berth.
+        assert!((carrier_juke_offset(MIN_THROTTLE) - CARRIER_JUKE_OFFSET).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn carrier_juke_offset_tightens_with_commitment() {
+        // A reckless driver (a higher corner_throttle) squeezes a tighter line home;
+        // a disciplined one swings a wider berth. Sampled across the roster band
+        // (technician 0.20 .. all-rounder 0.30 .. sprinter 0.42).
+        let reckless = carrier_juke_offset(0.42);
+        let neutral = carrier_juke_offset(MIN_THROTTLE);
+        let disciplined = carrier_juke_offset(0.20);
+        assert!(
+            reckless < neutral && neutral < disciplined,
+            "reckless={reckless}, neutral={neutral}, disciplined={disciplined}"
+        );
+    }
+
+    #[test]
+    fn carrier_juke_offset_always_aims_at_or_outside_ram_range() {
+        // Even a degenerate throttle must keep the aim at or outside true ram range
+        // (so the arc rounds the blocker, never points straight through it) and
+        // inside the sane berth band.
+        let ram_radius = crate::gameplay::combat::RAM_RADIUS;
+        for throttle in [-5.0, 0.0, 0.15, 0.2, MIN_THROTTLE, 0.42, 0.5, 1.0, 5.0] {
+            let offset = carrier_juke_offset(throttle);
+            assert!(
+                offset >= ram_radius,
+                "throttle={throttle} gave {offset}, inside ram range {ram_radius}"
+            );
+            assert!(
+                (CARRIER_JUKE_OFFSET_MIN..=CARRIER_JUKE_OFFSET_MAX).contains(&offset),
+                "throttle={throttle} gave {offset}, outside the berth band"
+            );
+        }
+    }
+
+    #[test]
+    fn carrier_juke_offset_clamps_a_degenerate_throttle_to_the_band() {
+        // The clamp is a safety net: an absurdly reckless throttle bottoms out at the
+        // tightest berth, an absurdly timid one tops out at the widest.
+        assert!((carrier_juke_offset(99.0) - CARRIER_JUKE_OFFSET_MIN).abs() <= f32::EPSILON);
+        assert!((carrier_juke_offset(-99.0) - CARRIER_JUKE_OFFSET_MAX).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn a_committed_carrier_jukes_a_tighter_line_than_a_disciplined_one() {
+        // Same dead-on roadblock, two personalities: the reckless carrier squeezes a
+        // tighter, faster arc (a smaller swing off the line home) than the
+        // disciplined one, proving the commitment flex threads through the carrier
+        // run-home aim.
+        let juke = |corner_throttle| {
+            carrier_home_run_aim(
+                Vec2::new(0.0, 0.0),
+                Vec2::new(400.0, 0.0),
+                AiTeam::Red,
+                &[ThreatTarget {
+                    team: AiTeam::Blue,
+                    position: Vec2::new(200.0, 0.0),
+                    velocity: Vec2::ZERO,
+                }],
+                corner_throttle,
+            )
+            .y
+            .abs()
+        };
+        let reckless = juke(0.42);
+        let disciplined = juke(0.20);
+        assert!(
+            reckless < disciplined,
+            "reckless swing={reckless}, disciplined swing={disciplined}"
+        );
+    }
+
+    #[test]
+    fn a_committed_pit_retreat_jukes_a_tighter_line_than_a_disciplined_one() {
+        // The retreating car weaves home on the same commitment-flexed line as a
+        // flag carrier, so the reckless retreat also squeezes a tighter arc.
+        let juke = |corner_throttle| {
+            pit_retreat_home_run_aim(
+                Vec2::new(0.0, 0.0),
+                Vec2::new(400.0, 0.0),
+                AiTeam::Red,
+                &[ThreatTarget {
+                    team: AiTeam::Blue,
+                    position: Vec2::new(200.0, 0.0),
+                    velocity: Vec2::ZERO,
+                }],
+                corner_throttle,
+            )
+            .y
+            .abs()
+        };
+        assert!(juke(0.42) < juke(0.20));
     }
 
     #[test]
@@ -2825,6 +2999,7 @@ mod tests {
                 position: Vec2::new(200.0, 40.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         // Blocker is to the left of the run home, so the carrier swings right.
@@ -2842,6 +3017,7 @@ mod tests {
                 position: Vec2::new(75.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(150.0, 0.0));
@@ -2858,6 +3034,7 @@ mod tests {
                 position: Vec2::new(200.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
@@ -2874,6 +3051,7 @@ mod tests {
                 position: Vec2::new(-100.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
         assert_vec2_near(behind, Vec2::new(400.0, 0.0));
 
@@ -2886,6 +3064,7 @@ mod tests {
                 position: Vec2::new(500.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
         assert_vec2_near(beyond, Vec2::new(400.0, 0.0));
     }
@@ -2901,6 +3080,7 @@ mod tests {
                 position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
@@ -2908,8 +3088,13 @@ mod tests {
 
     #[test]
     fn pit_retreat_home_run_aim_targets_base_when_the_lane_is_clear() {
-        let aim =
-            pit_retreat_home_run_aim(Vec2::new(0.0, 0.0), Vec2::new(400.0, 0.0), AiTeam::Red, &[]);
+        let aim = pit_retreat_home_run_aim(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            AiTeam::Red,
+            &[],
+            MIN_THROTTLE,
+        );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
     }
@@ -2925,6 +3110,7 @@ mod tests {
                 position: Vec2::new(200.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         // A blocker dead on the limp home picks a deterministic side, so the
@@ -2944,6 +3130,7 @@ mod tests {
                 position: Vec2::new(200.0, 40.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         // Blocker is to the left of the run home, so the limping car swings right.
@@ -2965,6 +3152,7 @@ mod tests {
                 position: Vec2::new(close / 2.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(close, 0.0));
@@ -2981,6 +3169,7 @@ mod tests {
                 position: Vec2::new(200.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
@@ -2997,6 +3186,7 @@ mod tests {
                 position: Vec2::new(200.0, CARRIER_JUKE_LANE_WIDTH + 10.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_vec2_near(aim, Vec2::new(400.0, 0.0));
@@ -3027,6 +3217,7 @@ mod tests {
                 position: Vec2::new(250.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3063,6 +3254,7 @@ mod tests {
                 position: Vec2::new(430.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3095,6 +3287,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3124,6 +3317,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3152,6 +3346,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3180,6 +3375,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3208,6 +3404,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3236,6 +3433,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3269,6 +3467,7 @@ mod tests {
                 position: Vec2::new(430.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3302,6 +3501,7 @@ mod tests {
                 position: Vec2::new(-40.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3339,6 +3539,7 @@ mod tests {
                 position: pursuer_position,
                 velocity: pursuer_velocity,
             }],
+            MIN_THROTTLE,
         );
 
         let Some(DrivingTarget::BlockFlagCarrierPursuer(block)) = target else {
@@ -3468,6 +3669,7 @@ mod tests {
                 position: Vec2::new(-200.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
@@ -3496,6 +3698,7 @@ mod tests {
                 },
             ],
             &[],
+            MIN_THROTTLE,
         );
 
         let Some(DrivingTarget::EscortFlagCarrier(position)) = target else {
@@ -3528,6 +3731,7 @@ mod tests {
                 position: Vec2::new(300.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3560,6 +3764,7 @@ mod tests {
                 position: Vec2::new(360.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3599,6 +3804,7 @@ mod tests {
                     velocity: Vec2::ZERO,
                 },
             ],
+            MIN_THROTTLE,
         );
 
         assert_eq!(
@@ -3762,6 +3968,7 @@ mod tests {
                 position: Vec2::new(300.0, 60.0),
                 velocity: Vec2::new(-200.0, 0.0),
             }],
+            MIN_THROTTLE,
         );
 
         let Some(DrivingTarget::DefendHomeBase(point)) = target else {
@@ -3866,6 +4073,7 @@ mod tests {
                 position: Vec2::new(-100.0, 0.0),
                 velocity: Vec2::ZERO,
             }],
+            MIN_THROTTLE,
         );
 
         assert_eq!(

@@ -890,16 +890,21 @@ fn assigned_ctf_targets(
                 .iter()
                 .find(|flag| flag.team == virtual_player.team)?
                 .home;
-            choose_capture_the_flag_target(entity, virtual_player.team, flags, threats).map(
-                |target| CtfTargetCandidate {
-                    entity,
-                    team: virtual_player.team,
-                    position: transform.translation.xy(),
-                    target,
-                    home_base,
-                    carries_enemy_flag: carries_enemy_flag(entity, virtual_player.team, flags),
-                },
+            choose_capture_the_flag_target(
+                entity,
+                virtual_player.team,
+                flags,
+                threats,
+                virtual_player.corner_throttle,
             )
+            .map(|target| CtfTargetCandidate {
+                entity,
+                team: virtual_player.team,
+                position: transform.translation.xy(),
+                target,
+                home_base,
+                carries_enemy_flag: carries_enemy_flag(entity, virtual_player.team, flags),
+            })
         })
         .collect();
 
@@ -950,7 +955,15 @@ fn pit_retreat_targets(
                 .iter()
                 .find(|candidate| candidate.entity == entity)
                 .map_or(home, |candidate| candidate.position);
-            let aim = pit_retreat_home_run_aim(position, home, team, threats);
+            // The retreating car weaves home on its own commitment-flexed line: a
+            // reckless driver squeezes a tighter, faster berth past a blocker, a
+            // disciplined one swings wider, just as a flag carrier does.
+            let corner_throttle = query
+                .get(entity)
+                .map_or(MIN_THROTTLE, |(_, virtual_player, _)| {
+                    virtual_player.corner_throttle
+                });
+            let aim = pit_retreat_home_run_aim(position, home, team, threats, corner_throttle);
             targets.push((entity, DrivingTarget::HomeBase(aim)));
         }
     }
