@@ -108,6 +108,57 @@ pub const CTF_PICKUP_DETOUR_MIN_PRIORITY: u32 = 50;
 /// Priority at which a pickup justifies the wider CTF detour lane.
 pub const CTF_WIDE_DETOUR_MIN_PRIORITY: u32 = 150;
 
+/// Closing-time detour bar for a *greedy* driver (its
+/// [`crate::gameplay::virtual_player::VirtualPlayer::pickup_pursuit_radius`] a
+/// clear step above the baseline).
+///
+/// In the round's closing stretch every team disciplines its detours up to the
+/// wide [`CTF_WIDE_DETOUR_MIN_PRIORITY`]; on top of that the bar is nudged by the
+/// driver's greed, the same personality axis that already sets how far afield a
+/// car scavenges ([`BASELINE_PICKUP_PURSUIT_RADIUS`]) and how wide its detour lane
+/// runs ([`pickup_lane_width`]). A greedy driver keeps gambling on a cheaper grab
+/// even at the death, so its bar sits a notch *below* the neutral wide bar, yet
+/// stays above the normal-play [`CTF_PICKUP_DETOUR_MIN_PRIORITY`] so closing time
+/// always disciplines a detour somewhat (a mere cash bag is still left). At `130`
+/// a greedy driver still breaks off for a sabotage-grade grab the neutral driver
+/// leaves on the track.
+pub const CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY: u32 = 130;
+
+/// Closing-time detour bar for a *disciplined* driver (its greed a clear step
+/// below the baseline).
+///
+/// The mirror of [`CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY`]: a disciplined driver
+/// locks its line down even tighter than the neutral wide bar, so its bar sits
+/// *above* [`CTF_WIDE_DETOUR_MIN_PRIORITY`]. At `170` even a nitro is left on the
+/// track to race the flag home; only a battered team's integrity-scaled survival
+/// grab still tempts it (a wrecked-team repair tops out at `175`, see
+/// [`crate::gameplay::pickup::PickupKind::virtual_player_priority_for_integrity`]),
+/// so commitment never tips into suicide.
+pub const CLOSING_TIME_DISCIPLINED_DETOUR_MIN_PRIORITY: u32 = 170;
+
+/// Greed delta from [`BASELINE_PICKUP_PURSUIT_RADIUS`] beyond which a driver leaves
+/// the neutral closing-time band for the greedy or disciplined bar.
+///
+/// Set so the whole roster is expressed and the baseline driver (and the human,
+/// which mirrors it) keeps the exact neutral wide bar: the asserted roster greed
+/// band (`340..=580`, see [`crate::gameplay::virtual_player::spawn`]) maps the
+/// all-rounder (`450`, delta `0`) to the neutral band, the sprinter (`520`, delta
+/// `+70`) to the greedy bar, and the brawler (`400`) and technician (`380`, deltas
+/// `-50`/`-70`) to the disciplined bar.
+const CLOSING_TIME_GREED_STEP: f32 = 40.0;
+
+/// Greed must never invert closing-time discipline: a greedy driver still
+/// disciplines more than normal play (its bar above the base bar) yet gambles more
+/// than the neutral driver (its bar below the wide bar), and a disciplined driver
+/// locks down tighter than the neutral driver (its bar above the wide bar).
+/// Enforced at compile time so the ordering can never drift.
+const _: () = assert!(CTF_PICKUP_DETOUR_MIN_PRIORITY < CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY);
+const _: () = assert!(CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY < CTF_WIDE_DETOUR_MIN_PRIORITY);
+const _: () = assert!(CTF_WIDE_DETOUR_MIN_PRIORITY < CLOSING_TIME_DISCIPLINED_DETOUR_MIN_PRIORITY);
+/// The neutral band must be real (a positive greed step), so the baseline driver
+/// keeps the unscaled wide bar. Enforced at compile time.
+const _: () = assert!(CLOSING_TIME_GREED_STEP > 0.0);
+
 /// Team durability fraction (`0.0`..=`1.0`) at or below which a battered team
 /// breaks one car off the field and sends it home to pit-recover.
 ///
@@ -1233,7 +1284,10 @@ fn pickup_detour(
     }
 
     let target_distance_sq = position.distance_squared(target.position());
-    let min_priority = closing_time_detour_min_priority(choices.closing_time_discipline);
+    let min_priority = closing_time_detour_min_priority(
+        choices.closing_time_discipline,
+        choices.pickup_pursuit_radius,
+    );
     best_pickup(
         position,
         choices.pickups,
@@ -1252,19 +1306,39 @@ fn pickup_detour(
     )
 }
 
-/// Minimum pickup priority that still justifies a CTF detour this frame.
+/// Minimum pickup priority that still justifies a CTF detour this frame, with the
+/// closing-time bar nudged by the driver's greed.
 ///
 /// In normal play a car breaks off its objective for any pickup worth the base
-/// [`CTF_PICKUP_DETOUR_MIN_PRIORITY`]. Once a team disciplines its detours in
-/// closing time the bar rises to [`CTF_WIDE_DETOUR_MIN_PRIORITY`], so only a
-/// pickup already worth a wide gamble (nitro's race pressure or a battered team's
-/// integrity-scaled repair/shield) is worth the time, while a mere cash bag is
-/// left on the track in favour of racing the flag home.
-const fn closing_time_detour_min_priority(closing_time_discipline: bool) -> u32 {
-    if closing_time_discipline {
-        CTF_WIDE_DETOUR_MIN_PRIORITY
+/// [`CTF_PICKUP_DETOUR_MIN_PRIORITY`], regardless of personality. Once a team
+/// disciplines its detours in closing time the bar rises to the wide
+/// [`CTF_WIDE_DETOUR_MIN_PRIORITY`], so only a pickup already worth a wide gamble
+/// (nitro's race pressure or a battered team's integrity-scaled repair/shield) is
+/// worth the time, while a mere cash bag is left on the track in favour of racing
+/// the flag home. On top of that the closing-time bar is nudged by the driver's
+/// greed (its `pickup_pursuit_radius` relative to [`BASELINE_PICKUP_PURSUIT_RADIUS`]),
+/// the same personality axis that already widens its detour lane: a greedy driver
+/// keeps gambling on a cheaper grab ([`CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY`]),
+/// a disciplined one locks down even a nitro ([`CLOSING_TIME_DISCIPLINED_DETOUR_MIN_PRIORITY`]),
+/// and the baseline driver keeps the exact wide bar.
+const fn closing_time_detour_min_priority(
+    closing_time_discipline: bool,
+    pickup_pursuit_radius: f32,
+) -> u32 {
+    if !closing_time_discipline {
+        return CTF_PICKUP_DETOUR_MIN_PRIORITY;
+    }
+    // Nudge the wide bar by the driver's greed relative to the baseline driver.
+    // Stepped tiers keep the mapping legible and free of float-to-int casts,
+    // mirroring `repair_priority_for_integrity`; the baseline driver (delta 0)
+    // keeps the exact wide bar, so it and the human that mirrors it are unchanged.
+    let greed_delta = pickup_pursuit_radius - BASELINE_PICKUP_PURSUIT_RADIUS;
+    if greed_delta >= CLOSING_TIME_GREED_STEP {
+        CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY
+    } else if greed_delta <= -CLOSING_TIME_GREED_STEP {
+        CLOSING_TIME_DISCIPLINED_DETOUR_MIN_PRIORITY
     } else {
-        CTF_PICKUP_DETOUR_MIN_PRIORITY
+        CTF_WIDE_DETOUR_MIN_PRIORITY
     }
 }
 
@@ -2115,14 +2189,141 @@ mod tests {
     #[test]
     fn closing_time_raises_the_detour_bar_to_the_wide_threshold() {
         assert_eq!(
-            closing_time_detour_min_priority(false),
+            closing_time_detour_min_priority(false, BASELINE_PICKUP_PURSUIT_RADIUS),
             CTF_PICKUP_DETOUR_MIN_PRIORITY,
             "normal play breaks off for any pickup worth the base detour"
         );
         assert_eq!(
-            closing_time_detour_min_priority(true),
+            closing_time_detour_min_priority(true, BASELINE_PICKUP_PURSUIT_RADIUS),
             CTF_WIDE_DETOUR_MIN_PRIORITY,
-            "a committed team only breaks off for a wide-detour-worthy grab"
+            "a baseline driver in closing time only breaks off for a wide-detour grab"
+        );
+    }
+
+    #[test]
+    fn normal_play_keeps_the_base_detour_bar_for_every_personality() {
+        // Outside closing time the bar never depends on greed: every driver, from
+        // the greediest sprinter to the most disciplined technician, breaks off for
+        // any pickup worth the base detour.
+        for greed in [380.0_f32, BASELINE_PICKUP_PURSUIT_RADIUS, 520.0_f32] {
+            assert_eq!(
+                closing_time_detour_min_priority(false, greed),
+                CTF_PICKUP_DETOUR_MIN_PRIORITY,
+                "greed {greed} should not move the normal-play bar"
+            );
+        }
+    }
+
+    #[test]
+    fn greed_scales_the_closing_time_detour_bar_around_the_baseline() {
+        // In closing time a greedy driver keeps a lower bar (still gambles) and a
+        // disciplined one a higher bar (locks down), with the baseline driver
+        // exactly on the neutral wide bar so it and the human are unchanged.
+        let greedy = closing_time_detour_min_priority(true, 520.0);
+        let baseline = closing_time_detour_min_priority(true, BASELINE_PICKUP_PURSUIT_RADIUS);
+        let disciplined = closing_time_detour_min_priority(true, 380.0);
+
+        assert_eq!(baseline, CTF_WIDE_DETOUR_MIN_PRIORITY);
+        assert_eq!(greedy, CLOSING_TIME_GREEDY_DETOUR_MIN_PRIORITY);
+        assert_eq!(disciplined, CLOSING_TIME_DISCIPLINED_DETOUR_MIN_PRIORITY);
+        assert!(
+            greedy < baseline && baseline < disciplined,
+            "greed must order the closing-time bar without inverting discipline, got \
+             greedy={greedy}, baseline={baseline}, disciplined={disciplined}"
+        );
+    }
+
+    #[test]
+    fn the_closing_time_bar_never_drops_below_normal_play_discipline() {
+        // Even the greediest legal driver still disciplines its detours in closing
+        // time: its bar stays above the normal-play bar, so a cash bag is always
+        // left on the track when the clock is running down.
+        let greedy = closing_time_detour_min_priority(true, 580.0);
+        assert!(
+            greedy > closing_time_detour_min_priority(false, 580.0),
+            "closing time must always raise the bar above normal play, got {greedy}"
+        );
+    }
+
+    #[test]
+    fn a_greedy_driver_still_gambles_on_a_sabotage_grab_in_closing_time() {
+        use crate::gameplay::pickup::PickupKind;
+
+        // A sabotage-grade pickup (130) sitting square on the flag lane: the
+        // neutral driver leaves it (its closing-time bar is the wide 150) while a
+        // greedy sprinter still breaks off for it (its bar drops to 130).
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(0.0, 300.0));
+        let on_lane = Vec2::new(0.0, 80.0);
+        let sabotage = [PickupTarget {
+            position: on_lane,
+            priority: PickupKind::Sabotage.virtual_player_priority(),
+        }];
+
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    closing_time_discipline: true,
+                    pickup_pursuit_radius: BASELINE_PICKUP_PURSUIT_RADIUS,
+                    ..choices(&waypoints, 0, Some(flag), &sabotage, None, 0.0)
+                },
+            ),
+            Some(flag),
+            "a neutral driver in closing time leaves a sabotage grab and commits"
+        );
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    closing_time_discipline: true,
+                    pickup_pursuit_radius: 520.0,
+                    ..choices(&waypoints, 0, Some(flag), &sabotage, None, 0.0)
+                },
+            ),
+            Some(DrivingTarget::Pickup(on_lane)),
+            "a greedy driver in closing time still gambles on the sabotage grab"
+        );
+    }
+
+    #[test]
+    fn a_disciplined_driver_leaves_even_a_nitro_in_closing_time() {
+        use crate::gameplay::pickup::PickupKind;
+
+        // A nitro (150) square on the flag lane: the neutral driver grabs it (its
+        // closing-time bar is the wide 150) while a disciplined technician leaves
+        // it to race the flag home (its bar rises to 170).
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(0.0, 300.0));
+        let on_lane = Vec2::new(0.0, 80.0);
+        let nitro = [PickupTarget {
+            position: on_lane,
+            priority: PickupKind::Nitro.virtual_player_priority(),
+        }];
+
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    closing_time_discipline: true,
+                    pickup_pursuit_radius: BASELINE_PICKUP_PURSUIT_RADIUS,
+                    ..choices(&waypoints, 0, Some(flag), &nitro, None, 0.0)
+                },
+            ),
+            Some(DrivingTarget::Pickup(on_lane)),
+            "a neutral driver in closing time still grabs a nitro that speeds the push"
+        );
+        assert_eq!(
+            choose_driving_target(
+                Vec2::ZERO,
+                DrivingChoices {
+                    closing_time_discipline: true,
+                    pickup_pursuit_radius: 380.0,
+                    ..choices(&waypoints, 0, Some(flag), &nitro, None, 0.0)
+                },
+            ),
+            Some(flag),
+            "a disciplined driver in closing time leaves even a nitro and commits"
         );
     }
 
