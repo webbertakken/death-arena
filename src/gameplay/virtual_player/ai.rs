@@ -57,6 +57,23 @@ pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
 /// Distance around a friendly flag carrier where enemies count as pursuers.
 pub const FLAG_CARRIER_PURSUER_RADIUS: f32 = 260.0;
 
+/// Distance from the flag carrier at which a blocking teammate interposes against
+/// an incoming pursuer.
+///
+/// The carrier-side mirror of [`HOME_FLAG_DEFENSE_DISTANCE`]: where a home-flag
+/// defender meets a thief on a ring around the *flag*, a carrier's blocker meets a
+/// pursuer on a ring around the *carrier*. Anchored to
+/// [`crate::gameplay::combat::RAM_RADIUS`] so the block lands exactly as the
+/// pursuer closes into ramming range of the fragile carrier (which bleeds at the
+/// doubled [`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]), rather
+/// than once it is already trading paint.
+pub const FLAG_CARRIER_PURSUER_BLOCK_STANDOFF: f32 = crate::gameplay::combat::RAM_RADIUS;
+
+/// The block ring must sit inside the pursuer detection radius, enforced at compile
+/// time, so a detected pursuer outside it can actually be led to the ring instead
+/// of always being met head-on at the spot it has already left.
+const _: () = assert!(FLAG_CARRIER_PURSUER_BLOCK_STANDOFF < FLAG_CARRIER_PURSUER_RADIUS);
+
 /// Distance from home where a flag carrier waits while the base is contested.
 pub const CONTESTED_HOME_BASE_STAGING_DISTANCE: f32 = 240.0;
 
@@ -279,7 +296,9 @@ pub fn choose_capture_the_flag_target(
             return Some(DrivingTarget::UrgentDefendHomeBase(threat.position));
         }
         if let Some(threat) = closest_flag_carrier_pursuer(team, enemy_flag.position, threats) {
-            return Some(DrivingTarget::BlockFlagCarrierPursuer(threat.position));
+            return Some(DrivingTarget::BlockFlagCarrierPursuer(
+                block_pursuer_intercept_point(enemy_flag.position, threat),
+            ));
         }
         return Some(DrivingTarget::EscortFlagCarrier(escort_lead_point(
             enemy_flag.position,
@@ -871,24 +890,57 @@ fn contested_home_base_staging_point(home_base: Vec2, threat_position: Vec2) -> 
 ///
 /// Recomputed every frame, so the meet-point tracks the thief as it manoeuvres.
 fn defensive_intercept_point(flag_position: Vec2, threat: ThreatTarget) -> Vec2 {
-    let to_threat = threat.position - flag_position;
-    let distance = to_threat.length();
-    if distance <= HOME_FLAG_DEFENSE_DISTANCE {
+    lead_threat_to_ring(flag_position, threat, HOME_FLAG_DEFENSE_DISTANCE)
+}
+
+/// Where a teammate intercepts an enemy chasing down the friendly flag carrier.
+///
+/// The carrier-side mirror of [`defensive_intercept_point`]: instead of guarding a
+/// fixed flag, it guards the *moving* carrier, leading the pursuer to where it will
+/// breach a ring of [`FLAG_CARRIER_PURSUER_BLOCK_STANDOFF`] around the carrier so
+/// the blocker interposes on the pursuer's true line of approach the instant it
+/// closes into ramming range, rather than body-blocking the spot the pursuer has
+/// already left. Recomputed every frame, so the meet-point tracks both the weaving
+/// pursuer and the fleeing carrier. The classic Death Rally "shield the runner",
+/// and the fragile carrier (which bleeds at the doubled
+/// [`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]) needs it most.
+fn block_pursuer_intercept_point(carrier_position: Vec2, threat: ThreatTarget) -> Vec2 {
+    lead_threat_to_ring(
+        carrier_position,
+        threat,
+        FLAG_CARRIER_PURSUER_BLOCK_STANDOFF,
+    )
+}
+
+/// Leads a moving `threat` to where it will first breach a ring of `radius` around
+/// `centre`, so a defender meets it on its true line of approach rather than the
+/// spot it has already left.
+///
+/// The shared core of both defensive leads: the home-flag defender
+/// ([`defensive_intercept_point`], ring around the flag) and the flag-carrier
+/// blocker ([`block_pursuer_intercept_point`], ring around the carrier).
+///
+/// - A threat already inside the ring is met head-on at its current spot.
+/// - A threat outside the ring is led to the point it crosses first (see
+///   [`ring_breach_time`]). The breach point depends only on the threat's heading,
+///   not its speed (scaling the velocity scales the solved time inversely and
+///   cancels), so the rough `heading * top speed` estimate the threat carries pins
+///   the meet-point exactly.
+/// - A stationary threat, or one veering away so it never breaches, falls back to
+///   the static body-block on the ring at its current bearing, so the lead is never
+///   worse than the block it replaces.
+fn lead_threat_to_ring(centre: Vec2, threat: ThreatTarget, radius: f32) -> Vec2 {
+    let to_threat = threat.position - centre;
+    if to_threat.length() <= radius {
         return threat.position;
     }
 
     let Some(direction) = to_threat.try_normalize() else {
-        return flag_position;
+        return centre;
     };
-    let static_block = flag_position + direction * HOME_FLAG_DEFENSE_DISTANCE;
+    let static_block = centre + direction * radius;
 
-    // Lead the thief to where it will first breach the defensive ring; fall back to
-    // the static body-block when it is stationary or never breaches. The breach
-    // point depends only on the thief's heading, not its speed (scaling the
-    // velocity scales the solved time inversely and cancels), so the rough
-    // `heading * top speed` estimate the threat carries pins the meet-point exactly.
-    let Some(time) = ring_breach_time(to_threat, threat.velocity, HOME_FLAG_DEFENSE_DISTANCE)
-    else {
+    let Some(time) = ring_breach_time(to_threat, threat.velocity, radius) else {
         return static_block;
     };
     threat.position + threat.velocity * time
@@ -2814,6 +2866,137 @@ mod tests {
             Some(DrivingTarget::BlockFlagCarrierPursuer(Vec2::new(
                 -40.0, 0.0
             )))
+        );
+    }
+
+    #[test]
+    fn teammate_leads_a_moving_flag_carrier_pursuer() {
+        let carrier = Entity::from_raw(8);
+        let pursuer_position = Vec2::new(200.0, 0.0);
+        let pursuer_velocity = Vec2::new(-200.0, 50.0);
+        let target = choose_capture_the_flag_target(
+            Entity::from_raw(7),
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: Vec2::ZERO,
+                    holder: Some(carrier),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home: Vec2::new(500.0, 0.0),
+                    position: Vec2::new(500.0, 0.0),
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: pursuer_position,
+                velocity: pursuer_velocity,
+            }],
+        );
+
+        let Some(DrivingTarget::BlockFlagCarrierPursuer(block)) = target else {
+            panic!("expected a block-pursuer target, got {target:?}");
+        };
+        // The carrier sits at the origin, so the block must interpose on the
+        // pursuer's line of approach at ram range, not body-block the spot it has
+        // already left.
+        assert!(
+            block.distance(pursuer_position) > EPSILON,
+            "should lead the moving pursuer, not block its vacated spot: {block}"
+        );
+        assert!(
+            (block.length() - crate::gameplay::combat::RAM_RADIUS).abs() <= EPSILON,
+            "block should sit on the carrier's ram-range ring: {block}"
+        );
+        assert!(
+            (block - pursuer_position).dot(pursuer_velocity) > 0.0,
+            "block should lead ahead along the pursuer's heading: {block}"
+        );
+        assert!(
+            block.y > 0.0,
+            "block should shift onto the side the pursuer is heading: {block}"
+        );
+    }
+
+    #[test]
+    fn block_pursuer_meets_a_close_pursuer_head_on() {
+        // Inside the standoff ring the pursuer is already at the carrier, so it is
+        // met head-on at its current spot rather than led.
+        let block = block_pursuer_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(100.0, 0.0),
+                velocity: Vec2::new(-50.0, 0.0),
+            },
+        );
+        assert_vec2_near(block, Vec2::new(100.0, 0.0));
+    }
+
+    #[test]
+    fn block_pursuer_stands_off_at_the_ring_for_a_stationary_pursuer() {
+        // A stationary (or velocity-less, e.g. the human) pursuer outside the ring
+        // never breaches it, so the blocker interposes on the ring between the
+        // carrier and the pursuer rather than charging the pursuer's spot.
+        let block = block_pursuer_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::ZERO,
+            },
+        );
+        assert_vec2_near(block, Vec2::new(FLAG_CARRIER_PURSUER_BLOCK_STANDOFF, 0.0));
+    }
+
+    #[test]
+    fn block_pursuer_holds_the_ring_for_a_pursuer_veering_away() {
+        // A pursuer driving away from the carrier never breaches the ring, so the
+        // lead falls back to the static interpose on the ring.
+        let block = block_pursuer_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(200.0, 0.0),
+                velocity: Vec2::new(50.0, 0.0),
+            },
+        );
+        assert_vec2_near(block, Vec2::new(FLAG_CARRIER_PURSUER_BLOCK_STANDOFF, 0.0));
+    }
+
+    #[test]
+    fn block_pursuer_leads_a_crossing_pursuer_onto_its_approach_line() {
+        // A pursuer sweeping in from the north toward the east is led onto the side
+        // it is heading for, on the ring, ahead of the spot it has already left.
+        let position = Vec2::new(0.0, 200.0);
+        let velocity = Vec2::new(60.0, -200.0);
+        let block = block_pursuer_intercept_point(
+            Vec2::ZERO,
+            ThreatTarget {
+                team: AiTeam::Blue,
+                position,
+                velocity,
+            },
+        );
+        assert!(
+            (block.length() - FLAG_CARRIER_PURSUER_BLOCK_STANDOFF).abs() <= EPSILON,
+            "led point should sit on the carrier's block ring: {block}"
+        );
+        assert!(
+            block.distance(position) > EPSILON,
+            "led point should differ from the vacated spot: {block}"
+        );
+        assert!(
+            (block - position).dot(velocity) > 0.0,
+            "led point should sit ahead along the pursuer's heading: {block}"
+        );
+        assert!(
+            block.x > 0.0,
+            "led point should shift onto the side the pursuer is heading: {block}"
         );
     }
 
