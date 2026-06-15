@@ -35,6 +35,15 @@ ERROR
   exit 1
 fi
 
+if ! grep -Fq "cargo fmt --all -- --check" "${workflow}"; then
+  cat >&2 <<'ERROR'
+CI must verify formatting across the whole workspace, so a misformatted commit
+that bypassed the local hook cannot land unnoticed.
+Use: cargo fmt --all -- --check
+ERROR
+  exit 1
+fi
+
 if ! grep -Fq "bash scripts/check_rust_docs.sh" "${workflow}"; then
   cat >&2 <<'ERROR'
 CI must validate the crate documentation builds with rustdoc warnings denied, so
