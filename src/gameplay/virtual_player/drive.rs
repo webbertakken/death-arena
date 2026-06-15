@@ -309,7 +309,7 @@ fn overlay_targets(
     captures: CaptureScore,
     clock: Option<&MatchClock>,
 ) -> Vec<(Entity, DrivingTarget)> {
-    pit_retreat_targets(query, flags, threats, integrity)
+    pit_retreat_targets(query, flags, threats, integrity, captures, clock)
         .into_iter()
         .chain(finish_off_targets(
             query, flags, threats, integrity, captures, clock,
@@ -923,17 +923,26 @@ fn assigned_ctf_targets(
 /// and parks in the base zone to recover. The retreating car weaves around any
 /// enemy planted on its run home (see [`pit_retreat_home_run_aim`]) rather than
 /// ramming into the very foe that battered it, the same way a flag carrier jukes a
-/// roadblock on its scoring run. Without an integrity resource (no combat loaded)
-/// no team ever retreats.
+/// roadblock on its scoring run. A team trailing on captures in the closing
+/// stretch is the exception: with the clock running out it keeps every car on the
+/// equalising push rather than pulling one home to heal (see [`pit_retreat_car`]),
+/// the defensive mirror of the kill-press clutch window. Without an integrity
+/// resource (no combat loaded) no team ever retreats.
 fn pit_retreat_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     flags: &[FlagTarget],
     threats: &[ThreatTarget],
     integrity: Option<&VehicleIntegrity>,
+    captures: CaptureScore,
+    clock: Option<&MatchClock>,
 ) -> Vec<(Entity, DrivingTarget)> {
     let Some(integrity) = integrity else {
         return Vec::new();
     };
+    // A team trailing on captures in the closing stretch races the equaliser with
+    // every car (see [`pit_retreat_car`]); absent a clock the window stays shut,
+    // mirroring the kill-press clutch window in [`finish_off_targets`].
+    let closing_time = clock.is_some_and(|clock| clock.is_closing_time());
 
     let mut targets = Vec::new();
     for team in [AiTeam::Blue, AiTeam::Red] {
@@ -954,7 +963,14 @@ fn pit_retreat_targets(
                 carries_enemy_flag: carries_enemy_flag(entity, team, flags),
             })
             .collect();
-        if let Some(entity) = pit_retreat_car(integrity.fraction_for_team(team), &candidates) {
+        let behind_on_captures =
+            captures_for_team(captures, team.enemy()) > captures_for_team(captures, team);
+        if let Some(entity) = pit_retreat_car(
+            integrity.fraction_for_team(team),
+            behind_on_captures,
+            closing_time,
+            &candidates,
+        ) {
             let position = candidates
                 .iter()
                 .find(|candidate| candidate.entity == entity)

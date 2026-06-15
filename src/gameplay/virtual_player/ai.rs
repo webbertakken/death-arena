@@ -514,7 +514,13 @@ pub struct PitRetreatCandidate {
 /// is stable), with `x` then `y` as the tie-breaker, mirroring the fallback-role
 /// coordination.
 ///
-/// Two guards keep the retreat from backfiring:
+/// Three guards keep the retreat from backfiring:
+/// - a team trailing on captures in the closing stretch (`behind_on_captures` and
+///   `closing_time`) never retreats: with the clock running out a heal cannot pay
+///   off before the round ends, so every car stays on the equalising push instead
+///   of one limping home. The same clutch desperation that widens the kill press
+///   to a worn leader (see [`finish_off_car`]) cancels the pit stop here, keeping
+///   the whole team's closing-time play coherent;
 /// - a flag carrier is never pulled off its capture run (it already heals at
 ///   home as it scores), so only non-carriers are eligible;
 /// - at least one car must stay on duty, so a lone car never abandons the field
@@ -522,8 +528,13 @@ pub struct PitRetreatCandidate {
 #[must_use]
 pub fn pit_retreat_car(
     integrity_fraction: f32,
+    behind_on_captures: bool,
+    closing_time: bool,
     candidates: &[PitRetreatCandidate],
 ) -> Option<Entity> {
+    if behind_on_captures && closing_time {
+        return None;
+    }
     if integrity_fraction > PIT_RETREAT_INTEGRITY_FRACTION {
         return None;
     }
@@ -4118,7 +4129,7 @@ mod tests {
             pit_candidate(2, Vec2::new(-200.0, 0.0), home),
         ];
 
-        assert_eq!(pit_retreat_car(0.5, &candidates), None);
+        assert_eq!(pit_retreat_car(0.5, false, false, &candidates), None);
     }
 
     #[test]
@@ -4130,7 +4141,7 @@ mod tests {
         ];
 
         assert_eq!(
-            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, &candidates),
+            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, false, false, &candidates),
             Some(Entity::from_raw(2))
         );
     }
@@ -4144,11 +4155,11 @@ mod tests {
         ];
 
         assert_eq!(
-            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, &candidates),
+            pit_retreat_car(PIT_RETREAT_INTEGRITY_FRACTION, false, false, &candidates),
             Some(Entity::from_raw(1))
         );
         let just_above = PIT_RETREAT_INTEGRITY_FRACTION + 0.001;
-        assert_eq!(pit_retreat_car(just_above, &candidates), None);
+        assert_eq!(pit_retreat_car(just_above, false, false, &candidates), None);
     }
 
     #[test]
@@ -4165,7 +4176,7 @@ mod tests {
         // The carrier is closer to home, but it keeps hauling: the non-carrier
         // is the one sent to the pit.
         assert_eq!(
-            pit_retreat_car(0.1, &[carrier, defender]),
+            pit_retreat_car(0.1, false, false, &[carrier, defender]),
             Some(Entity::from_raw(2))
         );
     }
@@ -4175,7 +4186,7 @@ mod tests {
         let home = Vec2::new(500.0, 0.0);
         let lone = [pit_candidate(1, Vec2::new(480.0, 0.0), home)];
 
-        assert_eq!(pit_retreat_car(0.05, &lone), None);
+        assert_eq!(pit_retreat_car(0.05, false, false, &lone), None);
     }
 
     #[test]
@@ -4196,7 +4207,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(pit_retreat_car(0.05, &carriers), None);
+        assert_eq!(pit_retreat_car(0.05, false, false, &carriers), None);
     }
 
     #[test]
@@ -4209,7 +4220,57 @@ mod tests {
             pit_candidate(2, Vec2::new(-100.0, 0.0), home),
         ];
 
-        assert_eq!(pit_retreat_car(0.2, &candidates), Some(Entity::from_raw(2)));
+        assert_eq!(
+            pit_retreat_car(0.2, false, false, &candidates),
+            Some(Entity::from_raw(2))
+        );
+    }
+
+    /// A battered team trailing on captures in the closing stretch has no time to
+    /// heal: every car must stay on the equalising push, so the clutch attack
+    /// cancels the pit stop even though the integrity gate would otherwise fire.
+    #[test]
+    fn pit_retreat_holds_off_when_behind_in_closing_time() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(450.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(pit_retreat_car(0.05, true, true, &candidates), None);
+    }
+
+    /// The suppression is the trailing team's clutch play alone: a team that is not
+    /// behind (level or ahead) in the closing stretch is not racing an equaliser, so
+    /// a battered car still limps home to recover.
+    #[test]
+    fn pit_retreat_still_pits_a_team_not_behind_in_closing_time() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(450.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            pit_retreat_car(0.05, false, true, &candidates),
+            Some(Entity::from_raw(1))
+        );
+    }
+
+    /// The suppression is closing-time only: a team trailing earlier in the round
+    /// has time for a car to heal and rejoin, so it still pit-retreats normally.
+    #[test]
+    fn pit_retreat_still_pits_a_team_behind_outside_closing_time() {
+        let home = Vec2::new(500.0, 0.0);
+        let candidates = [
+            pit_candidate(1, Vec2::new(450.0, 0.0), home),
+            pit_candidate(2, Vec2::new(-200.0, 0.0), home),
+        ];
+
+        assert_eq!(
+            pit_retreat_car(0.05, true, false, &candidates),
+            Some(Entity::from_raw(1))
+        );
     }
 
     fn lead_defence_candidate(entity: u32, position: Vec2, home: Vec2) -> LeadDefenceCandidate {
