@@ -152,6 +152,41 @@ const _: () = assert!(FIRST_BLOOD_CASH_BONUS > 0);
 /// time, so the opening-kill reward never eclipses the objective, mirroring the
 /// ceiling every other wreck bonus respects.
 const _: () = assert!(FIRST_BLOOD_CASH_BONUS < CAPTURE_CASH_BOUNTY);
+/// Cash a team banks for a payback wreck: trading its own wreck straight back.
+///
+/// The grudge-match riposte. Where every other wreck bonus prices the *victim's*
+/// situation, a rampage ([`WRECK_STREAK_BONUS`]), the capture leader
+/// ([`most_wanted_wreck_bonus`]), a flag carrier ([`carrier_takedown_wreck_bonus`])
+/// or a run being ended ([`shutdown_wreck_bonus`]), and first blood prices being
+/// first to a kill, this keys on the *dealer* having just been knocked out itself:
+/// a team ground to a wreck that climbs off the canvas and wrecks an enemy back
+/// within [`PAYBACK_WINDOW_FRAMES`] banks the retaliation. The fourth anti-snowball
+/// lever in spirit, it bankrolls precisely the side being ground down in the scrum,
+/// turning a wreck-for-wreck trade into a momentum swing rather than a quiet reset.
+/// Paid on top of the base [`WRECK_CASH_BOUNTY`] and any other bonus that frame.
+pub const PAYBACK_CASH_BONUS: u32 = 75;
+/// A payback must be a real payday, not a token, enforced at compile time.
+const _: () = assert!(PAYBACK_CASH_BONUS > 0);
+/// A payback tops up the kill, never doubles it, enforced at compile time, so the
+/// riposte rewards hitting back without being worth a second wreck on its own.
+const _: () = assert!(PAYBACK_CASH_BONUS < WRECK_CASH_BOUNTY);
+/// Paying back a wreck must never out-earn scoring a capture, enforced at compile
+/// time, so the riposte rewards the comeback without eclipsing the objective,
+/// mirroring the ceiling every other wreck bonus respects.
+const _: () = assert!(PAYBACK_CASH_BONUS < CAPTURE_CASH_BOUNTY);
+/// Fixed update frames a wrecked team stays owed a payback after it is knocked out.
+///
+/// The window in which trading a wreck straight back counts as a riposte rather
+/// than an unrelated kill later in the round. Opened the frame a team is wrecked
+/// and wound down each frame by [`payback_window_decay_system`], it must outlast
+/// the [`WRECK_STUN_FRAMES`] spin-out so a team can shake off the stagger and
+/// actually strike back, yet stay short enough that the retaliation reads as a
+/// direct answer to the wreck it avenges. At the game's 60 FPS convention this is
+/// five seconds.
+pub const PAYBACK_WINDOW_FRAMES: u32 = 300;
+/// A payback window must outlast the spin-out it answers, enforced at compile
+/// time, so a wrecked team can recover and still land its riposte in time.
+const _: () = assert!(PAYBACK_WINDOW_FRAMES > WRECK_STUN_FRAMES);
 /// Fixed update frames a freshly wrecked team spins out before it recovers.
 ///
 /// The wreck's punch: the instant a team's integrity is ground to zero its cars
@@ -786,6 +821,23 @@ pub const fn first_blood_wreck_bonus(available: bool, dealt_wreck: bool) -> u32 
     }
 }
 
+/// Cash bonus a team banks for a payback wreck: hitting straight back while still
+/// smarting from a recent wreck of its own.
+///
+/// `window_live` is whether this team was wrecked recently enough to still be owed
+/// a riposte, `dealt_wreck` whether it ground an enemy car down to a full wreck
+/// this frame. The [`PAYBACK_CASH_BONUS`] is paid only when a team that was itself
+/// knocked out wrecks an enemy back inside the [`PAYBACK_WINDOW_FRAMES`] window;
+/// a kill landed by a team that has not been wrecked recently pays nothing extra.
+#[must_use]
+pub const fn payback_wreck_bonus(window_live: bool, dealt_wreck: bool) -> u32 {
+    if window_live && dealt_wreck {
+        PAYBACK_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Every cash reward a frame's wrecks pay each team, with the bonus breakdown
 /// preserved for logging.
 ///
@@ -817,11 +869,16 @@ pub struct WreckBounties {
     pub player_first_blood: u32,
     /// First-blood bonus (for the round's opening wreck) folded into `opponent`.
     pub opponent_first_blood: u32,
+    /// Payback bonus (for a retaliation wreck) folded into `player`.
+    pub player_payback: u32,
+    /// Payback bonus (for a retaliation wreck) folded into `opponent`.
+    pub opponent_payback: u32,
 }
 
 /// Resolves every cash reward a frame's wrecks pay: the rampage streak payout,
 /// the most-wanted leader bonus, the carrier-takedown bonus, the shutdown bonus
-/// for ending an enemy rampage, and the first-blood bonus for the opening wreck.
+/// for ending an enemy rampage, the first-blood bonus for the opening wreck, and
+/// the payback bonus for a retaliation wreck.
 ///
 /// The player team deals a wreck when the opponents fall (and vice versa), so it
 /// collects on the opponents' capture lead, on a wrecked opponent carrier, and on
@@ -829,8 +886,11 @@ pub struct WreckBounties {
 /// `player_was_carrying`/`opponent_was_carrying` say whether each team had a car
 /// hauling the enemy flag the frame it fell. `first_blood_available` is whether
 /// the round's opening wreck is still up for grabs; when it is, whichever side(s)
-/// deal a wreck this frame draw first blood. Bonuses are folded into the per-team
-/// totals and also returned individually for the wreck log.
+/// deal a wreck this frame draw first blood.
+/// `payback` is each team's payback window as it stood entering the frame; a team
+/// that deals a wreck while its window is still live banks the payback. Bonuses
+/// are folded into the per-team totals and also returned individually for the
+/// wreck log.
 #[must_use]
 pub const fn resolve_wreck_bounties(
     before_streaks: WreckStreaks,
@@ -839,6 +899,7 @@ pub const fn resolve_wreck_bounties(
     player_was_carrying: bool,
     opponent_was_carrying: bool,
     first_blood_available: bool,
+    payback: PaybackWindows,
 ) -> WreckBounties {
     let payout = resolve_wreck_streaks(before_streaks, wrecks);
 
@@ -884,18 +945,27 @@ pub const fn resolve_wreck_bounties(
     let player_first_blood = first_blood_wreck_bonus(first_blood_available, wrecks.opponent);
     let opponent_first_blood = first_blood_wreck_bonus(first_blood_available, wrecks.player);
 
+    // A payback is owed to whichever side was wrecked recently and now wrecks an
+    // enemy back: a wrecked opponent means the player team landed the riposte, and
+    // vice versa. The window is read from before this frame's wreck, so trading a
+    // wreck back on the very same frame is a double wreck, not a retaliation.
+    let player_payback = payback_wreck_bonus(payback.is_player_live(), wrecks.opponent);
+    let opponent_payback = payback_wreck_bonus(payback.is_opponent_live(), wrecks.player);
+
     WreckBounties {
         streaks: payout.streaks,
         player: payout.player_bounty
             + player_most_wanted
             + player_carrier_takedown
             + player_shutdown
-            + player_first_blood,
+            + player_first_blood
+            + player_payback,
         opponent: payout.opponent_bounty
             + opponent_most_wanted
             + opponent_carrier_takedown
             + opponent_shutdown
-            + opponent_first_blood,
+            + opponent_first_blood
+            + opponent_payback,
         player_most_wanted,
         opponent_most_wanted,
         player_carrier_takedown,
@@ -904,6 +974,8 @@ pub const fn resolve_wreck_bounties(
         opponent_shutdown,
         player_first_blood,
         opponent_first_blood,
+        player_payback,
+        opponent_payback,
     }
 }
 
@@ -1065,6 +1137,63 @@ impl WreckSurges {
 /// own system rather than diffed at each award site.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FirstBloodClaimed(pub bool);
+
+/// Tracks how long each team is still owed a payback after being wrecked.
+///
+/// A per-team frame timer shaped exactly like [`WreckStuns`], but read as a flag
+/// rather than a speed multiplier: it opens for [`PAYBACK_WINDOW_FRAMES`] the
+/// instant a team is wrecked, winds down each frame via
+/// [`payback_window_decay_system`], and lets [`ram_damage_system`] pay the
+/// [`payback_wreck_bonus`] when a team wrecks an enemy back while its window is
+/// still live. Reset when a fresh match begins.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaybackWindows {
+    /// Frames the player team is still owed a payback.
+    pub player_frames: u32,
+    /// Frames the opponent team is still owed a payback.
+    pub opponent_frames: u32,
+}
+
+impl PaybackWindows {
+    /// Whether the player team is still owed a payback this frame.
+    #[must_use]
+    pub const fn is_player_live(self) -> bool {
+        self.player_frames > 0
+    }
+
+    /// Whether the opponent team is still owed a payback this frame.
+    #[must_use]
+    pub const fn is_opponent_live(self) -> bool {
+        self.opponent_frames > 0
+    }
+
+    /// Owes the player team a payback for a fresh [`PAYBACK_WINDOW_FRAMES`] window.
+    pub const fn trigger_player(&mut self) {
+        self.player_frames = PAYBACK_WINDOW_FRAMES;
+    }
+
+    /// Owes the opponent team a payback for a fresh [`PAYBACK_WINDOW_FRAMES`] window.
+    pub const fn trigger_opponent(&mut self) {
+        self.opponent_frames = PAYBACK_WINDOW_FRAMES;
+    }
+
+    /// Opens a payback window for whichever teams were wrecked this frame, so a
+    /// freshly wrecked side is owed a riposte from the next frame on.
+    pub const fn apply_wrecks(&mut self, wrecks: WreckEvents) {
+        if wrecks.player {
+            self.trigger_player();
+        }
+        if wrecks.opponent {
+            self.trigger_opponent();
+        }
+    }
+
+    /// Winds every team's payback window down by one frame.
+    pub const fn tick(&mut self) {
+        self.player_frames = self.player_frames.saturating_sub(1);
+        self.opponent_frames = self.opponent_frames.saturating_sub(1);
+    }
+}
 
 /// Maps a durability value onto the linear speed penalty it imposes.
 fn integrity_speed_multiplier(integrity: f32) -> f32 {
@@ -1918,8 +2047,8 @@ fn drop_wrecked_carriers_flags(
 /// Logs the full bounty breakdown for any frame that produced a wreck.
 ///
 /// A quiet frame logs nothing; otherwise it attributes every reward each team
-/// banked, including the first-blood opening-kill bonus, so the wreck economy is
-/// auditable from the logs alone.
+/// banked, including the first-blood opening-kill bonus and the payback riposte
+/// bonus, so the wreck economy is auditable from the logs alone.
 fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
     if !wrecks.any() {
         return;
@@ -1928,7 +2057,8 @@ fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
         "Wreck! player_down={} opponent_down={}; rampage streaks player={} opponent={}; \
          most-wanted bonus player={} opponent={}; carrier-takedown bonus player={} \
          opponent={}; shutdown bonus player={} opponent={}; first-blood bonus player={} \
-         opponent={}; banking player_bounty={} opponent_bounty={}",
+         opponent={}; payback bonus player={} opponent={}; banking player_bounty={} \
+         opponent_bounty={}",
         wrecks.player,
         wrecks.opponent,
         bounties.streaks.player,
@@ -1941,6 +2071,8 @@ fn log_wreck_bounties(wrecks: WreckEvents, bounties: WreckBounties) {
         bounties.opponent_shutdown,
         bounties.player_first_blood,
         bounties.opponent_first_blood,
+        bounties.player_payback,
+        bounties.opponent_payback,
         bounties.player,
         bounties.opponent,
     );
@@ -1959,6 +2091,7 @@ pub fn ram_damage_system(
     mut wreck_stuns: Option<ResMut<WreckStuns>>,
     mut wreck_surges: Option<ResMut<WreckSurges>>,
     mut first_blood: Option<ResMut<FirstBloodClaimed>>,
+    mut payback_windows: Option<ResMut<PaybackWindows>>,
     mut score: Option<ResMut<Score>>,
     mut opponent_score: Option<ResMut<OpponentScore>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
@@ -2022,10 +2155,21 @@ pub fn ram_damage_system(
     integrity.apply_damage(damage);
     let wrecks = integrity.newly_wrecked(before);
 
+    // Read the payback windows *before* this frame's wreck opens any new ones, so a
+    // payback only ever answers a *prior* wreck: a side wrecked this same frame is
+    // owed nothing yet, making a wreck-for-wreck trade a double wreck, not a riposte.
+    let payback_before = payback_windows.as_deref().copied().unwrap_or_default();
+
     // A freshly wrecked team spins out: stagger its cars for a brief window so
     // the wrecking team gets a real opening to capitalise.
     if let Some(stuns) = wreck_stuns.as_deref_mut() {
         stuns.apply_wrecks(wrecks);
+    }
+
+    // A freshly wrecked team is owed a payback: open its window so a wreck it lands
+    // back inside the next window banks the retaliation bonus.
+    if let Some(windows) = payback_windows.as_deref_mut() {
+        windows.apply_wrecks(wrecks);
     }
 
     // The team that dealt the wreck surges: a short burst of speed, the mirror
@@ -2056,6 +2200,7 @@ pub fn ram_damage_system(
         team_was_carrying(&cars, AiTeam::Blue),
         team_was_carrying(&cars, AiTeam::Red),
         first_blood_available,
+        payback_before,
     );
     if let Some(streaks) = wreck_streaks.as_deref_mut() {
         *streaks = bounties.streaks;
@@ -2150,6 +2295,10 @@ fn reset_first_blood(mut first_blood: ResMut<FirstBloodClaimed>) {
     *first_blood = FirstBloodClaimed::default();
 }
 
+fn reset_payback_windows(mut windows: ResMut<PaybackWindows>) {
+    *windows = PaybackWindows::default();
+}
+
 /// Winds every team's wreck spin-out down by one frame.
 ///
 /// Runs before [`ram_damage_system`] each frame so a spin-out triggered this
@@ -2166,6 +2315,15 @@ fn wreck_surge_decay_system(mut surges: ResMut<WreckSurges>) {
     surges.tick();
 }
 
+/// Winds every team's payback window down by one frame.
+///
+/// Runs before [`ram_damage_system`] each frame so a window opened this frame
+/// keeps its full [`PAYBACK_WINDOW_FRAMES`] before the next tick, mirroring the
+/// spin-out and surge decay.
+fn payback_window_decay_system(mut windows: ResMut<PaybackWindows>) {
+    windows.tick();
+}
+
 #[derive(Default)]
 pub struct CombatPlugin;
 
@@ -2176,16 +2334,19 @@ impl Plugin for CombatPlugin {
             .init_resource::<WreckStuns>()
             .init_resource::<WreckSurges>()
             .init_resource::<FirstBloodClaimed>()
+            .init_resource::<PaybackWindows>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame)
                     .with_system(reset_vehicle_integrity)
                     .with_system(reset_wreck_streaks)
                     .with_system(reset_wreck_stuns)
                     .with_system(reset_wreck_surges)
-                    .with_system(reset_first_blood),
+                    .with_system(reset_first_blood)
+                    .with_system(reset_payback_windows),
             )
             .add_system(wreck_stun_decay_system.before(ram_damage_system))
             .add_system(wreck_surge_decay_system.before(ram_damage_system))
+            .add_system(payback_window_decay_system.before(ram_damage_system))
             .add_system(ram_damage_system)
             // Pit recovery runs after the frame's wear is settled, so a battered
             // car that has just disengaged to home patches up against its
@@ -4223,6 +4384,203 @@ mod tests {
     }
 
     #[test]
+    fn payback_window_opens_for_a_wrecked_team_and_winds_down() {
+        let mut windows = PaybackWindows::default();
+        assert!(
+            !windows.is_player_live(),
+            "no one is owed a payback at kick-off"
+        );
+
+        windows.apply_wrecks(WreckEvents {
+            player: true,
+            opponent: false,
+        });
+        assert_eq!(
+            windows.player_frames, PAYBACK_WINDOW_FRAMES,
+            "being wrecked owes the player team a full payback window"
+        );
+        assert!(
+            !windows.is_opponent_live(),
+            "the side that landed the wreck is owed nothing"
+        );
+
+        windows.tick();
+        assert_eq!(windows.player_frames, PAYBACK_WINDOW_FRAMES - 1);
+        assert!(windows.is_player_live(), "the riposte window is still open");
+    }
+
+    #[test]
+    fn system_pays_a_payback_bonus_for_a_retaliation_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            // One frame of the base scrape (0.25) tips this to zero.
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        // The player team was wrecked moments ago, so it is still owed a riposte.
+        app.insert_resource(PaybackWindows {
+            player_frames: PAYBACK_WINDOW_FRAMES,
+            opponent_frames: 0,
+        });
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let score = app.world.resource::<Score>();
+        assert_eq!(
+            score.cash,
+            WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS,
+            "wrecking an enemy while owed a riposte banks payback on top of the base bounty"
+        );
+        assert_eq!(score.wrecks, 1, "the payback rides the same wreck");
+    }
+
+    #[test]
+    fn system_pays_no_payback_without_a_prior_wreck() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: MAX_INTEGRITY,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        // No one has been wrecked yet this round, so no payback is owed.
+        app.init_resource::<PaybackWindows>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            WRECK_CASH_BOUNTY,
+            "a kill by a team not recently wrecked pays only the base bounty"
+        );
+    }
+
+    #[test]
+    fn system_opens_a_payback_window_when_a_team_is_wrecked() {
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            // One frame of the base scrape (0.25) tips the player team to zero.
+            player: 0.2,
+            opponent: MAX_INTEGRITY,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PaybackWindows>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        let windows = app.world.resource::<PaybackWindows>();
+        assert_eq!(
+            windows.player_frames, PAYBACK_WINDOW_FRAMES,
+            "the wrecked player team is owed a fresh riposte window"
+        );
+        assert!(
+            !windows.is_opponent_live(),
+            "the team that landed the wreck is owed no payback"
+        );
+    }
+
+    #[test]
+    fn system_pays_no_payback_on_the_very_frame_a_team_is_wrecked() {
+        // A simultaneous wreck-for-wreck trade is a double wreck, not a riposte:
+        // neither side was owed a payback entering the frame, so neither banks one
+        // even though both deal a wreck and both windows open afterwards.
+        let mut app = App::new();
+        app.insert_resource(VehicleIntegrity {
+            player: 0.2,
+            opponent: 0.2,
+        });
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<PaybackWindows>();
+        app.add_system(ram_damage_system);
+        app.world
+            .spawn((player_stub(), Transform::from_translation(Vec3::ZERO)));
+        app.world.spawn((
+            virtual_player_stub(AiTeam::Red),
+            Transform::from_translation(Vec3::new(30.0, 0.0, 0.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            WRECK_CASH_BOUNTY,
+            "a same-frame trade pays only the base bounty, no payback"
+        );
+        assert_eq!(
+            app.world.resource::<OpponentScore>().cash,
+            WRECK_CASH_BOUNTY,
+            "neither side was owed a riposte entering the frame"
+        );
+        let windows = app.world.resource::<PaybackWindows>();
+        assert!(
+            windows.is_player_live() && windows.is_opponent_live(),
+            "both freshly wrecked teams are now owed a riposte"
+        );
+    }
+
+    #[test]
+    fn entering_a_match_clears_payback_windows_for_the_new_round() {
+        let mut app = App::new();
+        app.insert_resource(PaybackWindows {
+            player_frames: PAYBACK_WINDOW_FRAMES,
+            opponent_frames: PAYBACK_WINDOW_FRAMES,
+        });
+        app.add_system(reset_payback_windows);
+
+        app.update();
+
+        assert_eq!(
+            *app.world.resource::<PaybackWindows>(),
+            PaybackWindows::default(),
+            "a fresh round must wipe every outstanding riposte"
+        );
+    }
+
+    #[test]
+    fn payback_window_decay_winds_every_window_down_a_frame() {
+        let mut app = App::new();
+        app.insert_resource(PaybackWindows {
+            player_frames: 2,
+            opponent_frames: 1,
+        });
+        app.add_system(payback_window_decay_system);
+
+        app.update();
+
+        let windows = app.world.resource::<PaybackWindows>();
+        assert_eq!(windows.player_frames, 1);
+        assert_eq!(
+            windows.opponent_frames, 0,
+            "a window saturates at zero, never underflowing"
+        );
+    }
+
+    #[test]
     fn system_pays_a_most_wanted_bonus_for_wrecking_the_capture_leader() {
         let mut app = App::new();
         app.insert_resource(VehicleIntegrity {
@@ -4686,6 +5044,7 @@ mod tests {
             false,
             false,
             false,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_shutdown, shutdown_wreck_bonus(3));
@@ -4712,6 +5071,7 @@ mod tests {
             false,
             false,
             false,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_shutdown, 0);
@@ -4736,6 +5096,7 @@ mod tests {
             false,
             true,
             false,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_most_wanted, most_wanted_wreck_bonus(2, 0));
@@ -4767,6 +5128,7 @@ mod tests {
             false,
             false,
             false,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
@@ -4807,6 +5169,52 @@ mod tests {
     }
 
     #[test]
+    fn payback_pays_a_retaliation_wreck() {
+        assert_eq!(
+            payback_wreck_bonus(true, true),
+            PAYBACK_CASH_BONUS,
+            "wrecking an enemy while still owed a riposte banks the payback bonus"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_without_a_live_window() {
+        assert_eq!(
+            payback_wreck_bonus(false, true),
+            0,
+            "a kill by a team not recently wrecked is no riposte"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            payback_wreck_bonus(true, false),
+            0,
+            "being owed a riposte pays nothing until an enemy is actually wrecked"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_when_idle_and_no_wreck() {
+        assert_eq!(payback_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn paying_back_a_wreck_is_a_real_payday_below_a_capture() {
+        let bonus = payback_wreck_bonus(true, true);
+        assert!(bonus > 0, "a payback must be a real retaliation payday");
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the riposte reward must never eclipse scoring a capture"
+        );
+        assert!(
+            bonus < WRECK_CASH_BOUNTY,
+            "a payback tops up the kill rather than being worth a second wreck"
+        );
+    }
+
+    #[test]
     fn drawing_first_blood_is_a_real_payday_below_a_capture() {
         let bonus = first_blood_wreck_bonus(true, true);
         assert!(bonus > 0, "first blood must be a real opening-kill payday");
@@ -4829,6 +5237,7 @@ mod tests {
             false,
             false,
             true,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
@@ -4855,6 +5264,7 @@ mod tests {
             false,
             false,
             false,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_first_blood, 0);
@@ -4875,6 +5285,7 @@ mod tests {
             false,
             false,
             true,
+            PaybackWindows::default(),
         );
 
         assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
@@ -4884,6 +5295,111 @@ mod tests {
             bounties.opponent,
             WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS
         );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_payback_for_a_retaliation_wreck() {
+        // The player team was wrecked recently (its window is still live) and now
+        // grinds an opponent back down: the riposte banks the payback bonus on top
+        // of the base wreck bounty.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: 0,
+            },
+        );
+
+        assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS,
+            "a retaliation wreck folds the payback into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_payback, 0,
+            "the side that fell landed no riposte"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_payback_without_a_live_window() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            false,
+            PaybackWindows::default(),
+        );
+
+        assert_eq!(bounties.player_payback, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_payback_to_both_on_a_mutual_revenge_wreck() {
+        // Both teams were owed a riposte and both wreck the other this frame: each
+        // collects its payback, mirroring how the base bounty restarts for both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: PAYBACK_WINDOW_FRAMES,
+            },
+        );
+
+        assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.opponent_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.opponent, WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_payback_to_a_side_that_only_fell() {
+        // The player team is owed a riposte but it is the one wrecked this frame,
+        // not the one dealing the wreck: no payback rides a kill it did not land.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: false,
+            },
+            CaptureScore::default(),
+            false,
+            false,
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: 0,
+            },
+        );
+
+        assert_eq!(
+            bounties.player_payback, 0,
+            "a payback rides the riposte, not being wrecked again"
+        );
+        assert_eq!(bounties.opponent_payback, 0);
     }
 
     #[test]
