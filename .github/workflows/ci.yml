@@ -260,3 +260,6 @@ jobs:
 
       - name: Check unused dependencies
         run: bash scripts/check_unused_dependencies.sh
+
+      - name: Check wasm RNG backend (getrandom js feature)
+        run: bash scripts/check_wasm_rng_backend.sh

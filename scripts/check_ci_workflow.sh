@@ -93,6 +93,7 @@ required_guards=(
   "bash scripts/check_debug_leftovers.sh"
   "bash scripts/check_temporary_fix_markers.sh"
   "bash scripts/check_unused_dependencies.sh"
+  "bash scripts/check_wasm_rng_backend.sh"
 )
 for guard in "${required_guards[@]}"; do
   if ! grep -Fq "${guard}" "${workflow}"; then

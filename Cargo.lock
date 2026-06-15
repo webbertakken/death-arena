@@ -1272,6 +1272,7 @@ dependencies = [
  "bevy_rapier2d",
  "dotenvy",
  "embed-resource",
+ "getrandom",
  "log",
  "rand",
  "ron 0.7.1",

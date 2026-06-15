@@ -6,6 +6,12 @@ publish = false
 authors = ["Webber Takken <webber@takken.io>", "Worempie"]
 exclude = [".git/", ".idea/", "dist/", "build/", "assets/", "credits/"]
 
+# getrandom is pulled in transitively (via uuid) and carries no direct `use`; it
+# is declared only to pin its `js` feature for the wasm build (see the wasm target
+# dependency table below), so cargo-machete must not flag it as unused.
+[package.metadata.cargo-machete]
+ignored = ["getrandom"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 rand = "0.8"
@@ -26,6 +32,16 @@ bevy_kira_audio = { version = "0.13", features = ["ogg", "mp3"] }
 bevy_common_assets = { version = "0.4.0", features = ["json"] }
 # tempfix
 bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", branch = "bevy-0.9", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0",
+
+# The browser (wasm32-unknown-unknown) build has no OS entropy source. `rand`
+# pulls entropy through `getrandom`, whose default wasm backend is `Unsupported`,
+# so `rand::random()` panics at runtime, exactly where the arena loader picks an
+# arena the moment a match starts. The `js` feature routes entropy to the
+# browser's Web Crypto API so the live GitHub Pages demo runs instead of crashing.
+# Only a feature pin on a transitively-present crate, hence the cargo-machete
+# ignore below and the scripts/check_wasm_rng_backend.sh guard.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 # run `cargo test` to enable this
