@@ -2415,6 +2415,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: 0.0,
                     pickup_pursuit_radius: 0.0,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::ZERO),
             ))
@@ -2487,6 +2488,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: 0.0,
                     pickup_pursuit_radius: 0.0,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::new(-500.0, 0.0, 4.0)),
             ))

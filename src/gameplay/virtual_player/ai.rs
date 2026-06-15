@@ -888,11 +888,18 @@ pub fn compare_positions(a: Vec2, b: Vec2) -> std::cmp::Ordering {
 /// `forward` is the car's current facing direction (need not be normalised).
 /// When the car is within `arrive_radius` of the target it idles so the caller
 /// can advance to the next waypoint.
+///
+/// `corner_throttle` is the driver's throttle floor: how hard it keeps the gas
+/// down when the target is off to the side, i.e. its commitment through a corner.
+/// A higher floor barrels through on a wider line, a lower one eases off for a
+/// tighter one (see [`crate::gameplay::virtual_player::VirtualPlayer::corner_throttle`]).
+/// The neutral baseline is [`MIN_THROTTLE`].
 pub fn compute_steering(
     position: Vec2,
     forward: Vec2,
     target: Vec2,
     arrive_radius: f32,
+    corner_throttle: f32,
 ) -> SteeringIntent {
     let to_target = target - position;
     let distance = to_target.length();
@@ -904,7 +911,7 @@ pub fn compute_steering(
     let Some(heading) = forward.try_normalize() else {
         // Degenerate facing: crawl forward so the next frame has a direction.
         return SteeringIntent {
-            throttle: MIN_THROTTLE,
+            throttle: corner_throttle,
             steer: 0.0,
         };
     };
@@ -915,18 +922,18 @@ pub fn compute_steering(
     let alignment = heading.dot(dir);
 
     if alignment < REVERSE_DOT_THRESHOLD {
-        return reverse_steering_intent(angle, alignment);
+        return reverse_steering_intent(angle, alignment, corner_throttle);
     }
 
     // Drive hardest when aligned, but never stall: a car cannot strafe, so it
     // must keep rolling to rotate towards a target that is to the side.
     let steer = (angle / STEER_RANGE).clamp(-1.0, 1.0);
-    let throttle = alignment.clamp(MIN_THROTTLE, 1.0);
+    let throttle = alignment.clamp(corner_throttle, 1.0);
 
     SteeringIntent { throttle, steer }
 }
 
-fn reverse_steering_intent(angle: f32, alignment: f32) -> SteeringIntent {
+fn reverse_steering_intent(angle: f32, alignment: f32, corner_throttle: f32) -> SteeringIntent {
     let reverse_angle = if angle >= 0.0 {
         angle - std::f32::consts::PI
     } else {
@@ -934,7 +941,7 @@ fn reverse_steering_intent(angle: f32, alignment: f32) -> SteeringIntent {
     };
 
     SteeringIntent {
-        throttle: alignment.clamp(-1.0, -MIN_THROTTLE),
+        throttle: alignment.clamp(-1.0, -corner_throttle),
         steer: (reverse_angle / STEER_RANGE).clamp(-1.0, 1.0),
     }
 }
@@ -1026,14 +1033,26 @@ mod tests {
 
     #[test]
     fn idles_when_within_arrive_radius() {
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(0.0, 5.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(0.0, 5.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert_eq!(intent, SteeringIntent::IDLE);
     }
 
     #[test]
     fn drives_straight_forward_when_target_is_dead_ahead() {
         // Facing +Y, target far along +Y.
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(0.0, 500.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(0.0, 500.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert!(intent.steer.abs() < 1e-4, "steer was {}", intent.steer);
         assert!(
             (intent.throttle - 1.0).abs() < 1e-4,
@@ -1045,7 +1064,13 @@ mod tests {
     #[test]
     fn steers_left_when_target_is_to_the_left() {
         // Facing +Y; target to the left is -X.
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(-500.0, 0.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(-500.0, 0.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert!(
             intent.steer > 0.0,
             "expected positive steer, got {}",
@@ -1056,7 +1081,13 @@ mod tests {
     #[test]
     fn steers_right_when_target_is_to_the_right() {
         // Facing +Y; target to the right is +X.
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(500.0, 0.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(500.0, 0.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert!(
             intent.steer < 0.0,
             "expected negative steer, got {}",
@@ -1066,7 +1097,13 @@ mod tests {
 
     #[test]
     fn reverses_left_when_target_is_in_left_rear_quarter() {
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(-500.0, -500.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(-500.0, -500.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
 
         assert!((intent.steer + 1.0).abs() < 1e-4, "steer {}", intent.steer);
         assert!(
@@ -1078,7 +1115,13 @@ mod tests {
 
     #[test]
     fn reverses_when_target_is_directly_behind() {
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(0.0, -500.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(0.0, -500.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
 
         assert!(
             intent.throttle < 0.0,
@@ -1090,15 +1133,69 @@ mod tests {
 
     #[test]
     fn never_stalls_when_target_is_perpendicular() {
-        let intent = compute_steering(Vec2::ZERO, Vec2::Y, Vec2::new(500.0, 0.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::Y,
+            Vec2::new(500.0, 0.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert!(intent.throttle >= MIN_THROTTLE);
     }
 
     #[test]
     fn degenerate_forward_vector_crawls_forward() {
-        let intent = compute_steering(Vec2::ZERO, Vec2::ZERO, Vec2::new(0.0, 500.0), ARRIVE);
+        let intent = compute_steering(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::new(0.0, 500.0),
+            ARRIVE,
+            MIN_THROTTLE,
+        );
         assert!(intent.steer.abs() < 1e-4);
         assert!((intent.throttle - MIN_THROTTLE).abs() < 1e-4);
+    }
+
+    #[test]
+    fn keeps_each_drivers_own_throttle_floor_through_a_corner() {
+        // Target square to the side: the car locks to full steer and how much gas
+        // it keeps through that turn is its cornering commitment. A reckless driver
+        // holds a higher floor than a disciplined one, so each rival takes the
+        // corner with its own throttle.
+        let target = Vec2::new(500.0, 0.0);
+        let reckless = compute_steering(Vec2::ZERO, Vec2::Y, target, ARRIVE, 0.45);
+        let disciplined = compute_steering(Vec2::ZERO, Vec2::Y, target, ARRIVE, 0.20);
+        assert!(
+            reckless.throttle > disciplined.throttle,
+            "reckless={}, disciplined={}",
+            reckless.throttle,
+            disciplined.throttle
+        );
+        assert!((reckless.throttle - 0.45).abs() < EPSILON);
+        assert!((disciplined.throttle - 0.20).abs() < EPSILON);
+    }
+
+    #[test]
+    fn a_reckless_corner_throttle_buys_a_wider_line() {
+        // The genuine trade-off behind the cornering-commitment axis: both drivers
+        // lock to the same steer, so faster through the turn means a larger turning
+        // radius, a wider line that overshoots the apex. That wider arc is the cost
+        // the extra corner speed is bought with, never a strict upgrade.
+        let speed = 400.0;
+        let rotation = f32::to_radians(300.0);
+        let target = Vec2::new(500.0, 0.0);
+        let reckless = compute_steering(Vec2::ZERO, Vec2::Y, target, ARRIVE, 0.45);
+        let disciplined = compute_steering(Vec2::ZERO, Vec2::Y, target, ARRIVE, 0.20);
+        // Both saturate to full lock, so the only difference is throttle; turning
+        // radius is forward speed divided by angular speed.
+        let turning_radius =
+            |intent: SteeringIntent| (intent.throttle * speed) / (intent.steer.abs() * rotation);
+        assert!(
+            turning_radius(reckless) > turning_radius(disciplined),
+            "reckless radius {} must exceed disciplined {}",
+            turning_radius(reckless),
+            turning_radius(disciplined)
+        );
     }
 
     #[test]

@@ -149,6 +149,7 @@ pub fn virtual_player_drive_system(
             forward,
             target_position,
             arrive_radius_for_target(target),
+            ai.corner_throttle,
         );
 
         if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
@@ -180,11 +181,17 @@ pub fn virtual_player_drive_system(
         transform.translation += movement_direction * movement_distance;
 
         // Keep opponents inside the arena, just like the player.
-        let extents = Vec3::new(BOUNDS.x / 2.0, BOUNDS.y / 2.0, 0.0);
-        transform.translation.x = transform.translation.x.clamp(-extents.x, extents.x);
-        transform.translation.y = transform.translation.y.clamp(-extents.y, extents.y);
-        transform.translation.z = 4.0;
+        confine_to_arena(&mut transform.translation);
     }
+}
+
+/// Clamps a car's translation back inside the arena bounds and pins it to the
+/// opponent render layer, mirroring the bound the human player is held to.
+fn confine_to_arena(translation: &mut Vec3) {
+    let extents = Vec3::new(BOUNDS.x / 2.0, BOUNDS.y / 2.0, 0.0);
+    translation.x = translation.x.clamp(-extents.x, extents.x);
+    translation.y = translation.y.clamp(-extents.y, extents.y);
+    translation.z = 4.0;
 }
 
 /// Gathers every per-entity driving overlay for the frame, in precedence order.
@@ -1309,6 +1316,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius,
                     pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             ))
@@ -1333,6 +1341,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
                     pickup_pursuit_radius,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             ))
@@ -1350,6 +1359,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
                     pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(translation),
             ))
@@ -2073,6 +2083,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
                     pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2132,6 +2143,7 @@ mod tests {
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                corner_throttle: 0.3,
             },
             Transform::from_translation(Vec3::new(0.0, -500.0, 4.0)),
         ));
@@ -2181,6 +2193,7 @@ mod tests {
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                corner_throttle: 0.3,
             },
             Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
         ));
@@ -2229,6 +2242,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
                     pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(Vec3::new(0.0, -1000.0, 4.0)),
             ));
@@ -2312,6 +2326,7 @@ mod tests {
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                corner_throttle: 0.3,
             },
             Transform::from_translation(Vec3::new(0.0, -60.0, 4.0)),
         ));
@@ -2360,6 +2375,7 @@ mod tests {
                 current_waypoint: 0,
                 player_pursuit_radius: TEST_PURSUIT_RADIUS,
                 pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                corner_throttle: 0.3,
             },
             Transform::from_translation(Vec3::new(hunter_start_x, -300.0, 4.0)),
         ));
@@ -2430,6 +2446,7 @@ mod tests {
                     current_waypoint: 0,
                     player_pursuit_radius: TEST_PURSUIT_RADIUS,
                     pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+                    corner_throttle: 0.3,
                 },
                 Transform::from_translation(edge),
             ))

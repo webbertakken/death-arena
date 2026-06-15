@@ -35,6 +35,15 @@ pub struct VirtualPlayer {
     /// eagerly but abandons the patrol lap and the flag objective sooner, so it
     /// trades discipline for greed rather than being a strict upgrade.
     pub pickup_pursuit_radius: f32,
+    /// Throttle floor this driver keeps when the target is off to the side, i.e.
+    /// how hard it stays on the gas through a corner. Set from the car's driving
+    /// personality so each opponent takes a turn with its own commitment: a
+    /// reckless sprinter barrels through on a wide line, a disciplined technician
+    /// eases off for a tight one. A behavioural trait, not a power stat: more
+    /// corner throttle covers ground faster but sweeps a wider arc that overshoots
+    /// the apex, so it trades line precision for corner speed rather than being a
+    /// strict upgrade.
+    pub corner_throttle: f32,
 }
 
 #[derive(Default)]

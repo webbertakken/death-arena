@@ -1,5 +1,5 @@
 use crate::gameplay::main::BOUNDS;
-use crate::gameplay::virtual_player::ai::AiTeam;
+use crate::gameplay::virtual_player::ai::{AiTeam, MIN_THROTTLE};
 use crate::gameplay::virtual_player::VirtualPlayer;
 use bevy::prelude::*;
 
@@ -38,6 +38,13 @@ struct DriverProfile {
     /// loot more eagerly but abandons the patrol lap and the flag objective sooner,
     /// so it trades discipline for greed rather than being a strict upgrade.
     pickup_pursuit_radius: f32,
+    /// Throttle floor the driver keeps through a corner: how hard it stays on the
+    /// gas when the target is off to the side. The personality's commitment axis: a
+    /// higher floor barrels through on a wider line that covers ground faster but
+    /// overshoots the apex, a lower one eases off for a tighter, more precise line,
+    /// so it trades line precision for corner speed rather than being a strict
+    /// upgrade.
+    corner_throttle: f32,
 }
 
 impl DriverProfile {
@@ -50,6 +57,7 @@ impl DriverProfile {
         turn_degrees: 300.0,
         player_pursuit_radius: 500.0,
         pickup_pursuit_radius: 450.0,
+        corner_throttle: MIN_THROTTLE,
     };
     /// Straight-line specialist: quicker down the open lane, lazier through a
     /// corner, a hot-headed hunter that runs the player down from further out, and
@@ -59,6 +67,7 @@ impl DriverProfile {
         turn_degrees: 280.0,
         player_pursuit_radius: 580.0,
         pickup_pursuit_radius: 520.0,
+        corner_throttle: 0.42,
     };
     /// Cornering specialist: sharper turn-in, a touch slower flat out, the most
     /// disciplined of the three, staying on its line until the player is genuinely
@@ -68,6 +77,7 @@ impl DriverProfile {
         turn_degrees: 320.0,
         player_pursuit_radius: 420.0,
         pickup_pursuit_radius: 380.0,
+        corner_throttle: 0.20,
     };
 }
 
@@ -134,6 +144,26 @@ const _: () = assert!(
 const _: () = assert!(
     DriverProfile::SPRINTER.pickup_pursuit_radius <= 580.0
         && DriverProfile::TECHNICIAN.pickup_pursuit_radius >= 340.0
+);
+/// Cornering commitment is the personality's fifth trade-off axis and lines up
+/// with the others: the impulsive sprinter that struggles in corners is also the
+/// one that barrels through them on a wide line, the disciplined technician eases
+/// off for a tight, precise line, and the all-rounder sits between on the neutral
+/// [`MIN_THROTTLE`] baseline. More corner speed is bought with a wider line, never
+/// a strict upgrade, enforced at compile time so the roster can never drift into
+/// an archetype that corners faster *and* on a tighter line.
+const _: () = assert!(
+    DriverProfile::SPRINTER.corner_throttle > DriverProfile::ALL_ROUNDER.corner_throttle
+        && DriverProfile::ALL_ROUNDER.corner_throttle > DriverProfile::TECHNICIAN.corner_throttle
+);
+/// Commitment stays a sane throttle fraction around the [`MIN_THROTTLE`] baseline
+/// so personality is felt without breaking the tuned chase: even the most reckless
+/// sprinter still eases off enough to come round a corner, and even the most
+/// disciplined technician keeps rolling so it never stalls mid-turn. Enforced at
+/// compile time.
+const _: () = assert!(
+    DriverProfile::SPRINTER.corner_throttle <= 0.5
+        && DriverProfile::TECHNICIAN.corner_throttle >= 0.15
 );
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,6 +258,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 current_waypoint: spawn.start_waypoint,
                 player_pursuit_radius: spawn.profile.player_pursuit_radius,
                 pickup_pursuit_radius: spawn.profile.pickup_pursuit_radius,
+                corner_throttle: spawn.profile.corner_throttle,
             },
             SpriteBundle {
                 texture: chassis.clone(),
@@ -344,6 +375,9 @@ mod tests {
         assert_near(DriverProfile::ALL_ROUNDER.turn_degrees, 300.0);
         assert_near(DriverProfile::ALL_ROUNDER.player_pursuit_radius, 500.0);
         assert_near(DriverProfile::ALL_ROUNDER.pickup_pursuit_radius, 450.0);
+        // The all-rounder corners on the original uniform throttle floor, so only
+        // the sprinter and technician depart from the neutral baseline.
+        assert_near(DriverProfile::ALL_ROUNDER.corner_throttle, MIN_THROTTLE);
     }
 
     #[test]
@@ -370,6 +404,21 @@ mod tests {
         assert!(
             sprinter > all_rounder && all_rounder > technician,
             "expected distinct scavenging greed, got sprinter={sprinter}, \
+             all_rounder={all_rounder}, technician={technician}"
+        );
+    }
+
+    #[test]
+    fn personalities_corner_with_distinct_commitment() {
+        // Cornering commitment is a real personality axis, not flavour text: the
+        // three archetypes each keep a genuinely different throttle floor through a
+        // corner, so each rival takes a turn with its own line.
+        let sprinter = DriverProfile::SPRINTER.corner_throttle;
+        let all_rounder = DriverProfile::ALL_ROUNDER.corner_throttle;
+        let technician = DriverProfile::TECHNICIAN.corner_throttle;
+        assert!(
+            sprinter > all_rounder && all_rounder > technician,
+            "expected distinct cornering commitment, got sprinter={sprinter}, \
              all_rounder={all_rounder}, technician={technician}"
         );
     }
@@ -465,6 +514,25 @@ mod tests {
         assert!(
             (blue_greed - red_greed).abs() <= f32::EPSILON,
             "aggregate pickup pursuit must be level: blue={blue_greed}, red={red_greed}"
+        );
+    }
+
+    #[test]
+    fn ai_rosters_balance_aggregate_corner_commitment_with_the_human() {
+        // The new cornering axis is balanced on the same terms as the others:
+        // counting the human as the baseline all-rounder, neither team fields more
+        // total corner commitment than the other, so one side is never
+        // systematically faster (or tighter) through the turns.
+        let human = DriverProfile::ALL_ROUNDER;
+        let blue = ai_profiles(AiTeam::Blue);
+        let red = ai_profiles(AiTeam::Red);
+
+        let blue_corner: f32 =
+            blue.iter().map(|p| p.corner_throttle).sum::<f32>() + human.corner_throttle;
+        let red_corner: f32 = red.iter().map(|p| p.corner_throttle).sum();
+        assert!(
+            (blue_corner - red_corner).abs() <= f32::EPSILON,
+            "aggregate corner commitment must be level: blue={blue_corner}, red={red_corner}"
         );
     }
 }
