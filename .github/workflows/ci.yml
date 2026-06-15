@@ -214,6 +214,14 @@ jobs:
       - name: Check shell scripts
         run: bash scripts/check_shell_scripts.sh
 
+      - name: Install actionlint
+        uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint
+
+      - name: Lint GitHub Actions workflows
+        run: bash scripts/check_workflow_lint.sh
+
       - name: Check Rust safety (no unsafe)
         run: bash scripts/check_rust_safety.sh
 
