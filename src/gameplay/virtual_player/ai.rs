@@ -31,6 +31,31 @@ pub const CTF_PICKUP_LANE_WIDTH: f32 = 60.0;
 /// Wider detour lane for high-value pickups that are worth a short gamble.
 pub const CTF_HIGH_VALUE_PICKUP_LANE_WIDTH: f32 = 100.0;
 
+/// Baseline pickup-scavenging greed: the all-rounder's
+/// [`crate::gameplay::virtual_player::VirtualPlayer::pickup_pursuit_radius`] (the
+/// former uniform global, also the human's mirror). A driver with exactly this
+/// greed detours for a CTF pickup within the unscaled [`CTF_PICKUP_LANE_WIDTH`] /
+/// [`CTF_HIGH_VALUE_PICKUP_LANE_WIDTH`] lane; the lane then scales with a driver's
+/// greed relative to this baseline, so a greedier driver swings wider off its
+/// objective line for loot while a disciplined one keeps a tighter line (see
+/// [`pickup_lane_width`]). The in-objective mirror of the trackside scavenging
+/// reach the same greed axis already sets.
+pub const BASELINE_PICKUP_PURSUIT_RADIUS: f32 = 450.0;
+
+/// Floor and ceiling on the greed-driven detour-lane scale: a safety net so a
+/// degenerate `pickup_pursuit_radius` can never collapse the lane to nothing nor
+/// blow it out across the arena. The asserted roster greed band (`340..=580`, see
+/// [`crate::gameplay::virtual_player::spawn`]) maps strictly inside this band, so
+/// the clamp only ever guards a garbage radius, never a legal driver's
+/// personality.
+const GREED_LANE_SCALE_MIN: f32 = 0.70;
+const GREED_LANE_SCALE_MAX: f32 = 1.35;
+
+/// The greed scale is centred on the baseline driver (scale `1.0`, an unscaled
+/// lane) and never inverts discipline: a greedier driver always gets at least as
+/// wide a detour lane as a more disciplined one. Enforced at compile time.
+const _: () = assert!(GREED_LANE_SCALE_MIN < 1.0 && GREED_LANE_SCALE_MAX > 1.0);
+
 /// Distance from home at which a flag carrier stops gambling on pickup detours
 /// and commits to finishing the capture.
 pub const FLAG_CARRIER_CAPTURE_COMMIT_DISTANCE: f32 = 180.0;
@@ -1221,7 +1246,7 @@ fn pickup_detour(
                     position,
                     pickup.position,
                     target.position(),
-                    pickup_lane_width(pickup.priority),
+                    pickup_lane_width(pickup.priority, choices.pickup_pursuit_radius),
                 )
         },
     )
@@ -1249,12 +1274,30 @@ fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
     to_pickup.dot(to_target) > 0.0
 }
 
-const fn pickup_lane_width(priority: u32) -> f32 {
-    if priority >= CTF_WIDE_DETOUR_MIN_PRIORITY {
+/// Half-width of the CTF detour lane for a pickup of the given `priority`, scaled
+/// by the driver's `pickup_pursuit_radius` (its greed) relative to
+/// [`BASELINE_PICKUP_PURSUIT_RADIUS`].
+///
+/// The base lane widens for a high-value grab worth a wider gamble
+/// ([`CTF_HIGH_VALUE_PICKUP_LANE_WIDTH`] vs [`CTF_PICKUP_LANE_WIDTH`]); on top of
+/// that, a greedier driver swings further off its objective line for the same
+/// pickup while a disciplined one keeps a tighter line, the in-objective mirror of
+/// the same greed axis that sets how far afield a patrolling car scavenges.
+fn pickup_lane_width(priority: u32, pickup_pursuit_radius: f32) -> f32 {
+    let base = if priority >= CTF_WIDE_DETOUR_MIN_PRIORITY {
         CTF_HIGH_VALUE_PICKUP_LANE_WIDTH
     } else {
         CTF_PICKUP_LANE_WIDTH
-    }
+    };
+    base * greed_lane_scale(pickup_pursuit_radius)
+}
+
+/// The driver's detour-lane scale: its greed relative to the baseline driver,
+/// clamped to the [`GREED_LANE_SCALE_MIN`]..=[`GREED_LANE_SCALE_MAX`] safety band
+/// so a degenerate radius never yields an absurd lane.
+fn greed_lane_scale(pickup_pursuit_radius: f32) -> f32 {
+    (pickup_pursuit_radius / BASELINE_PICKUP_PURSUIT_RADIUS)
+        .clamp(GREED_LANE_SCALE_MIN, GREED_LANE_SCALE_MAX)
 }
 
 fn is_on_target_lane(position: Vec2, pickup: Vec2, target: Vec2, lane_width: f32) -> bool {
@@ -1412,7 +1455,7 @@ mod tests {
             current_waypoint,
             ctf_target,
             pickups,
-            pickup_pursuit_radius: 100.0,
+            pickup_pursuit_radius: BASELINE_PICKUP_PURSUIT_RADIUS,
             player_position,
             player_pursuit_radius,
             closing_time_discipline: false,
@@ -1723,10 +1766,12 @@ mod tests {
 
     #[test]
     fn ignores_pickups_outside_pursuit_radius() {
-        let waypoint = Vec2::new(500.0, 0.0);
+        let waypoint = Vec2::new(700.0, 0.0);
         let waypoints = [waypoint];
+        // The bag sits beyond the baseline scavenging reach (500 >
+        // BASELINE_PICKUP_PURSUIT_RADIUS), so the car leaves it and patrols on.
         let pickups = [PickupTarget {
-            position: Vec2::new(250.0, 0.0),
+            position: Vec2::new(500.0, 0.0),
             priority: 100,
         }];
         let target = choose_driving_target(
@@ -1888,6 +1933,158 @@ mod tests {
         );
 
         assert_eq!(target, Some(DrivingTarget::Pickup(Vec2::new(50.0, 70.0))));
+    }
+
+    #[test]
+    fn a_greedy_driver_swings_wider_off_the_flag_lane_than_the_baseline() {
+        // A pickup sitting just outside the baseline detour lane (lateral 65 >
+        // CTF_PICKUP_LANE_WIDTH 60) is left on the track by a neutral driver but
+        // grabbed by a greedier one, whose wider greed widens its in-objective
+        // detour lane just as it widens its trackside scavenging reach.
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0));
+        let pickups = [PickupTarget {
+            position: Vec2::new(40.0, 65.0),
+            priority: CTF_PICKUP_DETOUR_MIN_PRIORITY,
+        }];
+
+        let baseline = choose_driving_target(
+            Vec2::ZERO,
+            DrivingChoices {
+                pickup_pursuit_radius: 450.0,
+                ..choices(&waypoints, 0, Some(flag), &pickups, None, 0.0)
+            },
+        );
+        assert_eq!(
+            baseline,
+            Some(flag),
+            "a neutral driver keeps its line and leaves a bag just off the lane"
+        );
+
+        let greedy = choose_driving_target(
+            Vec2::ZERO,
+            DrivingChoices {
+                pickup_pursuit_radius: 520.0,
+                ..choices(&waypoints, 0, Some(flag), &pickups, None, 0.0)
+            },
+        );
+        assert_eq!(
+            greedy,
+            Some(DrivingTarget::Pickup(Vec2::new(40.0, 65.0))),
+            "a greedier driver swings wider off its line to scoop the same bag"
+        );
+    }
+
+    #[test]
+    fn a_disciplined_driver_keeps_a_tighter_flag_lane_than_the_baseline() {
+        // A pickup just inside the baseline detour lane (lateral 55 <
+        // CTF_PICKUP_LANE_WIDTH 60) is taken by a neutral driver but left by a
+        // more disciplined one, whose lower greed narrows its in-objective detour
+        // lane so it stays committed to the flag run.
+        let waypoints = [Vec2::new(0.0, 500.0)];
+        let flag = DrivingTarget::EnemyFlag(Vec2::new(300.0, 0.0));
+        let pickups = [PickupTarget {
+            position: Vec2::new(40.0, 55.0),
+            priority: CTF_PICKUP_DETOUR_MIN_PRIORITY,
+        }];
+
+        let baseline = choose_driving_target(
+            Vec2::ZERO,
+            DrivingChoices {
+                pickup_pursuit_radius: 450.0,
+                ..choices(&waypoints, 0, Some(flag), &pickups, None, 0.0)
+            },
+        );
+        assert_eq!(
+            baseline,
+            Some(DrivingTarget::Pickup(Vec2::new(40.0, 55.0))),
+            "a neutral driver detours for a bag sitting inside its lane"
+        );
+
+        let disciplined = choose_driving_target(
+            Vec2::ZERO,
+            DrivingChoices {
+                pickup_pursuit_radius: 380.0,
+                ..choices(&waypoints, 0, Some(flag), &pickups, None, 0.0)
+            },
+        );
+        assert_eq!(
+            disciplined,
+            Some(flag),
+            "a disciplined driver keeps a tighter line and stays on the flag run"
+        );
+    }
+
+    #[test]
+    fn the_baseline_driver_keeps_the_unscaled_detour_lane() {
+        // A driver with exactly the baseline greed detours within the original
+        // fixed lane widths, so the all-rounder and the human (both at the
+        // baseline) are untouched by the greed scaling.
+        assert!(
+            (pickup_lane_width(
+                CTF_PICKUP_DETOUR_MIN_PRIORITY,
+                BASELINE_PICKUP_PURSUIT_RADIUS
+            ) - CTF_PICKUP_LANE_WIDTH)
+                .abs()
+                <= EPSILON
+        );
+        assert!(
+            (pickup_lane_width(CTF_WIDE_DETOUR_MIN_PRIORITY, BASELINE_PICKUP_PURSUIT_RADIUS)
+                - CTF_HIGH_VALUE_PICKUP_LANE_WIDTH)
+                .abs()
+                <= EPSILON
+        );
+    }
+
+    #[test]
+    fn greed_widens_and_discipline_narrows_the_detour_lane() {
+        // Greed scales the detour lane the same way it scales the trackside reach:
+        // the greediest driver swings widest off its objective line, the most
+        // disciplined keeps the tightest, with the baseline between.
+        let greedy = pickup_lane_width(CTF_PICKUP_DETOUR_MIN_PRIORITY, 520.0);
+        let baseline = pickup_lane_width(
+            CTF_PICKUP_DETOUR_MIN_PRIORITY,
+            BASELINE_PICKUP_PURSUIT_RADIUS,
+        );
+        let disciplined = pickup_lane_width(CTF_PICKUP_DETOUR_MIN_PRIORITY, 380.0);
+        assert!(
+            greedy > baseline && baseline > disciplined,
+            "expected greed to order the narrow lane, got greedy={greedy}, \
+             baseline={baseline}, disciplined={disciplined}"
+        );
+
+        let greedy_wide = pickup_lane_width(CTF_WIDE_DETOUR_MIN_PRIORITY, 520.0);
+        let disciplined_wide = pickup_lane_width(CTF_WIDE_DETOUR_MIN_PRIORITY, 380.0);
+        assert!(
+            greedy_wide > CTF_HIGH_VALUE_PICKUP_LANE_WIDTH
+                && CTF_HIGH_VALUE_PICKUP_LANE_WIDTH > disciplined_wide,
+            "the high-value lane scales with greed too, got greedy_wide={greedy_wide}, \
+             disciplined_wide={disciplined_wide}"
+        );
+    }
+
+    #[test]
+    fn the_lane_scale_clamps_a_degenerate_greed() {
+        // The clamp is a pure safety net: a zero or absurd radius can never
+        // collapse the lane to nothing nor blow it out across the arena.
+        assert!((greed_lane_scale(0.0) - GREED_LANE_SCALE_MIN).abs() <= EPSILON);
+        assert!((greed_lane_scale(100_000.0) - GREED_LANE_SCALE_MAX).abs() <= EPSILON);
+        assert!(pickup_lane_width(CTF_PICKUP_DETOUR_MIN_PRIORITY, 0.0) > 0.0);
+    }
+
+    #[test]
+    fn the_roster_greed_band_never_trips_the_lane_clamp() {
+        // The asserted roster greed band (340..=580, see spawn.rs) maps strictly
+        // inside the safety clamp, so personality is fully expressed across the
+        // whole roster and the clamp only ever guards a degenerate radius.
+        for greed in [340.0_f32, 580.0_f32] {
+            let raw = greed / BASELINE_PICKUP_PURSUIT_RADIUS;
+            assert!(
+                (greed_lane_scale(greed) - raw).abs() <= EPSILON,
+                "roster greed {greed} should scale unclamped, raw={raw}, clamped={}",
+                greed_lane_scale(greed)
+            );
+        }
     }
 
     #[test]
