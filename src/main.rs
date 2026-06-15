@@ -2,17 +2,21 @@
 // Never-ship lints (clippy::restriction, not covered by nursery/pedantic): a
 // stray debug print runs every frame inside an ECS system, flooding the console
 // and bypassing Bevy's structured logging; a placeholder panic
-// (todo!/unimplemented!) and an implicit one (a `.unwrap()`/`.expect()` on a
-// None or Err) both hard-crash the WASM canvas the instant they run. Denied so
-// the existing clippy gate catches them at the door. The unwrap/expect pair is
-// exempted inside `#[cfg(test)]` code by clippy.toml (allow-unwrap-in-tests,
-// allow-expect-in-tests), where asserting a fixture resolved is legitimate.
+// (todo!/unimplemented!), an explicit one (panic!/unreachable!) and an implicit
+// one (a `.unwrap()`/`.expect()` on a None or Err) all hard-crash the WASM canvas
+// the instant they run. Denied so the existing clippy gate catches them at the
+// door. The panic and unwrap/expect macros are exempted inside `#[cfg(test)]`
+// code by clippy.toml (allow-panic-in-tests, allow-unwrap-in-tests,
+// allow-expect-in-tests), where panicking a fixture that resolved wrong is
+// legitimate.
 #![deny(
     clippy::dbg_macro,
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::todo,
     clippy::unimplemented,
+    clippy::panic,
+    clippy::unreachable,
     clippy::unwrap_used,
     clippy::expect_used
 )]

@@ -7,11 +7,12 @@ set -euo pipefail
 # into an instant abort hard-crashing the WASM canvas the moment it runs inside
 # an ECS system every frame: a stray dbg!/print!/println! (clippy::dbg_macro /
 # print_stdout / print_stderr), a placeholder panic (clippy::todo /
-# clippy::unimplemented) and the implicit panic a .unwrap()/.expect() smuggles in
-# (clippy::unwrap_used / clippy::expect_used). Those denies ARE the panic-guard
-# gate: clippy only fails on them while the attributes sit in the crate root.
-# Delete or downgrade one and clippy passes green again with the gap wide open,
-# because there is then nothing left to warn about.
+# clippy::unimplemented), an explicit panic (clippy::panic / clippy::unreachable)
+# and the implicit panic a .unwrap()/.expect() smuggles in (clippy::unwrap_used /
+# clippy::expect_used). Those denies ARE the panic-guard gate: clippy only fails
+# on them while the attributes sit in the crate root. Delete or downgrade one and
+# clippy passes green again with the gap wide open, because there is then nothing
+# left to warn about.
 #
 # This is the mirror of scripts/check_rust_suppressions.sh: that guard stops a bad
 # crate-wide #![allow(unused/dead_code)] being ADDED; this one stops a good
@@ -25,6 +26,8 @@ required_lints=(
   clippy::print_stderr
   clippy::todo
   clippy::unimplemented
+  clippy::panic
+  clippy::unreachable
   clippy::unwrap_used
   clippy::expect_used
 )
