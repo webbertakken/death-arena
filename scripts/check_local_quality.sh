@@ -18,6 +18,7 @@ bash scripts/check_temporary_fix_markers.sh
 bash scripts/check_duplicate_comment_blocks.sh
 bash scripts/check_speed_modifier_parity.sh
 bash scripts/check_effect_multiplier_parity.sh
+bash scripts/check_match_over_halt_parity.sh
 bash scripts/check_unused_dependencies.sh
 bash scripts/check_wasm_rng_backend.sh
 bash scripts/check_asset_paths.sh
