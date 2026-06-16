@@ -97,12 +97,39 @@ const _: () = assert!(DRAFT_SEEK_LOOKAHEAD > 0.0 && DRAFT_SEEK_LOOKAHEAD < DRAFT
 /// its objective. At `0.70` the nudge can never swing the aim more than about
 /// forty-five degrees off the objective bearing, so a draft stays an edge a chaser
 /// takes on its way, never a detour that pulls it off task.
-const DRAFT_SEEK_MIN_AIM_COURSE_DOT: f32 = 0.70;
+///
+/// This is the *baseline* driver's cone. A driver chases a wake more or less
+/// keenly with its personality greed: a greedier driver tolerates a wider swing off
+/// its line to bank a tow ([`DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT`]), a disciplined
+/// one keeps a tighter line ([`DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT`]). The
+/// per-driver cone is picked by
+/// [`crate::gameplay::virtual_player::ai::draft_seek_cone`] and handed to
+/// [`draft_seeking_aim`], the off-objective-line mirror of the same greed axis that
+/// already sets how far afield a driver detours for a pickup.
+pub const DRAFT_SEEK_MIN_AIM_COURSE_DOT: f32 = 0.70;
 
-/// The seek deflection gate must be a real cone, never trivially open or shut, and
-/// never looser than the wake's own alignment gate, enforced at compile time.
+/// The widest active-drafting cone, granted to the greediest driver: it tolerates a
+/// larger swing off its objective bearing (a smaller course dot) to tuck into a tow,
+/// trading a sliver more forward progress for the draft, just as its greed already
+/// buys it a wider pickup-detour lane.
+pub const DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT: f32 = 0.62;
+
+/// The tightest active-drafting cone, held by the most disciplined driver: it only
+/// tucks into a wake lying almost dead on its objective bearing, keeping the
+/// straightest line to the flag.
+pub const DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT: f32 = 0.80;
+
+/// Every active-drafting cone must be a real gate, never trivially open or shut, and
+/// never looser than the wake's own alignment gate, enforced at compile time. The
+/// three are ordered greedy (widest) < baseline < disciplined (tightest), all inside
+/// `(DRAFT_MIN_ALIGNMENT, 1.0)`, so greed only ever widens a cone and never inverts
+/// discipline, and even the greediest never deflects a chaser past the wake's own
+/// heading gate.
 const _: () = assert!(
-    DRAFT_SEEK_MIN_AIM_COURSE_DOT > DRAFT_MIN_ALIGNMENT && DRAFT_SEEK_MIN_AIM_COURSE_DOT < 1.0
+    DRAFT_MIN_ALIGNMENT < DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT
+        && DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT < DRAFT_SEEK_MIN_AIM_COURSE_DOT
+        && DRAFT_SEEK_MIN_AIM_COURSE_DOT < DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT
+        && DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT < 1.0
 );
 
 /// Smallest distance the objective must lie beyond a pace car, measured along the
@@ -215,13 +242,22 @@ fn draft_strength(position: Vec2, heading: Vec2, leader: LeadingCar) -> Option<f
 /// it never reaches past the leader's own centre, so the single nudge pulls the
 /// chaser sideways onto the wake line and forward to close the gap without ever
 /// overrunning the car it drafts. The nudge is dropped (and `base_aim` returned)
-/// whenever it would swing the chaser's bearing past the
-/// [`DRAFT_SEEK_MIN_AIM_COURSE_DOT`] cone off its objective, so a draft never pulls
-/// a chaser off task. The caller passes only *other* cars (it excludes the chaser
-/// itself) and omits any car that should not seek a draft (a flag carrier earns no
-/// tow). When several leaders qualify, the closest, best-aligned wake wins.
+/// whenever it would swing the chaser's bearing past `min_aim_course_dot`, the
+/// driver's deflection cone off its objective, so a draft never pulls a chaser off
+/// task; a greedier driver passes a wider cone (a smaller dot), the off-line mirror
+/// of the same greed axis that widens its pickup detours (see
+/// [`DRAFT_SEEK_MIN_AIM_COURSE_DOT`] and
+/// [`crate::gameplay::virtual_player::ai::draft_seek_cone`]). The caller passes only
+/// *other* cars (it excludes the chaser itself) and omits any car that should not
+/// seek a draft (a flag carrier earns no tow). When several leaders qualify, the
+/// closest, best-aligned wake wins.
 #[must_use]
-pub fn draft_seeking_aim(position: Vec2, base_aim: Vec2, leaders: &[LeadingCar]) -> Vec2 {
+pub fn draft_seeking_aim(
+    position: Vec2,
+    base_aim: Vec2,
+    leaders: &[LeadingCar],
+    min_aim_course_dot: f32,
+) -> Vec2 {
     let to_objective = base_aim - position;
     let Some(course) = to_objective.try_normalize() else {
         return base_aim;
@@ -229,7 +265,15 @@ pub fn draft_seeking_aim(position: Vec2, base_aim: Vec2, leaders: &[LeadingCar])
     let objective_along = to_objective.length();
     leaders
         .iter()
-        .filter_map(|leader| draft_seek_aim(position, course, objective_along, *leader))
+        .filter_map(|leader| {
+            draft_seek_aim(
+                position,
+                course,
+                objective_along,
+                *leader,
+                min_aim_course_dot,
+            )
+        })
         .max_by(|a, b| {
             a.1.partial_cmp(&b.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -248,16 +292,18 @@ pub fn draft_seeking_aim(position: Vec2, base_aim: Vec2, leaders: &[LeadingCar])
 /// chaser along its own heading, lies no further back than [`DRAFT_RADIUS`], has the
 /// objective at least [`DRAFT_SEEK_MIN_OBJECTIVE_LEAD`] further along the course than
 /// itself (a real run still to make, never a car parked on the goal), and the
-/// resulting tuck-in aim stays inside the [`DRAFT_SEEK_MIN_AIM_COURSE_DOT`]
-/// deflection cone off the course. `objective_along` is the chaser's straight-line
-/// distance to its objective along `course`. The aim is a point on the leader's
-/// centre tail line, a [`DRAFT_SEEK_LOOKAHEAD`] step nearer the leader than the
-/// chaser's own along-line position but never past the leader's centre.
+/// resulting tuck-in aim stays inside the `min_aim_course_dot` deflection cone off
+/// the course (the driver's greed-scaled cone, baseline
+/// [`DRAFT_SEEK_MIN_AIM_COURSE_DOT`]). `objective_along` is the chaser's
+/// straight-line distance to its objective along `course`. The aim is a point on the
+/// leader's centre tail line, a [`DRAFT_SEEK_LOOKAHEAD`] step nearer the leader than
+/// the chaser's own along-line position but never past the leader's centre.
 fn draft_seek_aim(
     position: Vec2,
     course: Vec2,
     objective_along: f32,
     leader: LeadingCar,
+    min_aim_course_dot: f32,
 ) -> Option<(Vec2, f32)> {
     let leader_heading = leader.heading.try_normalize()?;
     let alignment = leader_heading.dot(course);
@@ -281,7 +327,7 @@ fn draft_seek_aim(
     }
     let aim = leader.position + leader_heading * (along + DRAFT_SEEK_LOOKAHEAD).min(0.0);
     let aim_dir = (aim - position).try_normalize()?;
-    if aim_dir.dot(course) < DRAFT_SEEK_MIN_AIM_COURSE_DOT {
+    if aim_dir.dot(course) < min_aim_course_dot {
         return None;
     }
     let proximity = 1.0 - gap / DRAFT_RADIUS;
@@ -566,14 +612,22 @@ mod tests {
     #[test]
     fn with_no_leaders_a_seeker_keeps_its_base_aim() {
         let base = Vec2::new(40.0, 500.0);
-        assert_vec_near(draft_seeking_aim(Vec2::ZERO, base, &[]), base);
+        assert_vec_near(
+            draft_seeking_aim(Vec2::ZERO, base, &[], DRAFT_SEEK_MIN_AIM_COURSE_DOT),
+            base,
+        );
     }
 
     #[test]
     fn a_degenerate_course_keeps_the_base_aim() {
         let here = Vec2::new(10.0, 10.0);
         assert_vec_near(
-            draft_seeking_aim(here, here, &[aligned_leader(Vec2::new(0.0, 200.0))]),
+            draft_seeking_aim(
+                here,
+                here,
+                &[aligned_leader(Vec2::new(0.0, 200.0))],
+                DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+            ),
             here,
         );
     }
@@ -587,6 +641,7 @@ mod tests {
             Vec2::new(60.0, 0.0),
             Vec2::new(60.0, 600.0),
             &[aligned_leader(Vec2::new(0.0, 200.0))],
+            DRAFT_SEEK_MIN_AIM_COURSE_DOT,
         );
         assert_vec_near(aim, Vec2::new(0.0, 150.0));
     }
@@ -598,14 +653,22 @@ mod tests {
             position: Vec2::new(0.0, 150.0),
             heading: Vec2::X,
         };
-        assert_vec_near(draft_seeking_aim(Vec2::ZERO, base, &[crossing]), base);
+        assert_vec_near(
+            draft_seeking_aim(Vec2::ZERO, base, &[crossing], DRAFT_SEEK_MIN_AIM_COURSE_DOT),
+            base,
+        );
     }
 
     #[test]
     fn a_leader_the_chaser_is_ahead_of_is_not_drafted() {
         let base = Vec2::new(0.0, 500.0);
         assert_vec_near(
-            draft_seeking_aim(Vec2::ZERO, base, &[aligned_leader(Vec2::new(0.0, -100.0))]),
+            draft_seeking_aim(
+                Vec2::ZERO,
+                base,
+                &[aligned_leader(Vec2::new(0.0, -100.0))],
+                DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+            ),
             base,
         );
     }
@@ -614,7 +677,10 @@ mod tests {
     fn a_leader_beyond_the_wake_reach_is_not_drafted() {
         let base = Vec2::new(0.0, 800.0);
         let distant = aligned_leader(Vec2::new(0.0, DRAFT_RADIUS + 40.0));
-        assert_vec_near(draft_seeking_aim(Vec2::ZERO, base, &[distant]), base);
+        assert_vec_near(
+            draft_seeking_aim(Vec2::ZERO, base, &[distant], DRAFT_SEEK_MIN_AIM_COURSE_DOT),
+            base,
+        );
     }
 
     #[test]
@@ -624,20 +690,60 @@ mod tests {
         // rail must drop the nudge so the chaser commits straight to its objective.
         let base = Vec2::new(0.0, 500.0);
         let off_to_side = aligned_leader(Vec2::new(300.0, 40.0));
-        assert_vec_near(draft_seeking_aim(Vec2::ZERO, base, &[off_to_side]), base);
+        assert_vec_near(
+            draft_seeking_aim(
+                Vec2::ZERO,
+                base,
+                &[off_to_side],
+                DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+            ),
+            base,
+        );
     }
 
     #[test]
     fn a_drafted_aim_stays_within_the_deflection_cone() {
         let position = Vec2::new(60.0, 0.0);
         let base = Vec2::new(60.0, 600.0);
-        let aim = draft_seeking_aim(position, base, &[aligned_leader(Vec2::new(0.0, 200.0))]);
+        let aim = draft_seeking_aim(
+            position,
+            base,
+            &[aligned_leader(Vec2::new(0.0, 200.0))],
+            DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+        );
         let course = (base - position).normalize();
         let aim_dir = (aim - position).normalize();
         assert!(
             aim_dir.dot(course) >= DRAFT_SEEK_MIN_AIM_COURSE_DOT,
             "a drafted aim must never deflect past the cone: dot={}",
             aim_dir.dot(course)
+        );
+    }
+
+    #[test]
+    fn a_greedier_cone_tucks_into_a_wake_a_disciplined_one_leaves() {
+        // A pace car runs the chaser's way but off to the side, so tucking into its
+        // wake swings the aim about forty-five degrees off the objective bearing: a
+        // deflection a greedy driver's wide cone tolerates but a disciplined one
+        // rejects. Same wake, same chaser, only the cone differs, so the greed
+        // weighting alone decides whether the car drafts.
+        let chaser = Vec2::ZERO;
+        let base = Vec2::new(0.0, 600.0);
+        let pace = aligned_leader(Vec2::new(150.0, 200.0));
+
+        let greedy = draft_seeking_aim(chaser, base, &[pace], DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT);
+        let disciplined = draft_seeking_aim(
+            chaser,
+            base,
+            &[pace],
+            DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT,
+        );
+
+        assert_vec_near(greedy, Vec2::new(150.0, 150.0));
+        assert_vec_near(disciplined, base);
+        assert!(
+            greedy.distance(base) > 1e-3,
+            "the greedy cone should tuck the chaser into the wake, off its line: {greedy:?}"
         );
     }
 
@@ -651,6 +757,7 @@ mod tests {
             Vec2::new(10.0, 0.0),
             Vec2::new(0.0, 500.0),
             &[aligned_leader(leader_pos)],
+            DRAFT_SEEK_MIN_AIM_COURSE_DOT,
         );
         assert_vec_near(aim, leader_pos);
     }
@@ -664,6 +771,7 @@ mod tests {
                 aligned_leader(Vec2::new(0.0, 250.0)),
                 aligned_leader(Vec2::new(0.0, 90.0)),
             ],
+            DRAFT_SEEK_MIN_AIM_COURSE_DOT,
         );
         assert_vec_near(aim, Vec2::new(0.0, 90.0));
     }
@@ -679,6 +787,7 @@ mod tests {
                 Vec2::new(40.0, 0.0),
                 objective,
                 &[aligned_leader(objective)],
+                DRAFT_SEEK_MIN_AIM_COURSE_DOT,
             ),
             objective,
         );
@@ -694,6 +803,7 @@ mod tests {
                 Vec2::new(40.0, 0.0),
                 base,
                 &[aligned_leader(Vec2::new(0.0, 200.0))],
+                DRAFT_SEEK_MIN_AIM_COURSE_DOT,
             ),
             base,
         );
@@ -728,7 +838,8 @@ mod tests {
             naive_tow += n_mult - 1.0;
             naive_pos += naive_fwd * (n_intent.throttle * BASE_SPEED * n_mult);
 
-            let aim = draft_seeking_aim(seek_pos, objective, &[pace]);
+            let aim =
+                draft_seeking_aim(seek_pos, objective, &[pace], DRAFT_SEEK_MIN_AIM_COURSE_DOT);
             let s_intent = compute_steering(seek_pos, seek_fwd, aim, 0.0, CORNER_THROTTLE);
             seek_fwd = Vec2::from_angle(s_intent.steer * ROT)
                 .rotate(seek_fwd)

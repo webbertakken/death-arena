@@ -1,3 +1,7 @@
+use crate::gameplay::slipstream::{
+    DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT, DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT,
+    DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+};
 use bevy::prelude::*;
 
 /// Minimum forward throttle so a virtual player keeps moving (and can therefore
@@ -1467,6 +1471,38 @@ const fn closing_time_detour_min_priority(
     }
 }
 
+/// Greed gap from the baseline driver at which a driver's active-drafting cone steps
+/// out to the greedy (or in to the disciplined) tier. Shares
+/// [`CLOSING_TIME_GREED_STEP`] so the same roster reads greedy or disciplined the
+/// same way across both greed levers.
+const DRAFT_CONE_GREED_STEP: f32 = CLOSING_TIME_GREED_STEP;
+
+/// The draft-cone greed step must be a real gap, enforced at compile time.
+const _: () = assert!(DRAFT_CONE_GREED_STEP > 0.0);
+
+/// The active-drafting deflection cone a driver of the given greed uses: the minimum
+/// dot between a wake-seek nudge and the straight course to the objective for the
+/// nudge to stand (a smaller dot is a wider cone). Handed to
+/// [`crate::gameplay::slipstream::draft_seeking_aim`].
+///
+/// The off-objective-line mirror of [`pickup_lane_width`]: the same greed axis
+/// (`pickup_pursuit_radius` relative to [`BASELINE_PICKUP_PURSUIT_RADIUS`]) that lets
+/// a greedy driver swing wider off its line for a pickup also lets it swing wider to
+/// tuck into a tow, while a disciplined one keeps the straightest line. Stepped tiers
+/// keep the mapping legible and free of float-to-int casts, mirroring
+/// [`closing_time_detour_min_priority`]; the baseline driver (delta 0, and the human
+/// that mirrors it) keeps the exact baseline cone, so its drafting is unchanged.
+pub const fn draft_seek_cone(pickup_pursuit_radius: f32) -> f32 {
+    let greed_delta = pickup_pursuit_radius - BASELINE_PICKUP_PURSUIT_RADIUS;
+    if greed_delta >= DRAFT_CONE_GREED_STEP {
+        DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT
+    } else if greed_delta <= -DRAFT_CONE_GREED_STEP {
+        DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT
+    } else {
+        DRAFT_SEEK_MIN_AIM_COURSE_DOT
+    }
+}
+
 fn is_ahead_of_target_push(position: Vec2, pickup: Vec2, target: Vec2) -> bool {
     let to_pickup = pickup - position;
     let to_target = target - position;
@@ -2356,6 +2392,56 @@ mod tests {
             "greed must order the closing-time bar without inverting discipline, got \
              greedy={greedy}, baseline={baseline}, disciplined={disciplined}"
         );
+    }
+
+    #[test]
+    fn a_baseline_driver_drafts_with_the_baseline_cone() {
+        // The all-rounder's greed (and the human that mirrors it) keeps the exact
+        // baseline cone, so its active drafting is unchanged.
+        assert!(
+            (draft_seek_cone(BASELINE_PICKUP_PURSUIT_RADIUS) - DRAFT_SEEK_MIN_AIM_COURSE_DOT).abs()
+                <= EPSILON
+        );
+    }
+
+    #[test]
+    fn a_greedy_driver_drafts_with_a_wider_cone() {
+        // The sprinter's roster greed (520, well above the baseline 450) buys the
+        // widest cone, so it tolerates a larger swing off its line to bank a tow.
+        let cone = draft_seek_cone(520.0);
+        assert!((cone - DRAFT_SEEK_GREEDY_MIN_AIM_COURSE_DOT).abs() <= EPSILON);
+        assert!(
+            cone < DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+            "a greedy cone must be wider (a smaller dot) than the baseline: {cone}"
+        );
+    }
+
+    #[test]
+    fn a_disciplined_driver_drafts_with_a_tighter_cone() {
+        // The technician's roster greed (380, below the baseline) holds the tightest
+        // cone, keeping the straightest line to its objective.
+        let cone = draft_seek_cone(380.0);
+        assert!((cone - DRAFT_SEEK_DISCIPLINED_MIN_AIM_COURSE_DOT).abs() <= EPSILON);
+        assert!(
+            cone > DRAFT_SEEK_MIN_AIM_COURSE_DOT,
+            "a disciplined cone must be tighter (a larger dot) than the baseline: {cone}"
+        );
+    }
+
+    #[test]
+    fn greed_never_inverts_the_draft_cone() {
+        // Across the asserted roster greed band, a greedier driver never gets a
+        // tighter cone than a more disciplined one: greed only ever widens a draft.
+        let radii = [340.0_f32, 380.0, 400.0, 450.0, 520.0, 580.0];
+        for pair in radii.windows(2) {
+            let (less_greedy, greedier) = (pair[0], pair[1]);
+            assert!(
+                draft_seek_cone(greedier) <= draft_seek_cone(less_greedy),
+                "greedier {greedier} cone {} must not exceed less-greedy {less_greedy} cone {}",
+                draft_seek_cone(greedier),
+                draft_seek_cone(less_greedy),
+            );
+        }
     }
 
     #[test]

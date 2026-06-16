@@ -9,10 +9,10 @@ use crate::gameplay::player::Player;
 use crate::gameplay::slipstream::{draft_seeking_aim, slipstream_speed_multiplier, LeadingCar};
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    finish_off_aim, finish_off_car, lead_defence_car, next_waypoint, pincer_partner,
-    pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices, DrivingTarget,
-    FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget, PitRetreatCandidate,
-    SteeringIntent, ThreatTarget, MIN_THROTTLE,
+    draft_seek_cone, finish_off_aim, finish_off_car, lead_defence_car, next_waypoint,
+    pincer_partner, pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices,
+    DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget,
+    PitRetreatCandidate, SteeringIntent, ThreatTarget, MIN_THROTTLE,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
@@ -242,14 +242,14 @@ pub fn virtual_player_drive_system(
             .flatten();
         let target_position = spacing_target.unwrap_or_else(|| target.position());
         let arrive_radius = arrive_radius_for_target(target, ai.corner_throttle);
-        let is_carrier = carries_enemy_flag(entity, ai.team, &flags);
+        let draft_cone = car_draft_cone(entity, ai.team, ai.pickup_pursuit_radius, &flags);
         let Some(intent) = steering_for_car(
             position,
             forward,
             target_position,
             arrive_radius,
             ai.corner_throttle,
-            is_carrier,
+            draft_cone,
             &draft_leaders(entity, &wakes),
         ) else {
             if matches!(target, DrivingTarget::PatrolWaypoint(_)) {
@@ -453,23 +453,41 @@ fn draft_leaders(entity: Entity, draft_lines: &[(Entity, Vec2, Vec2)]) -> Vec<Le
         .collect()
 }
 
+/// The greed-scaled active-drafting cone a car drives with this frame, or `None` for
+/// a flag carrier (which earns no tow and commits straight to its target).
+///
+/// Folds the carrier check and the personality-greed lookup ([`draft_seek_cone`]) so
+/// the drive loop reads a car's drafting keenness in a single call: a greedier driver
+/// tucks into a wake even when it pulls further off its objective line, the off-line
+/// mirror of the same greed axis that widens its pickup detours.
+fn car_draft_cone(
+    entity: Entity,
+    team: AiTeam,
+    pickup_pursuit_radius: f32,
+    flags: &[FlagTarget],
+) -> Option<f32> {
+    (!carries_enemy_flag(entity, team, flags)).then(|| draft_seek_cone(pickup_pursuit_radius))
+}
+
 /// The steering a car wants this frame toward `target_position`, with active
 /// drafting folded in, or `None` when it has arrived and should idle (the caller
 /// then advances a patrol waypoint and skips the car).
 ///
-/// A non-carrier already on the move tucks into a wake lying on its way, catching
-/// the tow as it goes: the arrive/idle decision stays keyed on the real target, so
-/// seeking only ever redirects an already-driving car, and it falls back to the
-/// straight line whenever no wake is worth seeking or tucking in would stall it. A
-/// flag carrier earns no tow ([`draft_seeking_aim`] is never consulted for it), so
-/// it always commits straight to its target and keeps its tuned run home.
+/// `draft_cone` carries both whether this car drafts and how keenly: `Some(cone)` for
+/// a non-carrier (the greed-scaled deflection cone it tucks into a wake with, see
+/// [`draft_seek_cone`]), or `None` for a flag carrier, which earns no tow and commits
+/// straight to its target. When it drafts, the car steers toward the wake-seeking aim
+/// ([`draft_seeking_aim`]) lying on its way, catching the tow as it goes; the
+/// arrive/idle decision stays keyed on the real target, so seeking only ever
+/// redirects an already-driving car and falls back to the straight line whenever
+/// tucking in would stall it.
 fn steering_for_car(
     position: Vec2,
     forward: Vec2,
     target_position: Vec2,
     arrive_radius: f32,
     corner_throttle: f32,
-    is_carrier: bool,
+    draft_cone: Option<f32>,
     leaders: &[LeadingCar],
 ) -> Option<SteeringIntent> {
     let straight = compute_steering(
@@ -482,10 +500,10 @@ fn steering_for_car(
     if straight == SteeringIntent::IDLE {
         return None;
     }
-    if is_carrier {
+    let Some(cone) = draft_cone else {
         return Some(straight);
-    }
-    let aim = draft_seeking_aim(position, target_position, leaders);
+    };
+    let aim = draft_seeking_aim(position, target_position, leaders, cone);
     let drafted = compute_steering(position, forward, aim, arrive_radius, corner_throttle);
     Some(if drafted == SteeringIntent::IDLE {
         straight
