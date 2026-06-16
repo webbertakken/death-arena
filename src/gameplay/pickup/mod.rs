@@ -262,6 +262,13 @@ impl Score {
     pub const fn bank_match_purse(&mut self, purse: u32) {
         self.cash += purse;
     }
+
+    /// Bank a comeback bonus: the anti-snowball cash a team behind on captures
+    /// pockets for clawing one back. Pure cash on top of the capture bounty, so
+    /// it leaves the play tallies untouched.
+    pub const fn bank_comeback_capture_bonus(&mut self, bonus: u32) {
+        self.cash += bonus;
+    }
 }
 
 /// Running tally of pickups stolen by virtual opponents.
@@ -316,6 +323,13 @@ impl OpponentScore {
     /// taking the round. Pure cash, leaving the play tallies untouched.
     pub const fn bank_match_purse(&mut self, purse: u32) {
         self.cash += purse;
+    }
+
+    /// Bank a comeback bonus: the anti-snowball cash a team behind on captures
+    /// pockets for clawing one back. Pure cash on top of the capture bounty, so
+    /// it leaves the play tallies untouched.
+    pub const fn bank_comeback_capture_bonus(&mut self, bonus: u32) {
+        self.cash += bonus;
     }
 }
 

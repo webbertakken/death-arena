@@ -13,6 +13,28 @@ pub const CAPTURES_TO_WIN: u32 = 3;
 pub const CAPTURE_CASH_BOUNTY: u32 = 250;
 pub const FLAG_STEAL_CASH_BOUNTY: u32 = 50;
 pub const FLAG_RETURN_CASH_BOUNTY: u32 = 75;
+/// Cash a team behind on captures banks per capture of deficit it claws back
+/// from, on top of the flat [`CAPTURE_CASH_BOUNTY`].
+///
+/// The capture-the-flag mirror of the combat most-wanted leader bounty
+/// ([`crate::gameplay::combat::most_wanted_wreck_bonus`]): where that pays the
+/// trailing side a comeback bonus for wrecking a capture leader's car, this pays
+/// it for answering on the objective itself. Both are anti-snowball levers keyed
+/// on the capture standing that point the opposite way to a runaway lead, and the
+/// speed-side catch-up ([`crate::gameplay::comeback`]) is the third. Priced per
+/// capture of deficit so a bigger comeback pays more, and pinned (see the
+/// compile-assert below) so even the largest comeback never out-earns taking a
+/// flag.
+pub const COMEBACK_CAPTURE_BONUS_PER_DEFICIT: u32 = 100;
+/// A comeback bonus must be a real payday, not a token, enforced at compile time.
+const _: () = assert!(COMEBACK_CAPTURE_BONUS_PER_DEFICIT > 0);
+/// Clawing the gap shut must never out-earn taking a flag: the largest comeback
+/// bonus (from the deepest live deficit, [`CAPTURES_TO_WIN`] `- 1`) stays below a
+/// capture's own bounty, enforced at compile time. Holds while a round needs more
+/// than one capture to win.
+const _: () = assert!(CAPTURES_TO_WIN > 1);
+const _: () =
+    assert!(COMEBACK_CAPTURE_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1) < CAPTURE_CASH_BOUNTY);
 /// Cash the winning team banks the instant a match resolves in its favour.
 ///
 /// The Death Rally payday that closes the round: every in-match bounty grinds
@@ -946,10 +968,43 @@ const fn award_capture_bounties(
         current.player.saturating_sub(previous.player),
         CAPTURE_CASH_BOUNTY,
     );
+    player_economy.bank_comeback_capture_bonus(comeback_capture_bonus(
+        previous.player,
+        previous.opponents,
+        current.player,
+    ));
     opponent_economy.bank_capture_bonus(
         current.opponents.saturating_sub(previous.opponents),
         CAPTURE_CASH_BOUNTY,
     );
+    opponent_economy.bank_comeback_capture_bonus(comeback_capture_bonus(
+        previous.opponents,
+        previous.player,
+        current.opponents,
+    ));
+}
+
+/// Cash a team banks for clawing a capture back from behind, given its capture
+/// tally `previous_own` and the enemy's `previous_enemy` *before* the claw-back,
+/// and its tally `current_own` after.
+///
+/// Pays [`COMEBACK_CAPTURE_BONUS_PER_DEFICIT`] for every capture the team trailed
+/// by before answering, capped at the deepest deficit a live match can hold
+/// ([`CAPTURES_TO_WIN`] `- 1`, since an enemy reaching [`CAPTURES_TO_WIN`] ends the
+/// round). A team that was level or ahead earns nothing, and a frame in which the
+/// team did not capture earns nothing.
+const fn comeback_capture_bonus(previous_own: u32, previous_enemy: u32, current_own: u32) -> u32 {
+    if current_own <= previous_own {
+        return 0;
+    }
+    let deficit = previous_enemy.saturating_sub(previous_own);
+    let max_deficit = CAPTURES_TO_WIN - 1;
+    let steps = if deficit < max_deficit {
+        deficit
+    } else {
+        max_deficit
+    };
+    COMEBACK_CAPTURE_BONUS_PER_DEFICIT * steps
 }
 
 const fn award_flag_steal_bounties(
@@ -1740,14 +1795,17 @@ mod tests {
         let mut player_economy = Score::default();
         let mut opponent_economy = OpponentScore::default();
 
+        // Player is level before answering (1-1), so only the fresh capture pays
+        // and the comeback bonus stays out of this fixture (that lever is covered
+        // by its own tests).
         award_capture_bounties(
             CaptureScore {
                 player: 1,
-                opponents: 2,
+                opponents: 1,
             },
             CaptureScore {
                 player: 2,
-                opponents: 2,
+                opponents: 1,
             },
             &mut player_economy,
             &mut opponent_economy,
@@ -1759,6 +1817,122 @@ mod tests {
         assert_eq!(opponent_economy.cash, 0);
         assert_eq!(opponent_economy.captures, 0);
         assert_eq!(opponent_economy.collected, 0);
+    }
+
+    #[test]
+    fn a_behind_team_banks_a_comeback_bonus_on_top_of_a_capture() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Player trails 0-1, then answers to level. The fresh capture pays the
+        // flat bounty plus a one-step comeback bonus for clawing back from one
+        // capture down.
+        award_capture_bounties(
+            CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            CAPTURE_CASH_BOUNTY + COMEBACK_CAPTURE_BONUS_PER_DEFICIT
+        );
+        assert_eq!(player_economy.captures, 1);
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_level_team_banks_no_comeback_bonus() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Player captures from level (1-1): no deficit to claw back, so no bonus.
+        award_capture_bounties(
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, CAPTURE_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn a_leading_team_banks_no_comeback_bonus() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Player extends a 1-0 lead: ahead, not behind, so no comeback bonus.
+        award_capture_bounties(
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 2,
+                opponents: 0,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, CAPTURE_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn the_comeback_bonus_scales_with_the_deficit() {
+        // Clawing back from two down pays more than from one down, so a deeper
+        // comeback is worth more.
+        let one_down = comeback_capture_bonus(0, 1, 1);
+        let two_down = comeback_capture_bonus(0, 2, 1);
+        assert!(
+            two_down > one_down,
+            "a deeper comeback should pay more: two_down={two_down}, one_down={one_down}"
+        );
+        assert_eq!(one_down, COMEBACK_CAPTURE_BONUS_PER_DEFICIT);
+        assert_eq!(two_down, 2 * COMEBACK_CAPTURE_BONUS_PER_DEFICIT);
+    }
+
+    #[test]
+    fn the_comeback_bonus_is_capped_at_the_deepest_live_deficit() {
+        // A deficit beyond the largest a live match can hold is clamped, so the
+        // bonus never runs away.
+        let capped = comeback_capture_bonus(0, CAPTURES_TO_WIN + 5, 1);
+        assert_eq!(
+            capped,
+            COMEBACK_CAPTURE_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1)
+        );
+    }
+
+    #[test]
+    fn the_comeback_bonus_needs_a_fresh_capture() {
+        // No capture this frame (tally unchanged) pays nothing however deep the
+        // deficit.
+        assert_eq!(comeback_capture_bonus(0, 2, 0), 0);
+    }
+
+    #[test]
+    fn a_comeback_capture_never_out_earns_taking_a_flag() {
+        // Even the deepest comeback bonus stays below a capture's own bounty, so
+        // closing the gap never out-earns taking a flag.
+        let deepest = comeback_capture_bonus(0, CAPTURES_TO_WIN - 1, 1);
+        assert!(
+            deepest < CAPTURE_CASH_BOUNTY,
+            "comeback bonus {deepest} must stay below the capture bounty {CAPTURE_CASH_BOUNTY}"
+        );
     }
 
     #[test]
