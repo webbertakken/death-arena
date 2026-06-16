@@ -1,4 +1,5 @@
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
+use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock,
 };
@@ -203,8 +204,8 @@ pub fn virtual_player_drive_system(
         match_clock.as_deref(),
     );
     let teammate_positions = virtual_player_positions(&query);
-    // Every car's tail line this frame, so a driver can catch a leader's slipstream.
-    let draft_lines = car_draft_lines(&query, &player_query);
+    // Every car's tail line (its wake) this frame, so a driver can catch a leader's slipstream.
+    let wakes = car_draft_lines(&query, &player_query);
     let claimed_pickups = claimed_pickups_for_virtual_players(
         &query,
         &assigned_ctf_targets,
@@ -263,8 +264,8 @@ pub fn virtual_player_drive_system(
 
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
-        let car_speed =
-            car_speed_multiplier(entity, ai.team, position, forward, &flags, &draft_lines);
+        let car_speed = car_speed_multiplier(entity, ai.team, position, forward, &flags, &wakes)
+            * team_comeback_multiplier(ai.team, captures, entity, &flags);
         let movement_distance = intent.throttle
             * ai.movement_speed
             * team_movement_multiplier(
@@ -396,6 +397,22 @@ fn car_speed_multiplier(
     flag_carrier_speed_multiplier(is_carrier)
         * car_draft_multiplier(is_carrier, entity, position, heading, draft_lines)
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
+}
+
+/// Catch-up urge a virtual car earns while its side trails on captures, or `1.0`
+/// when its team is level or ahead, or when the car carries the enemy flag (the
+/// catch-up never speeds a flag run home, mirroring the slipstream). Read as a
+/// separate factor beside the per-car [`car_speed_multiplier`], so a trailing
+/// team's chasers, not its flag runner, find the extra urge.
+fn team_comeback_multiplier(
+    team: AiTeam,
+    captures: CaptureScore,
+    entity: Entity,
+    flags: &[FlagTarget],
+) -> f32 {
+    let is_carrier = carries_enemy_flag(entity, team, flags);
+    let (own, enemy) = captures.standings(FlagTeam::from(team));
+    comeback_speed_multiplier(own, enemy, is_carrier)
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`

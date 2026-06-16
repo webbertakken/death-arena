@@ -229,6 +229,20 @@ impl CaptureScore {
             CollectorKind::Opponent => self.opponents += 1,
         }
     }
+
+    /// Captures from `team`'s own point of view, paired as `(own, enemy)`.
+    ///
+    /// The blue flag belongs to the human's side, so [`FlagTeam::Blue`] reads the
+    /// player tally as its own; the red flag belongs to the opponents. Lets the
+    /// catch-up boost ([`crate::gameplay::comeback`]) read a team's deficit without
+    /// knowing which colour the human is.
+    #[must_use]
+    pub const fn standings(self, team: FlagTeam) -> (u32, u32) {
+        match team {
+            FlagTeam::Blue => (self.player, self.opponents),
+            FlagTeam::Red => (self.opponents, self.player),
+        }
+    }
 }
 
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]

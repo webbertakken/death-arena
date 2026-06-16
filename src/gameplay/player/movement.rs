@@ -1,5 +1,6 @@
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
-use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CtfFlag, CtfMatchResult};
+use crate::gameplay::comeback::comeback_speed_multiplier;
+use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -31,6 +32,7 @@ type PlayerMovementContext<'w> = (
     Option<Res<'w, WreckSurges>>,
     Option<Res<'w, SabotageEffects>>,
     Option<Res<'w, CtfMatchResult>>,
+    Option<Res<'w, CaptureScore>>,
 );
 
 /// Demonstrates applying rotation and movement based on keyboard input.
@@ -43,8 +45,15 @@ pub fn car_movement_system(
     mut front_left_wheel_query: Query<(&FrontLeftWheel, &mut Transform), FilterFrontLeftWheel>,
     mut front_right_wheel_query: Query<(&FrontRightWheel, &mut Transform), FilterFrontRightWheel>,
 ) {
-    let (nitro_boosts, integrity, wreck_stuns, wreck_surges, sabotage_effects, match_result) =
-        context;
+    let (
+        nitro_boosts,
+        integrity,
+        wreck_stuns,
+        wreck_surges,
+        sabotage_effects,
+        match_result,
+        captures,
+    ) = context;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -95,11 +104,14 @@ pub fn car_movement_system(
     // A car grinding the arena boundary bleeds speed, just like the field.
     let wall_scrape_multiplier =
         wall_scrape_speed_multiplier(transform.translation.xy(), BOUNDS / 2.0);
+    // A trailing team's chasers earn a small catch-up urge, just like the field.
+    let comeback_multiplier = player_comeback_multiplier(captures.as_deref(), carrying_flag);
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
         * draft_multiplier
-        * wall_scrape_multiplier;
+        * wall_scrape_multiplier
+        * comeback_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -179,4 +191,14 @@ fn player_effect_multiplier(
     let surge = wreck_surges.map_or(1.0, |surges| surges.player_multiplier());
     let sabotage = sabotage_effects.map_or(1.0, SabotageEffects::player_multiplier);
     nitro * integrity * stun * surge * sabotage
+}
+
+/// Catch-up urge the human earns while its side trails on captures, or `1.0` with
+/// no match in progress. The human is the player side, so its deficit is the
+/// opponents' capture lead; a flag carrier earns none, mirroring the field, so the
+/// catch-up never speeds a flag run home.
+fn player_comeback_multiplier(captures: Option<&CaptureScore>, carrying_flag: bool) -> f32 {
+    captures.map_or(1.0, |score| {
+        comeback_speed_multiplier(score.player, score.opponents, carrying_flag)
+    })
 }

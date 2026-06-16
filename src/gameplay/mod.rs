@@ -10,6 +10,7 @@ use virtual_player::VirtualPlayerPlugin;
 
 mod arena;
 mod combat;
+mod comeback;
 mod ctf;
 mod main;
 mod pickup;
