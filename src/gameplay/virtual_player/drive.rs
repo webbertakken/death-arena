@@ -6,13 +6,13 @@ use crate::gameplay::ctf::{
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
-use crate::gameplay::slipstream::{slipstream_speed_multiplier, LeadingCar};
+use crate::gameplay::slipstream::{draft_seeking_aim, slipstream_speed_multiplier, LeadingCar};
 use crate::gameplay::virtual_player::ai::{
     choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
     finish_off_aim, finish_off_car, lead_defence_car, next_waypoint, pincer_partner,
     pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices, DrivingTarget,
     FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget, PitRetreatCandidate,
-    ThreatTarget, MIN_THROTTLE,
+    SteeringIntent, ThreatTarget, MIN_THROTTLE,
 };
 use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
@@ -220,10 +220,7 @@ pub fn virtual_player_drive_system(
         let position = transform.translation.xy();
         let forward = (transform.rotation * Vec3::Y).xy();
         let ctf_target = resolve_overlay_target(entity, &overlays, &assigned_ctf_targets);
-        let entity_pickups: Vec<PickupTarget> = claimed_pickups
-            .iter()
-            .filter_map(|(assigned_entity, pickup)| (*assigned_entity == entity).then_some(*pickup))
-            .collect();
+        let entity_pickups = pickups_claimed_by(entity, &claimed_pickups);
         let Some(target) = choose_driving_target(
             position,
             DrivingChoices {
@@ -244,20 +241,22 @@ pub fn virtual_player_drive_system(
             .then(|| teammate_spacing_target(entity, ai.team, position, &teammate_positions))
             .flatten();
         let target_position = spacing_target.unwrap_or_else(|| target.position());
-        let intent = compute_steering(
+        let arrive_radius = arrive_radius_for_target(target, ai.corner_throttle);
+        let is_carrier = carries_enemy_flag(entity, ai.team, &flags);
+        let Some(intent) = steering_for_car(
             position,
             forward,
             target_position,
-            arrive_radius_for_target(target, ai.corner_throttle),
+            arrive_radius,
             ai.corner_throttle,
-        );
-
-        if intent == crate::gameplay::virtual_player::ai::SteeringIntent::IDLE {
+            is_carrier,
+            &draft_leaders(entity, &wakes),
+        ) else {
             if matches!(target, DrivingTarget::PatrolWaypoint(_)) {
                 ai.current_waypoint = next_waypoint(ai.current_waypoint, ai.waypoints.len());
             }
             continue;
-        }
+        };
 
         // Rotation: positive steer turns left (counter-clockwise).
         transform.rotate_z(intent.steer * ai.rotation_speed * TIME_STEP);
@@ -428,15 +427,71 @@ fn car_draft_multiplier(
     if is_carrier {
         return 1.0;
     }
-    let leaders: Vec<LeadingCar> = draft_lines
+    slipstream_speed_multiplier(position, heading, &draft_leaders(entity, draft_lines))
+}
+
+/// The pickups claimed for `entity` this frame, pulled from the shared per-team
+/// claim list ([`claimed_pickups_for_virtual_players`]).
+fn pickups_claimed_by(entity: Entity, claimed: &[(Entity, PickupTarget)]) -> Vec<PickupTarget> {
+    claimed
+        .iter()
+        .filter_map(|(assigned, pickup)| (*assigned == entity).then_some(*pickup))
+        .collect()
+}
+
+/// Every car's wake bar `entity`'s own: the leaders a driver might draft, read both
+/// as the passive tow it earns ([`car_draft_multiplier`]) and the wake it actively
+/// steers to tuck into ([`draft_seeking_aim`]).
+fn draft_leaders(entity: Entity, draft_lines: &[(Entity, Vec2, Vec2)]) -> Vec<LeadingCar> {
+    draft_lines
         .iter()
         .filter(|(candidate, _, _)| *candidate != entity)
         .map(|(_, leader_position, leader_heading)| LeadingCar {
             position: *leader_position,
             heading: *leader_heading,
         })
-        .collect();
-    slipstream_speed_multiplier(position, heading, &leaders)
+        .collect()
+}
+
+/// The steering a car wants this frame toward `target_position`, with active
+/// drafting folded in, or `None` when it has arrived and should idle (the caller
+/// then advances a patrol waypoint and skips the car).
+///
+/// A non-carrier already on the move tucks into a wake lying on its way, catching
+/// the tow as it goes: the arrive/idle decision stays keyed on the real target, so
+/// seeking only ever redirects an already-driving car, and it falls back to the
+/// straight line whenever no wake is worth seeking or tucking in would stall it. A
+/// flag carrier earns no tow ([`draft_seeking_aim`] is never consulted for it), so
+/// it always commits straight to its target and keeps its tuned run home.
+fn steering_for_car(
+    position: Vec2,
+    forward: Vec2,
+    target_position: Vec2,
+    arrive_radius: f32,
+    corner_throttle: f32,
+    is_carrier: bool,
+    leaders: &[LeadingCar],
+) -> Option<SteeringIntent> {
+    let straight = compute_steering(
+        position,
+        forward,
+        target_position,
+        arrive_radius,
+        corner_throttle,
+    );
+    if straight == SteeringIntent::IDLE {
+        return None;
+    }
+    if is_carrier {
+        return Some(straight);
+    }
+    let aim = draft_seeking_aim(position, target_position, leaders);
+    let drafted = compute_steering(position, forward, aim, arrive_radius, corner_throttle);
+    Some(if drafted == SteeringIntent::IDLE {
+        straight
+    } else {
+        drafted
+    })
 }
 
 fn teammate_spacing_target(
@@ -2283,6 +2338,58 @@ mod tests {
             drafting_y > lone_y,
             "a car tucked in behind a leader should be towed further: lone={lone_y}, \
              drafting={drafting_y}"
+        );
+    }
+
+    #[test]
+    fn a_virtual_player_steers_into_a_wake_on_the_way_to_its_objective() {
+        // Control: a lone car with its objective dead ahead holds a straight line, so
+        // its lateral position never moves off zero.
+        let mut straight_app = app_with_system();
+        let straight = spawn_ai_at(
+            &mut straight_app,
+            vec![Vec2::new(0.0, 4000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        straight_app.update();
+        let straight_x = straight_app
+            .world
+            .get::<Transform>(straight)
+            .unwrap()
+            .translation
+            .x;
+
+        // Seeking: a pace car runs the same way, ahead and off to one side, with the
+        // objective far beyond it. The chaser should actively tuck across into the
+        // wake rather than hold its straight line, ending the frame moved toward the
+        // pace car's lane.
+        let mut seek_app = app_with_system();
+        spawn_ai_at(
+            &mut seek_app,
+            vec![Vec2::new(60.0, 4000.0)],
+            Vec3::new(60.0, 250.0, 4.0),
+        );
+        let seeker = spawn_ai_at(
+            &mut seek_app,
+            vec![Vec2::new(0.0, 4000.0)],
+            Vec3::new(0.0, 0.0, 4.0),
+        );
+        seek_app.update();
+        let seeker_x = seek_app
+            .world
+            .get::<Transform>(seeker)
+            .unwrap()
+            .translation
+            .x;
+
+        assert!(
+            straight_x.abs() <= 1e-3,
+            "the lone control should hold its line, got x={straight_x}"
+        );
+        assert!(
+            seeker_x > straight_x + 1e-3,
+            "a car should steer across into a wake on its way to its objective: \
+             straight={straight_x}, seeking={seeker_x}"
         );
     }
 
