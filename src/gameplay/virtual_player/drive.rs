@@ -2105,6 +2105,109 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_teams_catch_up_speeds_a_virtual_player() {
+        use crate::gameplay::ctf::CAPTURES_TO_WIN;
+
+        // Control: a level scoreline, so a red patroller earns no catch-up urge.
+        let mut level_app = app_with_system();
+        let level = spawn_ai_on_team(&mut level_app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        level_app.update();
+        let level_y = level_app
+            .world
+            .get::<Transform>(level)
+            .unwrap()
+            .translation
+            .y;
+
+        // Trailing: red is down by the largest live deficit, so its non-carrier
+        // earns the full catch-up urge and covers more ground on the same heading.
+        let mut trailing_app = app_with_system();
+        trailing_app.insert_resource(CaptureScore {
+            player: CAPTURES_TO_WIN - 1,
+            opponents: 0,
+        });
+        let trailing =
+            spawn_ai_on_team(&mut trailing_app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+        trailing_app.update();
+        let trailing_y = trailing_app
+            .world
+            .get::<Transform>(trailing)
+            .unwrap()
+            .translation
+            .y;
+
+        let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false);
+        assert!(
+            catch_up > 1.0,
+            "the fixture must actually trail, got {catch_up}"
+        );
+        assert!(
+            trailing_y > level_y,
+            "level={level_y}, trailing={trailing_y}"
+        );
+        assert!(
+            (trailing_y - level_y * catch_up).abs() <= 1e-3,
+            "a trailing team's chaser should drive at the catch-up multiplier: \
+             level={level_y}, trailing={trailing_y}, catch_up={catch_up}"
+        );
+    }
+
+    #[test]
+    fn a_long_held_flag_tires_a_virtual_player_carrier() {
+        use crate::gameplay::carry_fatigue::CARRY_FATIGUE_FULL_FRAMES;
+
+        // A red carrier hauling the blue flag home to its red base dead ahead, so
+        // heading and throttle are fixed; only the time on the flag differs. Both
+        // runs pay the flat carry tax, so any extra slowdown is fatigue alone.
+        fn carrier_y(carry_frames: Option<u32>) -> f32 {
+            let mut app = app_with_system();
+            let carrier = spawn_ai_on_team(&mut app, AiTeam::Red, vec![Vec2::new(0.0, 1000.0)]);
+            spawn_flag(
+                &mut app,
+                FlagTeam::Red,
+                Vec2::new(0.0, 1000.0),
+                Vec3::new(0.0, 1000.0, 4.0),
+                None,
+            );
+            spawn_flag(
+                &mut app,
+                FlagTeam::Blue,
+                Vec2::new(0.0, -1000.0),
+                Vec3::new(0.0, -1000.0, 4.0),
+                Some(carrier),
+            );
+            if let Some(frames) = carry_frames {
+                app.insert_resource(FlagCarryTimers {
+                    blue_frames: frames,
+                    red_frames: 0,
+                });
+            }
+            app.update();
+            app.world.get::<Transform>(carrier).unwrap().translation.y
+        }
+
+        // Fresh grab: no carry timer means no fatigue, only the flat tax.
+        let fresh_y = carrier_y(None);
+        // Long hold: the flag has been carried to the full-fatigue horizon.
+        let tired_y = carrier_y(Some(CARRY_FATIGUE_FULL_FRAMES));
+
+        let fatigue = carry_fatigue_speed_multiplier(CARRY_FATIGUE_FULL_FRAMES);
+        assert!(
+            fatigue < 1.0,
+            "the fixture must actually tire, got {fatigue}"
+        );
+        assert!(
+            tired_y > 0.0 && tired_y < fresh_y,
+            "fresh={fresh_y}, tired={tired_y}"
+        );
+        assert!(
+            fresh_y.mul_add(-fatigue, tired_y).abs() <= 1e-3,
+            "a long-held flag should scrub a carrier's pace on top of the tax: \
+             fresh={fresh_y}, tired={tired_y}, fatigue={fatigue}"
+        );
+    }
+
+    #[test]
     fn a_flag_carrier_catches_no_slipstream() {
         // A red carrier running the blue flag home, measured with and without a
         // team-mate planted directly on its run-home line. A non-carrier in that

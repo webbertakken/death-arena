@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
-    use crate::gameplay::ctf::{CtfFlag, CtfMatchResult, CtfMatchWinner, FlagTeam};
+    use crate::gameplay::ctf::{
+        CaptureScore, CtfFlag, CtfMatchResult, CtfMatchWinner, FlagCarryTimers, FlagTeam,
+    };
     use crate::gameplay::main::BOUNDS;
     use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
     use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -569,6 +571,164 @@ mod tests {
             (carrier_y - empty_handed_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
             "carrier should move at the flag-carrier multiplier: \
              empty_handed={empty_handed_y}, carrier={carrier_y}"
+        );
+    }
+
+    #[test]
+    fn grinding_a_wall_scrubs_the_humans_speed() {
+        use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
+
+        // Control: a player in the open centre, far from every wall, so it keeps
+        // full pace driving straight up at a dead-ahead heading.
+        let mut open_app = setup_test_app();
+        let open = spawn_player(&mut open_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut open_app, open);
+        open_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        open_app.update();
+        let open_y = open_app.world.get::<Transform>(open).unwrap().translation.y;
+
+        // Wall car: jammed against the +X wall and driving straight up alongside it,
+        // so heading and throttle match the control exactly. Only the scrape differs.
+        let wall_x = BOUNDS.x / 2.0 - 10.0;
+        let mut wall_app = setup_test_app();
+        let wall = spawn_player(&mut wall_app, Vec3::new(wall_x, 0.0, 5.0));
+        spawn_wheels(&mut wall_app, wall);
+        wall_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        wall_app.update();
+        let wall_y = wall_app.world.get::<Transform>(wall).unwrap().translation.y;
+
+        let scrape = wall_scrape_speed_multiplier(Vec2::new(wall_x, 0.0), BOUNDS / 2.0);
+        assert!(
+            scrape < 1.0,
+            "the fixture must actually press into the scrape margin, got {scrape}"
+        );
+        assert!(
+            wall_y > 0.0 && wall_y < open_y,
+            "open={open_y}, wall={wall_y}"
+        );
+        assert!(
+            (wall_y - open_y * scrape).abs() <= 1e-3,
+            "a wall-jammed human should drive at the scrape multiplier: \
+             open={open_y}, wall={wall_y}, scrape={scrape}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_humans_catch_up_increases_forward_distance() {
+        use crate::gameplay::comeback::comeback_speed_multiplier;
+        use crate::gameplay::ctf::CAPTURES_TO_WIN;
+
+        // Control: a level scoreline, so the human earns no catch-up urge.
+        let mut level_app = setup_test_app();
+        let level = spawn_player(&mut level_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut level_app, level);
+        level_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        level_app.update();
+        let level_y = level_app
+            .world
+            .get::<Transform>(level)
+            .unwrap()
+            .translation
+            .y;
+
+        // Trailing: the human's side is down by the largest live deficit, so its
+        // non-carrier earns the full catch-up urge and covers more ground.
+        let mut trailing_app = setup_test_app();
+        trailing_app.insert_resource(CaptureScore {
+            player: 0,
+            opponents: CAPTURES_TO_WIN - 1,
+        });
+        let trailing = spawn_player(&mut trailing_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut trailing_app, trailing);
+        trailing_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        trailing_app.update();
+        let trailing_y = trailing_app
+            .world
+            .get::<Transform>(trailing)
+            .unwrap()
+            .translation
+            .y;
+
+        let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false);
+        assert!(
+            catch_up > 1.0,
+            "the fixture must actually trail, got {catch_up}"
+        );
+        assert!(
+            trailing_y > level_y,
+            "level={level_y}, trailing={trailing_y}"
+        );
+        assert!(
+            (trailing_y - level_y * catch_up).abs() <= 1e-3,
+            "a trailing human should drive at the catch-up multiplier: \
+             level={level_y}, trailing={trailing_y}, catch_up={catch_up}"
+        );
+    }
+
+    #[test]
+    fn a_long_held_flag_tires_the_human_carrier() {
+        use crate::gameplay::carry_fatigue::{
+            carry_fatigue_speed_multiplier, CARRY_FATIGUE_FULL_FRAMES,
+        };
+
+        // The human plays blue, so it hauls the captured red flag home. Both
+        // fixtures carry the flag and so pay the flat carry tax; only the time
+        // already spent on the flag differs between them.
+        fn carrier_y(carry_frames: Option<u32>) -> f32 {
+            let mut app = setup_test_app();
+            let carrier = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+            spawn_wheels(&mut app, carrier);
+            app.world.spawn((
+                CtfFlag {
+                    team: FlagTeam::Red,
+                    home: Vec2::new(0.0, 1000.0),
+                    holder: Some(carrier),
+                },
+                Transform::from_translation(Vec3::ZERO),
+            ));
+            if let Some(frames) = carry_frames {
+                app.insert_resource(FlagCarryTimers {
+                    red_frames: frames,
+                    blue_frames: 0,
+                });
+            }
+            app.world
+                .resource_mut::<Input<KeyCode>>()
+                .press(KeyCode::Up);
+            app.update();
+            app.world.get::<Transform>(carrier).unwrap().translation.y
+        }
+
+        // Fresh grab: no carry timer means no fatigue, only the flat tax.
+        let fresh_y = carrier_y(None);
+        // Long hold: the flag has been carried to the full-fatigue horizon.
+        let tired_y = carrier_y(Some(CARRY_FATIGUE_FULL_FRAMES));
+
+        let fatigue = carry_fatigue_speed_multiplier(CARRY_FATIGUE_FULL_FRAMES);
+        assert!(
+            fatigue < 1.0,
+            "the fixture must actually tire, got {fatigue}"
+        );
+        assert!(
+            tired_y > 0.0 && tired_y < fresh_y,
+            "fresh={fresh_y}, tired={tired_y}"
+        );
+        assert!(
+            fresh_y.mul_add(-fatigue, tired_y).abs() <= 1e-3,
+            "a long-held flag should scrub the carrier's pace on top of the tax: \
+             fresh={fresh_y}, tired={tired_y}, fatigue={fatigue}"
         );
     }
 
