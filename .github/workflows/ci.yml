@@ -232,6 +232,9 @@ jobs:
       - name: Check toolchain pin
         run: bash scripts/check_toolchain_pin.sh
 
+      - name: Check git dependencies pinned (immutable rev, not a moving branch)
+        run: bash scripts/check_git_dep_pinned.sh
+
       - name: Check pre-commit hook mirrors CI
         run: bash scripts/check_precommit_hook.sh
 

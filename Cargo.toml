@@ -30,8 +30,11 @@ ron = { version = "0.7.1" }
 serde_json = { version = "1.0.149" }
 bevy_kira_audio = { version = "0.13", features = ["ogg", "mp3"] }
 bevy_common_assets = { version = "0.4.0", features = ["json"] }
-# tempfix
-bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", branch = "bevy-0.9", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0",
+# tempfix: pinned to the exact fork commit (the head of `bevy-0.9` at pin time),
+# not the moving branch, so a cargo update cannot silently swap the physics engine
+# under an unchanged codebase. Bumping it is a deliberate, reviewed manifest edit.
+# Guarded by scripts/check_git_dep_pinned.sh.
+bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", rev = "3fabadc0503835caf1e9dc2be1d4da8825046f92", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0"
 
 # The browser (wasm32-unknown-unknown) build has no OS entropy source. `rand`
 # pulls entropy through `getrandom`, whose default wasm backend is `Unsupported`,

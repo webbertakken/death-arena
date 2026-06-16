@@ -84,6 +84,7 @@ required_guards=(
   "bash scripts/check_ci_workflow.sh"
   "bash scripts/check_scheduled_audit_workflow.sh"
   "bash scripts/check_toolchain_pin.sh"
+  "bash scripts/check_git_dep_pinned.sh"
   "bash scripts/check_precommit_hook.sh"
   "bash scripts/check_quality_script_coverage.sh"
   "bash scripts/check_shell_scripts.sh"
