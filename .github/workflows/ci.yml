@@ -289,6 +289,9 @@ jobs:
       - name: Check wreck-bounty breakdown (every wreck bonus is logged in both team breakdowns)
         run: bash scripts/check_wreck_bounty_breakdown.sh
 
+      - name: Check wreck-bounty self-binding (every breakdown field binds its own local)
+        run: bash scripts/check_wreck_bounty_self_binding.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:
