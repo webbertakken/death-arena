@@ -277,6 +277,9 @@ jobs:
       - name: Check speed-modifier parity (human and field drive on identical terms)
         run: bash scripts/check_speed_modifier_parity.sh
 
+      - name: Check effect-multiplier parity (human and field share the timed-effect stack)
+        run: bash scripts/check_effect_multiplier_parity.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:
