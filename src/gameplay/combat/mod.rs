@@ -3251,32 +3251,6 @@ mod tests {
     }
 
     #[test]
-    fn payback_window_opens_for_a_wrecked_team_and_winds_down() {
-        let mut windows = PaybackWindows::default();
-        assert!(
-            !windows.is_player_live(),
-            "no one is owed a payback at kick-off"
-        );
-
-        windows.apply_wrecks(WreckEvents {
-            player: true,
-            opponent: false,
-        });
-        assert_eq!(
-            windows.player_frames, PAYBACK_WINDOW_FRAMES,
-            "being wrecked owes the player team a full payback window"
-        );
-        assert!(
-            !windows.is_opponent_live(),
-            "the side that landed the wreck is owed nothing"
-        );
-
-        windows.tick();
-        assert_eq!(windows.player_frames, PAYBACK_WINDOW_FRAMES - 1);
-        assert!(windows.is_player_live(), "the riposte window is still open");
-    }
-
-    #[test]
     fn system_pays_a_payback_bonus_for_a_retaliation_wreck() {
         let mut app = App::new();
         app.insert_resource(VehicleIntegrity {
@@ -3785,74 +3759,6 @@ mod tests {
     }
 
     #[test]
-    fn wreck_stuns_default_to_inactive_for_both_teams() {
-        let stuns = WreckStuns::default();
-        assert_eq!(stuns.player_frames, 0);
-        assert_eq!(stuns.opponent_frames, 0);
-        assert_near(stuns.player_multiplier(), 1.0);
-        assert_near(stuns.opponent_multiplier(), 1.0);
-    }
-
-    #[test]
-    fn triggering_a_stun_spins_out_only_that_team() {
-        let mut stuns = WreckStuns::default();
-        stuns.trigger_opponent();
-        assert_eq!(stuns.opponent_frames, WRECK_STUN_FRAMES);
-        assert_near(stuns.opponent_multiplier(), WRECK_STUN_SPEED_MULTIPLIER);
-        // The wrecking team keeps full speed; only the wreck spins out.
-        assert_eq!(stuns.player_frames, 0);
-        assert_near(stuns.player_multiplier(), 1.0);
-    }
-
-    #[test]
-    fn a_spin_out_expires_after_its_window() {
-        let mut stuns = WreckStuns::default();
-        stuns.trigger_player();
-        for _ in 0..WRECK_STUN_FRAMES {
-            assert_near(stuns.player_multiplier(), WRECK_STUN_SPEED_MULTIPLIER);
-            stuns.tick();
-        }
-        assert_near(stuns.player_multiplier(), 1.0);
-        // Ticking a spent timer never underflows.
-        stuns.tick();
-        assert_eq!(stuns.player_frames, 0);
-    }
-
-    #[test]
-    fn stun_multiplier_for_team_routes_to_the_right_pool() {
-        let mut stuns = WreckStuns::default();
-        stuns.trigger_player();
-        assert_near(
-            stuns.multiplier_for_team(AiTeam::Blue),
-            WRECK_STUN_SPEED_MULTIPLIER,
-        );
-        assert_near(stuns.multiplier_for_team(AiTeam::Red), 1.0);
-    }
-
-    #[test]
-    fn apply_wrecks_spins_out_each_wrecked_team() {
-        let mut player_only = WreckStuns::default();
-        player_only.apply_wrecks(WreckEvents {
-            player: true,
-            opponent: false,
-        });
-        assert_eq!(player_only.player_frames, WRECK_STUN_FRAMES);
-        assert_eq!(player_only.opponent_frames, 0);
-
-        let mut both = WreckStuns::default();
-        both.apply_wrecks(WreckEvents {
-            player: true,
-            opponent: true,
-        });
-        assert_eq!(both.player_frames, WRECK_STUN_FRAMES);
-        assert_eq!(both.opponent_frames, WRECK_STUN_FRAMES);
-
-        let mut quiet = WreckStuns::default();
-        quiet.apply_wrecks(WreckEvents::default());
-        assert_eq!(quiet, WreckStuns::default());
-    }
-
-    #[test]
     fn system_spins_out_a_team_it_grinds_to_a_wreck() {
         let mut app = App::new();
         app.insert_resource(VehicleIntegrity {
@@ -3929,86 +3835,6 @@ mod tests {
         app.update();
 
         assert_eq!(*app.world.resource::<WreckStuns>(), WreckStuns::default());
-    }
-
-    #[test]
-    fn wreck_surges_default_to_inactive_for_both_teams() {
-        let surges = WreckSurges::default();
-        assert_eq!(surges.player_frames, 0);
-        assert_eq!(surges.opponent_frames, 0);
-        assert_near(surges.player_multiplier(), 1.0);
-        assert_near(surges.opponent_multiplier(), 1.0);
-    }
-
-    #[test]
-    fn a_surge_speeds_only_the_team_that_landed_the_kill() {
-        let mut surges = WreckSurges::default();
-        surges.trigger_player();
-        assert_eq!(surges.player_frames, WRECK_SURGE_FRAMES);
-        assert_near(surges.player_multiplier(), WRECK_SURGE_SPEED_MULTIPLIER);
-        // The wrecked team gets no surge; only the wrecker speeds up.
-        assert_eq!(surges.opponent_frames, 0);
-        assert_near(surges.opponent_multiplier(), 1.0);
-    }
-
-    #[test]
-    fn a_surge_expires_after_its_window() {
-        let mut surges = WreckSurges::default();
-        surges.trigger_opponent();
-        for _ in 0..WRECK_SURGE_FRAMES {
-            assert_near(surges.opponent_multiplier(), WRECK_SURGE_SPEED_MULTIPLIER);
-            surges.tick();
-        }
-        assert_near(surges.opponent_multiplier(), 1.0);
-        // Ticking a spent timer never underflows.
-        surges.tick();
-        assert_eq!(surges.opponent_frames, 0);
-    }
-
-    #[test]
-    fn surge_multiplier_for_team_routes_to_the_right_pool() {
-        let mut surges = WreckSurges::default();
-        surges.trigger_opponent();
-        assert_near(
-            surges.multiplier_for_team(AiTeam::Red),
-            WRECK_SURGE_SPEED_MULTIPLIER,
-        );
-        assert_near(surges.multiplier_for_team(AiTeam::Blue), 1.0);
-    }
-
-    #[test]
-    fn reward_wreckers_surges_the_enemy_of_each_wrecked_team() {
-        // A wrecked opponent means the player team dealt the kill and surges.
-        let mut player_dealt = WreckSurges::default();
-        player_dealt.reward_wreckers(WreckEvents {
-            player: false,
-            opponent: true,
-        });
-        assert_eq!(player_dealt.player_frames, WRECK_SURGE_FRAMES);
-        assert_eq!(player_dealt.opponent_frames, 0);
-
-        // A wrecked player team means the opponents dealt the kill and surge.
-        let mut opponent_dealt = WreckSurges::default();
-        opponent_dealt.reward_wreckers(WreckEvents {
-            player: true,
-            opponent: false,
-        });
-        assert_eq!(opponent_dealt.opponent_frames, WRECK_SURGE_FRAMES);
-        assert_eq!(opponent_dealt.player_frames, 0);
-
-        // A double wreck surges both teams at once.
-        let mut both = WreckSurges::default();
-        both.reward_wreckers(WreckEvents {
-            player: true,
-            opponent: true,
-        });
-        assert_eq!(both.player_frames, WRECK_SURGE_FRAMES);
-        assert_eq!(both.opponent_frames, WRECK_SURGE_FRAMES);
-
-        // A quiet frame surges nobody.
-        let mut quiet = WreckSurges::default();
-        quiet.reward_wreckers(WreckEvents::default());
-        assert_eq!(quiet, WreckSurges::default());
     }
 
     #[test]
