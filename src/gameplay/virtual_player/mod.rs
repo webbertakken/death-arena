@@ -2,6 +2,7 @@ use crate::{App, Plugin};
 use bevy::prelude::*;
 
 pub mod ai;
+mod discipline;
 mod drive;
 mod spawn;
 
