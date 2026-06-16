@@ -304,6 +304,11 @@ const _: () = assert!(SURGE_RAM_DAMAGE_PER_FRAME < NITRO_RAM_DAMAGE_PER_FRAME);
 /// a victory lap, and pairs with the flag-carrier slowdown so a battered
 /// carrier crawls back into reach of its pursuers.
 pub const FLAG_CARRIER_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
+/// A flag carrier's team must bleed faster than an incidental open-field scrape,
+/// enforced at compile time, so the documented "twice as fast as the base scrape"
+/// gauntlet can never silently soften below the [`RAM_DAMAGE_PER_FRAME`] floor it
+/// is priced against, the same pin the pincer and wall-crush hits already carry.
+const _: () = assert!(FLAG_CARRIER_RAM_DAMAGE_PER_FRAME > RAM_DAMAGE_PER_FRAME);
 /// Heading alignment a car needs with an opponent to count as charging it.
 ///
 /// Measured as the dot product between the car's facing direction and the
@@ -321,6 +326,11 @@ pub const AGGRESSOR_RAM_ALIGNMENT: f32 = 0.5;
 /// below the earned [`NITRO_RAM_DAMAGE_PER_FRAME`] so a boosted charge still
 /// bites hardest, yet above the base scrape so committing to a ram always pays.
 pub const AGGRESSOR_RAM_DAMAGE_PER_FRAME: f32 = 0.35;
+/// An aimed charge must out-bite the incidental base scrape, enforced at compile
+/// time, so the documented "committing to a ram always pays" can never silently
+/// invert below the [`RAM_DAMAGE_PER_FRAME`] floor, completing the directional
+/// hierarchy's footing that the pincer and wall-crush pins already stand on.
+const _: () = assert!(AGGRESSOR_RAM_DAMAGE_PER_FRAME > RAM_DAMAGE_PER_FRAME);
 /// Heading alignment off a victim's own facing within which a ram counts as
 /// catching its exposed flank rather than its nose or tail.
 ///
