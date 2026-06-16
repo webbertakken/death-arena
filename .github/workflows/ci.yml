@@ -292,6 +292,9 @@ jobs:
       - name: Check wreck-bounty self-binding (every breakdown field binds its own local)
         run: bash scripts/check_wreck_bounty_self_binding.sh
 
+      - name: Check score-tally parity (player and field bank the same rewards)
+        run: bash scripts/check_score_tally_parity.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:

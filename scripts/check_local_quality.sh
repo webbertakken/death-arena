@@ -22,6 +22,7 @@ bash scripts/check_match_over_halt_parity.sh
 bash scripts/check_wreck_bounty_fold.sh
 bash scripts/check_wreck_bounty_breakdown.sh
 bash scripts/check_wreck_bounty_self_binding.sh
+bash scripts/check_score_tally_parity.sh
 bash scripts/check_unused_dependencies.sh
 bash scripts/check_wasm_rng_backend.sh
 bash scripts/check_asset_paths.sh
