@@ -286,6 +286,9 @@ jobs:
       - name: Check wreck-bounty fold (every wreck bonus is paid into both team totals)
         run: bash scripts/check_wreck_bounty_fold.sh
 
+      - name: Check wreck-bounty breakdown (every wreck bonus is logged in both team breakdowns)
+        run: bash scripts/check_wreck_bounty_breakdown.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:
