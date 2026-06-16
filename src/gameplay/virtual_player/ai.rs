@@ -143,7 +143,18 @@ fn carrier_juke_offset(corner_throttle: f32) -> f32 {
 }
 
 /// Distance around home base where an enemy blocks a carried-flag capture.
-pub const HOME_BASE_CONTEST_RADIUS: f32 = 160.0;
+///
+/// Bound to the capture rule's [`crate::gameplay::ctf::BASE_CAPTURE_RADIUS`] it
+/// models, the same way [`crate::gameplay::combat::BASE_REPAIR_RADIUS`] is bound to
+/// that zone: the carrier stages outside its base
+/// ([`choose_capture_the_flag_target`]) exactly when an enemy sits inside the radius
+/// that actually denies the capture (the CTF rule's `home_base_is_contested`). Were
+/// the AI's read a hand-synced literal and drift below the rule, a carrier would
+/// commit into a base whose capture is blocked and eat ram damage parked on the
+/// spot; drift above it and the carrier would dawdle outside a base it could already
+/// score at. Pinning it to the rule keeps the stage-or-commit decision honest for
+/// any future tune of the capture zone.
+pub const HOME_BASE_CONTEST_RADIUS: f32 = crate::gameplay::ctf::BASE_CAPTURE_RADIUS;
 
 /// Distance around a friendly flag carrier where enemies count as pursuers.
 pub const FLAG_CARRIER_PURSUER_RADIUS: f32 = 260.0;

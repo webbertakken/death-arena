@@ -1708,6 +1708,60 @@ fn carrier_stages_outside_contested_home_base_before_scoring() {
 }
 
 #[test]
+fn carrier_staging_boundary_tracks_the_capture_blocking_radius() {
+    // The carrier's stage-or-commit read must match the rule that actually denies
+    // the score: an enemy inside the capture-blocking radius blocks the capture, so
+    // the carrier stages outside; one just beyond it cannot, so the carrier commits
+    // home. The boundary is computed from the capture rule's own
+    // `BASE_CAPTURE_RADIUS`, so this fails the instant the AI's contest reach drifts
+    // from it in either direction, locking the two together end to end.
+    use crate::gameplay::ctf::BASE_CAPTURE_RADIUS;
+
+    let ai = Entity::from_raw(7);
+    let home = Vec2::new(500.0, 0.0);
+    let carrier = Vec2::new(300.0, 0.0);
+
+    let decide = |contester_x: f32| {
+        choose_capture_the_flag_target(
+            ai,
+            AiTeam::Red,
+            &[
+                FlagTarget {
+                    team: AiTeam::Blue,
+                    home: Vec2::new(-500.0, 0.0),
+                    position: carrier,
+                    holder: Some(ai),
+                },
+                FlagTarget {
+                    team: AiTeam::Red,
+                    home,
+                    position: home,
+                    holder: None,
+                },
+            ],
+            &[ThreatTarget {
+                team: AiTeam::Blue,
+                position: Vec2::new(contester_x, 0.0),
+                velocity: Vec2::ZERO,
+            }],
+            MIN_THROTTLE,
+        )
+    };
+
+    let blocked = decide(home.x - (BASE_CAPTURE_RADIUS - 1.0));
+    assert!(
+        matches!(blocked, Some(DrivingTarget::ContestedHomeBaseStaging(_))),
+        "an enemy inside the capture-blocking radius must make the carrier stage, got {blocked:?}"
+    );
+
+    let clear = decide(home.x - (BASE_CAPTURE_RADIUS + 1.0));
+    assert!(
+        matches!(clear, Some(DrivingTarget::HomeBase(_))),
+        "an enemy beyond the capture-blocking radius must let the carrier commit, got {clear:?}"
+    );
+}
+
+#[test]
 fn carrier_intercepts_stolen_home_flag_before_scoring() {
     let ai = Entity::from_raw(7);
     let thief = Entity::from_raw(1);
