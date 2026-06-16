@@ -219,6 +219,41 @@ impl LooseFlagTimers {
     }
 }
 
+/// Per-team count of consecutive frames each side's flag has been carried.
+///
+/// The carry-side mirror of [`LooseFlagTimers`]: where that counts how long a
+/// flag has lain loose toward an auto-return, this counts how long a flag has been
+/// held toward carrier fatigue ([`crate::gameplay::carry_fatigue`]). Advanced each
+/// frame by [`capture_the_flag_system`]: a flag in a holder's hands counts up, one
+/// sitting loose or home clears to zero, so a flag knocked free and grabbed afresh
+/// starts its carrier on a clean clock.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlagCarryTimers {
+    /// Frames the blue flag has been continuously carried.
+    pub blue_frames: u32,
+    /// Frames the red flag has been continuously carried.
+    pub red_frames: u32,
+}
+
+impl FlagCarryTimers {
+    /// Frames the given team's flag has been continuously carried.
+    #[must_use]
+    pub const fn frames_for(self, team: FlagTeam) -> u32 {
+        match team {
+            FlagTeam::Blue => self.blue_frames,
+            FlagTeam::Red => self.red_frames,
+        }
+    }
+
+    /// Sets the carry-frame count for the given team's flag.
+    const fn set_for(&mut self, team: FlagTeam, frames: u32) {
+        match team {
+            FlagTeam::Blue => self.blue_frames = frames,
+            FlagTeam::Red => self.red_frames = frames,
+        }
+    }
+}
+
 /// What a flag's loose timer dictates for the current frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LooseFlagOutcome {
@@ -441,6 +476,23 @@ fn auto_return_loose_flags(flags: &mut [FlagState], timers: &mut LooseFlagTimers
     }
 }
 
+/// Advances every flag's continuous-carry timer by one fixed-update frame.
+///
+/// A held flag's carry timer counts up; a flag sitting loose or home clears to
+/// zero. Read by both movement systems through
+/// [`crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier`] to tire a
+/// carrier that clings to a flag rather than committing it home. Runs after the
+/// loose-flag auto-return so a flag sent home this frame clears its carry clock too.
+fn advance_flag_carry_timers(flags: &[FlagState], timers: &mut FlagCarryTimers) {
+    for flag in flags {
+        if flag.holder.is_some() {
+            timers.set_for(flag.team, timers.frames_for(flag.team) + 1);
+        } else {
+            timers.set_for(flag.team, 0);
+        }
+    }
+}
+
 fn drop_flags_with_missing_holders(flags: &mut [FlagState], collectors: &[CollectorState]) {
     for flag in flags {
         if let Some(holder) = flag.holder {
@@ -610,6 +662,7 @@ pub fn capture_the_flag_system(
     player_query: Query<(Entity, &Transform), HumanPlayerOnly>,
     virtual_player_query: Query<(Entity, &VirtualPlayer, &Transform), VirtualPlayerOnly>,
     mut loose_timers: Option<ResMut<LooseFlagTimers>>,
+    mut carry_timers: Option<ResMut<FlagCarryTimers>>,
 ) {
     let (
         mut score,
@@ -666,6 +719,9 @@ pub fn capture_the_flag_system(
         if let Some(timers) = loose_timers.as_deref_mut() {
             auto_return_loose_flags(&mut flags, timers);
         }
+    }
+    if let Some(timers) = carry_timers.as_deref_mut() {
+        advance_flag_carry_timers(&flags, timers);
     }
     award_golden_goal(clock.is_sudden_death(), previous_score, *score, &mut result);
     award_capture_bounties(
@@ -940,6 +996,7 @@ impl Plugin for CtfPlugin {
             .init_resource::<MatchPursePaid>()
             .init_resource::<MatchClock>()
             .init_resource::<LooseFlagTimers>()
+            .init_resource::<FlagCarryTimers>()
             .add_system_set(
                 SystemSet::on_enter(AppState::InGame).with_system(reset_ctf_match_resources),
             )
@@ -959,8 +1016,9 @@ fn reset_ctf_match_resources(
     mut result: ResMut<CtfMatchResult>,
     mut purse_paid: ResMut<MatchPursePaid>,
     mut clock: ResMut<MatchClock>,
-    mut loose_timers: ResMut<LooseFlagTimers>,
+    timers: (ResMut<LooseFlagTimers>, ResMut<FlagCarryTimers>),
 ) {
+    let (mut loose_timers, mut carry_timers) = timers;
     *captures = CaptureScore::default();
     *steals = FlagStealScore::default();
     *returns = FlagReturnScore::default();
@@ -968,6 +1026,7 @@ fn reset_ctf_match_resources(
     *purse_paid = MatchPursePaid::default();
     *clock = MatchClock::default();
     *loose_timers = LooseFlagTimers::default();
+    *carry_timers = FlagCarryTimers::default();
 }
 
 #[cfg(test)]
@@ -1033,6 +1092,10 @@ mod tests {
             blue_frames: 120,
             red_frames: 240,
         });
+        app.insert_resource(FlagCarryTimers {
+            blue_frames: 90,
+            red_frames: 150,
+        });
         app.add_system(reset_ctf_match_resources);
 
         app.update();
@@ -1063,6 +1126,11 @@ mod tests {
             *app.world.resource::<LooseFlagTimers>(),
             LooseFlagTimers::default(),
             "a fresh match must clear loose-flag timers so a stale count never resets a flag"
+        );
+        assert_eq!(
+            *app.world.resource::<FlagCarryTimers>(),
+            FlagCarryTimers::default(),
+            "a fresh match must clear carry timers so a carrier never starts the round tired"
         );
     }
 
@@ -1221,6 +1289,104 @@ mod tests {
             app.world.resource::<LooseFlagTimers>().red_frames,
             0,
             "the auto-return must clear the loose timer"
+        );
+    }
+
+    #[test]
+    fn carry_timer_counts_up_a_held_flag() {
+        let mut red = flag(1, FlagTeam::Red, Vec2::new(500.0, 0.0));
+        red.holder = Some(entity(9));
+        red.position = Vec2::new(120.0, -40.0);
+        let flags = [red];
+        let mut timers = FlagCarryTimers {
+            red_frames: 41,
+            ..Default::default()
+        };
+
+        advance_flag_carry_timers(&flags, &mut timers);
+
+        assert_eq!(
+            timers.red_frames, 42,
+            "a flag in a holder's hands must keep counting up"
+        );
+    }
+
+    #[test]
+    fn carry_timer_clears_an_unheld_flag() {
+        // A flag sitting home (blue) and one knocked loose off its base (red) are
+        // both unheld, so each clears to zero: only a flag in hand tires.
+        let blue = flag(1, FlagTeam::Blue, Vec2::ZERO);
+        let mut red = flag(2, FlagTeam::Red, Vec2::new(500.0, 0.0));
+        red.position = Vec2::new(80.0, 80.0);
+        let flags = [blue, red];
+        let mut timers = FlagCarryTimers {
+            blue_frames: 300,
+            red_frames: 300,
+        };
+
+        advance_flag_carry_timers(&flags, &mut timers);
+
+        assert_eq!(
+            timers.blue_frames, 0,
+            "a flag at home clears its carry clock"
+        );
+        assert_eq!(
+            timers.red_frames, 0,
+            "a flag knocked loose clears its carry clock"
+        );
+    }
+
+    #[test]
+    fn system_counts_up_a_held_flags_carry_timer() {
+        let mut app = App::new();
+        app.init_resource::<CaptureScore>();
+        app.init_resource::<FlagStealScore>();
+        app.init_resource::<FlagReturnScore>();
+        app.init_resource::<CtfMatchResult>();
+        app.init_resource::<Score>();
+        app.init_resource::<OpponentScore>();
+        app.init_resource::<NitroBoosts>();
+        app.init_resource::<MatchClock>();
+        app.init_resource::<FlagCarryTimers>();
+        app.add_system(capture_the_flag_system);
+
+        // The human (blue) holds the red flag, parked far from the blue base so the
+        // carry never scores: the flag stays in hand and its carry timer ticks.
+        let player = app
+            .world
+            .spawn((
+                test_player(),
+                Transform::from_translation(Vec3::new(2000.0, 0.0, 5.0)),
+            ))
+            .id();
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-1000.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-1000.0, 0.0, 2.0)),
+        ));
+        app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                holder: Some(player),
+            },
+            Transform::from_translation(Vec3::new(2000.0, 0.0, 2.0)),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<FlagCarryTimers>().red_frames,
+            1,
+            "a held flag's carry timer must count up each frame"
+        );
+        assert_eq!(
+            app.world.resource::<FlagCarryTimers>().blue_frames,
+            0,
+            "the home blue flag is unheld, so its carry timer stays at zero"
         );
     }
 

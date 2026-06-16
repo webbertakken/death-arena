@@ -1,6 +1,9 @@
+use crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier;
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
 use crate::gameplay::comeback::comeback_speed_multiplier;
-use crate::gameplay::ctf::{flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult};
+use crate::gameplay::ctf::{
+    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
+};
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -33,6 +36,7 @@ type PlayerMovementContext<'w> = (
     Option<Res<'w, SabotageEffects>>,
     Option<Res<'w, CtfMatchResult>>,
     Option<Res<'w, CaptureScore>>,
+    Option<Res<'w, FlagCarryTimers>>,
 );
 
 /// Demonstrates applying rotation and movement based on keyboard input.
@@ -53,6 +57,7 @@ pub fn car_movement_system(
         sabotage_effects,
         match_result,
         captures,
+        flag_carry_timers,
     ) = context;
     if match_result
         .as_ref()
@@ -79,28 +84,16 @@ pub fn car_movement_system(
         wreck_surges.as_deref(),
         sabotage_effects.as_deref(),
     );
-    let carrying_flag = flag_query
+    let carried_flag = flag_query
         .iter()
-        .any(|flag| flag.holder == Some(player_entity));
+        .find(|flag| flag.holder == Some(player_entity));
+    let carrying_flag = carried_flag.is_some();
     let carry_multiplier = flag_carrier_speed_multiplier(carrying_flag);
-    // A flag carrier never drafts: the bulky flag spoils the tow, so the slipstream
-    // can never speed a flag run home, mirroring the field in the drive system.
-    let draft_multiplier = if carrying_flag {
-        1.0
-    } else {
-        let leaders: Vec<LeadingCar> = other_car_query
-            .iter()
-            .map(|other| LeadingCar {
-                position: other.translation.xy(),
-                heading: (other.rotation * Vec3::Y).xy(),
-            })
-            .collect();
-        slipstream_speed_multiplier(
-            transform.translation.xy(),
-            (transform.rotation * Vec3::Y).xy(),
-            &leaders,
-        )
-    };
+    // A carrier tires the longer it clings to the flag, just like the field, so a
+    // long hold scrubs pace on top of the flat carry tax.
+    let carry_fatigue_multiplier =
+        player_carry_fatigue_multiplier(carried_flag, flag_carry_timers.as_deref());
+    let draft_multiplier = player_draft_multiplier(carrying_flag, &transform, &other_car_query);
     // A car grinding the arena boundary bleeds speed, just like the field.
     let wall_scrape_multiplier =
         wall_scrape_speed_multiplier(transform.translation.xy(), BOUNDS / 2.0);
@@ -109,6 +102,7 @@ pub fn car_movement_system(
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
+        * carry_fatigue_multiplier
         * draft_multiplier
         * wall_scrape_multiplier
         * comeback_multiplier;
@@ -191,6 +185,47 @@ fn player_effect_multiplier(
     let surge = wreck_surges.map_or(1.0, |surges| surges.player_multiplier());
     let sabotage = sabotage_effects.map_or(1.0, SabotageEffects::player_multiplier);
     nitro * integrity * stun * surge * sabotage
+}
+
+/// Slipstream tow the human earns from the cars ahead this frame, or `1.0` when it
+/// is carrying a flag (the bulky flag spoils the tow, so the slipstream can never
+/// speed a flag run home, mirroring the field in the drive system). Leaders are
+/// every other car's tail line.
+fn player_draft_multiplier(
+    carrying_flag: bool,
+    transform: &Transform,
+    other_car_query: &Query<&Transform, OtherCarTransform>,
+) -> f32 {
+    if carrying_flag {
+        return 1.0;
+    }
+    let leaders: Vec<LeadingCar> = other_car_query
+        .iter()
+        .map(|other| LeadingCar {
+            position: other.translation.xy(),
+            heading: (other.rotation * Vec3::Y).xy(),
+        })
+        .collect();
+    slipstream_speed_multiplier(
+        transform.translation.xy(),
+        (transform.rotation * Vec3::Y).xy(),
+        &leaders,
+    )
+}
+
+/// Fatigue the human carrier earns from clinging to its stolen flag, or `1.0` when
+/// it carries nothing or no match is in progress. Reads the carried flag's
+/// continuous-carry frame count, mirroring the field's
+/// [`crate::gameplay::virtual_player`] drive, so the human tires on the identical
+/// terms: a long hold scrubs pace on top of the flat carry tax.
+fn player_carry_fatigue_multiplier(
+    carried_flag: Option<&CtfFlag>,
+    carry_timers: Option<&FlagCarryTimers>,
+) -> f32 {
+    match (carried_flag, carry_timers) {
+        (Some(flag), Some(timers)) => carry_fatigue_speed_multiplier(timers.frames_for(flag.team)),
+        _ => 1.0,
+    }
 }
 
 /// Catch-up urge the human earns while its side trails on captures, or `1.0` with

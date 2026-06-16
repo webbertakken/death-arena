@@ -9,6 +9,7 @@ use player::PlayerPlugin;
 use virtual_player::VirtualPlayerPlugin;
 
 mod arena;
+mod carry_fatigue;
 mod combat;
 mod comeback;
 mod ctf;

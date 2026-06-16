@@ -1,7 +1,9 @@
+use crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier;
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
 use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
-    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock,
+    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
+    FlagTeam, MatchClock,
 };
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
@@ -157,21 +159,23 @@ type VirtualPlayerDriveContext<'w> = (
 /// Drives every [`VirtualPlayer`] towards its current patrol waypoint, applying
 /// the same movement/rotation model the human player uses.
 ///
-/// `sabotage_effects` rides as its own parameter rather than in the bundled
-/// [`VirtualPlayerDriveContext`]: it is the eighth optional resource and folding
-/// it into the tuple expands the destructure enough to trip clippy's line gate,
-/// so it stays separate (still well inside the argument limit).
+/// `feel_effects` bundles the two resources that ride outside the
+/// [`VirtualPlayerDriveContext`] tuple: the engine sabotage and the carry-fatigue
+/// timers. Both stay out of the main tuple so its destructure keeps under clippy's
+/// line gate, and travel together in one parameter to keep the signature inside
+/// clippy's argument limit.
 pub fn virtual_player_drive_system(
     mut query: Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     player_query: Query<(Entity, &Transform), HumanPlayerTransform>,
     pickup_query: Query<(&Transform, &Pickup), Without<VirtualPlayer>>,
     flag_query: Query<(&Transform, &CtfFlag), Without<VirtualPlayer>>,
-    sabotage_effects: Option<Res<SabotageEffects>>,
+    feel_effects: (Option<Res<SabotageEffects>>, Option<Res<FlagCarryTimers>>),
     player_velocity: Option<Res<PlayerVelocity>>,
     context: VirtualPlayerDriveContext,
 ) {
     let (nitro_boosts, integrity, wreck_stuns, wreck_surges, match_result, captures, match_clock) =
         context;
+    let (sabotage_effects, carry_timers) = feel_effects;
     if match_result
         .as_ref()
         .is_some_and(|result| result.winner.is_some())
@@ -179,6 +183,7 @@ pub fn virtual_player_drive_system(
         return;
     }
     let captures = captures.as_deref().copied().unwrap_or_default();
+    let carry_timers = carry_timers.as_deref().copied().unwrap_or_default();
     // Closing-time discipline: in the final stretch of a round every team leaves
     // cash bags on the track, whether it is committing to attack (not ahead) or
     // protecting a lead (ahead). Only a real edge is worth breaking off for.
@@ -267,19 +272,17 @@ pub fn virtual_player_drive_system(
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
         let car_speed = car_speed_multiplier(entity, ai.team, position, forward, &flags, &wakes)
-            * team_comeback_multiplier(ai.team, captures, entity, &flags);
-        let movement_distance = intent.throttle
-            * ai.movement_speed
-            * team_movement_multiplier(
-                ai.team,
-                nitro_boosts.as_deref(),
-                integrity.as_deref(),
-                wreck_stuns.as_deref(),
-                wreck_surges.as_deref(),
-                sabotage_effects.as_deref(),
-            )
-            * car_speed
-            * TIME_STEP;
+            * team_standing_multiplier(ai.team, captures, entity, &flags, carry_timers);
+        let team_effects = team_movement_multiplier(
+            ai.team,
+            nitro_boosts.as_deref(),
+            integrity.as_deref(),
+            wreck_stuns.as_deref(),
+            wreck_surges.as_deref(),
+            sabotage_effects.as_deref(),
+        );
+        let movement_distance =
+            intent.throttle * ai.movement_speed * team_effects * car_speed * TIME_STEP;
         transform.translation += movement_direction * movement_distance;
 
         // Keep opponents inside the arena, just like the player.
@@ -401,20 +404,33 @@ fn car_speed_multiplier(
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
-/// Catch-up urge a virtual car earns while its side trails on captures, or `1.0`
-/// when its team is level or ahead, or when the car carries the enemy flag (the
-/// catch-up never speeds a flag run home, mirroring the slipstream). Read as a
-/// separate factor beside the per-car [`car_speed_multiplier`], so a trailing
-/// team's chasers, not its flag runner, find the extra urge.
-fn team_comeback_multiplier(
+/// The two per-car factors keyed on the capture standing and how the car sits in
+/// the round, folded together: the catch-up urge a trailing side earns, and the
+/// fatigue a carrier sheds for clinging to the flag. Read as a separate factor
+/// beside the per-car [`car_speed_multiplier`], mirroring the human.
+///
+/// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
+/// can never speed a flag run home, mirroring the slipstream); a car level or
+/// ahead earns none. The fatigue does the opposite, biting only the *carrier* and
+/// scrubbing more pace the longer it holds the enemy flag, so a chasing pack is
+/// handed a widening window to run the carrier down. The carrier check is shared
+/// between the two, so exactly one of the pair can ever move a given car.
+fn team_standing_multiplier(
     team: AiTeam,
     captures: CaptureScore,
     entity: Entity,
     flags: &[FlagTarget],
+    carry_timers: FlagCarryTimers,
 ) -> f32 {
     let is_carrier = carries_enemy_flag(entity, team, flags);
     let (own, enemy) = captures.standings(FlagTeam::from(team));
-    comeback_speed_multiplier(own, enemy, is_carrier)
+    let comeback = comeback_speed_multiplier(own, enemy, is_carrier);
+    let fatigue = if is_carrier {
+        carry_fatigue_speed_multiplier(carry_timers.frames_for(FlagTeam::from(team).enemy()))
+    } else {
+        1.0
+    };
+    comeback * fatigue
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`
