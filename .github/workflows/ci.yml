@@ -283,6 +283,9 @@ jobs:
       - name: Check match-over halt parity (every per-frame system stops when the match is won)
         run: bash scripts/check_match_over_halt_parity.sh
 
+      - name: Check wreck-bounty fold (every wreck bonus is paid into both team totals)
+        run: bash scripts/check_wreck_bounty_fold.sh
+
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:
