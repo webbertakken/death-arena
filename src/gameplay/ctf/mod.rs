@@ -674,9 +674,9 @@ pub fn capture_the_flag_system(
 /// Runs after [`capture_the_flag_system`] so a capture landed on the final frame
 /// still counts before the time limit decides the result. A level regulation
 /// scoreline opens a sudden-death overtime instead of a draw; an overtime still
-/// level on objectives is then settled by
-/// [`break_level_overtime_by_wrecks`], so only a match dead even on damage too
-/// falls back to [`CtfMatchWinner::Draw`].
+/// level on objectives is then settled by [`break_level_overtime_by_wrecks`], and
+/// a match dead even on damage too by [`break_level_overtime_by_cash`], so only a
+/// side level on cash as well falls back to [`CtfMatchWinner::Draw`].
 fn expire_match_on_time_limit(
     mut clock: ResMut<MatchClock>,
     mut result: ResMut<CtfMatchResult>,
@@ -708,7 +708,15 @@ fn expire_match_on_time_limit(
         MatchPhase::SuddenDeath => {
             let resolved = match leader {
                 CtfMatchWinner::Draw => {
-                    break_level_overtime_by_wrecks(score.wrecks, opponent_score.wrecks)
+                    // Level on objectives: the heavier wrecker takes it, and a
+                    // match level on damage too falls through to the richer team,
+                    // money being the final Death Rally arbiter.
+                    match break_level_overtime_by_wrecks(score.wrecks, opponent_score.wrecks) {
+                        CtfMatchWinner::Draw => {
+                            break_level_overtime_by_cash(score.cash, opponent_score.cash)
+                        }
+                        decided => decided,
+                    }
                 }
                 decided => decided,
             };
@@ -1209,7 +1217,7 @@ mod tests {
         assert_eq!(
             app.world.resource::<CtfMatchResult>().winner,
             Some(CtfMatchWinner::Draw),
-            "an overtime level on objectives and damage is the final fallback to a draw"
+            "an overtime level on objectives, damage, and cash is the final fallback to a draw"
         );
     }
 
@@ -1231,6 +1239,55 @@ mod tests {
             app.world.resource::<CtfMatchResult>().winner,
             Some(CtfMatchWinner::Player),
             "a deadlocked overtime goes to the team that wrecked more enemies"
+        );
+    }
+
+    #[test]
+    fn level_sudden_death_is_decided_by_the_richer_team() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+        // Objectives and wrecks dead even, so only the banked cash can break it.
+        app.insert_resource(Score {
+            wrecks: 2,
+            cash: 900,
+            ..Score::default()
+        });
+        app.insert_resource(OpponentScore {
+            wrecks: 2,
+            cash: 350,
+            ..OpponentScore::default()
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Player),
+            "a deadlock level on objectives and damage goes to the team that banked more cash"
+        );
+    }
+
+    #[test]
+    fn wreck_lead_still_decides_overtime_regardless_of_cash() {
+        let mut app = app_with_phased_clock(1, MatchPhase::SuddenDeath);
+        // The opponents wrecked more, so the cash arbiter is never consulted even
+        // though the player ran the richer campaign.
+        app.insert_resource(Score {
+            wrecks: 1,
+            cash: 5_000,
+            ..Score::default()
+        });
+        app.insert_resource(OpponentScore {
+            wrecks: 4,
+            cash: 100,
+            ..OpponentScore::default()
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<CtfMatchResult>().winner,
+            Some(CtfMatchWinner::Opponents),
+            "the cash tie-break must never override a genuine wreck lead"
         );
     }
 

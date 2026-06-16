@@ -118,7 +118,8 @@ pub fn time_limit_winner(
 /// When sudden death expires with captures, steals, and returns all dead even,
 /// the round goes to whichever side wrecked more enemy cars: the classic Death
 /// Rally decider where raw aggression settles a standstill the objective could
-/// not. Only a match also level on wrecks stays a true [`CtfMatchWinner::Draw`].
+/// not. A match also level on wrecks falls through to
+/// [`break_level_overtime_by_cash`], the final money-talks arbiter.
 #[must_use]
 pub const fn break_level_overtime_by_wrecks(
     player_wrecks: u32,
@@ -127,6 +128,27 @@ pub const fn break_level_overtime_by_wrecks(
     if player_wrecks > opponent_wrecks {
         CtfMatchWinner::Player
     } else if player_wrecks < opponent_wrecks {
+        CtfMatchWinner::Opponents
+    } else {
+        CtfMatchWinner::Draw
+    }
+}
+
+/// Breaks an overtime still level on objectives *and* wrecks by the richer team.
+///
+/// The last word when sudden death expires with captures, steals, returns, and
+/// wrecks all dead even: the round goes to whichever side banked more cash. In
+/// Death Rally money is the whole point, so the team that ran the more profitable
+/// campaign, snapping up more pickups and grinding out more bounties, edges a
+/// standstill that neither the objective nor raw aggression could settle. Chained
+/// after [`break_level_overtime_by_wrecks`], so it is consulted only once a match
+/// is level on every objective and on damage; only a side level on cash too stays
+/// a true [`CtfMatchWinner::Draw`], the genuine mirror match.
+#[must_use]
+pub const fn break_level_overtime_by_cash(player_cash: u32, opponent_cash: u32) -> CtfMatchWinner {
+    if player_cash > opponent_cash {
+        CtfMatchWinner::Player
+    } else if player_cash < opponent_cash {
         CtfMatchWinner::Opponents
     } else {
         CtfMatchWinner::Draw
@@ -315,6 +337,34 @@ mod tests {
             break_level_overtime_by_wrecks(0, 0),
             CtfMatchWinner::Draw,
             "a passive deadlock with no wrecks stays a draw"
+        );
+    }
+
+    #[test]
+    fn level_overtime_goes_to_the_richer_team() {
+        assert_eq!(
+            break_level_overtime_by_cash(900, 400),
+            CtfMatchWinner::Player,
+            "the team that banked the richer campaign takes a deadlock level on damage"
+        );
+        assert_eq!(
+            break_level_overtime_by_cash(250, 1_000),
+            CtfMatchWinner::Opponents,
+            "the wealthier opponents take a deadlock level on damage"
+        );
+    }
+
+    #[test]
+    fn level_overtime_stays_a_draw_when_cash_is_also_level() {
+        assert_eq!(
+            break_level_overtime_by_cash(750, 750),
+            CtfMatchWinner::Draw,
+            "a match level on objectives, damage, and cash is a true mirror-match draw"
+        );
+        assert_eq!(
+            break_level_overtime_by_cash(0, 0),
+            CtfMatchWinner::Draw,
+            "a penniless deadlock stays a draw"
         );
     }
 }
