@@ -95,6 +95,33 @@ const _: () = assert!(NAIL_BITER_CASH_BONUS < CLEAN_SHEET_CASH_BONUS);
 /// banks both. Holds as long as a round needs more than one capture to win,
 /// enforced at compile time.
 const _: () = assert!(CAPTURES_TO_WIN > 1);
+/// Cash a decisive winner banks on top of [`VICTORY_CASH_PURSE`] for a golden
+/// goal: clinching the round with a capture in sudden-death overtime.
+///
+/// The marquee Death Rally finish. Where [`CLEAN_SHEET_CASH_BONUS`] and
+/// [`NAIL_BITER_CASH_BONUS`] price the *scoreline* a win was taken on, this
+/// prices the *way it was clinched*: a regulation deadlock carried into a
+/// golden-goal decider and settled by the next capture. The finish mode is an
+/// axis orthogonal to the scoreline, so a golden goal stacks on top of either
+/// scoreline bonus (a 0-0 overtime won 1-0 is both a clean sheet and a golden
+/// goal). Pitched above the nail-biter (winning the decider outright is more
+/// than denying the enemy theirs) yet below the clean sheet so airtight
+/// dominance stays the top single win-quality bonus.
+pub const GOLDEN_GOAL_CASH_BONUS: u32 = 350;
+/// A golden-goal bonus must be a real payday, not a token, enforced at compile
+/// time.
+const _: () = assert!(GOLDEN_GOAL_CASH_BONUS > 0);
+/// Winning the decider outright must edge out merely denying the enemy theirs,
+/// enforced at compile time.
+const _: () = assert!(GOLDEN_GOAL_CASH_BONUS > NAIL_BITER_CASH_BONUS);
+/// Airtight dominance must stay the top single win-quality bonus, enforced at
+/// compile time.
+const _: () = assert!(GOLDEN_GOAL_CASH_BONUS < CLEAN_SHEET_CASH_BONUS);
+/// A golden goal stacks on a scoreline bonus, so even its largest stack (with
+/// the clean sheet, the dearer of the two disjoint scoreline bonuses) must still
+/// enrich a win without ever out-paying taking the round itself, enforced at
+/// compile time.
+const _: () = assert!(GOLDEN_GOAL_CASH_BONUS + CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
 /// Fixed update frames a CTF round runs before it resolves on time.
 ///
 /// Caps stalemates so a match always ends even if neither team reaches
@@ -898,22 +925,49 @@ const fn nail_biter_bonus(winner: CtfMatchWinner, captures: CaptureScore) -> u32
     }
 }
 
+/// Cash a decisive winner banks for a golden goal given whether the round was
+/// clinched in sudden-death overtime: [`GOLDEN_GOAL_CASH_BONUS`] if it was, else
+/// 0.
+///
+/// `clinched_in_overtime` is true only when a capture decided a golden-goal
+/// decider; an overtime that instead ran its own clock down is settled by the
+/// timeout path, not a golden goal, and earns nothing here. A level
+/// [`CtfMatchWinner::Draw`] never earns it, since a golden goal always produces a
+/// decisive winner. Unlike [`clean_sheet_bonus`] and [`nail_biter_bonus`] this
+/// keys on the finish mode rather than the final tally, so it can stack on top
+/// of either scoreline bonus.
+#[must_use]
+const fn golden_goal_bonus(winner: CtfMatchWinner, clinched_in_overtime: bool) -> u32 {
+    let golden_goal = clinched_in_overtime
+        && matches!(winner, CtfMatchWinner::Player | CtfMatchWinner::Opponents);
+    if golden_goal {
+        GOLDEN_GOAL_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Banks the end-of-match purse to whichever side the result favours.
 ///
 /// A win pays the victor [`VICTORY_CASH_PURSE`], topped by a win-quality bonus:
 /// a [`CLEAN_SHEET_CASH_BONUS`] when the beaten team never captured (see
 /// [`clean_sheet_bonus`]), or a [`NAIL_BITER_CASH_BONUS`] when it finished on
-/// match point (see [`nail_biter_bonus`]). The two are disjoint, so a win banks
-/// at most one. A draw pays both teams the smaller [`DRAW_CASH_PURSE`] for
-/// fighting to a standstill. Pure cash, banked on top of every in-match bounty.
+/// match point (see [`nail_biter_bonus`]). Those two scoreline bonuses are
+/// disjoint, so a win banks at most one, and a [`GOLDEN_GOAL_CASH_BONUS`] stacks
+/// on top of either when the round was clinched in sudden-death overtime (see
+/// [`golden_goal_bonus`]). A draw pays both teams the smaller [`DRAW_CASH_PURSE`]
+/// for fighting to a standstill. Pure cash, banked on top of every in-match
+/// bounty.
 const fn award_match_purse(
     winner: CtfMatchWinner,
     captures: CaptureScore,
+    clinched_in_overtime: bool,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
-    let win_quality_bonus =
-        clean_sheet_bonus(winner, captures) + nail_biter_bonus(winner, captures);
+    let win_quality_bonus = clean_sheet_bonus(winner, captures)
+        + nail_biter_bonus(winner, captures)
+        + golden_goal_bonus(winner, clinched_in_overtime);
     match winner {
         CtfMatchWinner::Player => {
             player_economy.bank_match_purse(VICTORY_CASH_PURSE + win_quality_bonus);
@@ -937,6 +991,7 @@ const fn award_match_purse(
 fn award_match_purse_on_resolution(
     result: Res<CtfMatchResult>,
     captures: Res<CaptureScore>,
+    clock: Res<MatchClock>,
     mut paid: ResMut<MatchPursePaid>,
     mut player_economy: ResMut<Score>,
     mut opponent_economy: ResMut<OpponentScore>,
@@ -948,9 +1003,14 @@ fn award_match_purse_on_resolution(
         return;
     };
 
+    // A decisive winner settled while overtime is still running (not yet expired)
+    // can only have come from a golden-goal capture; an overtime that ran its
+    // clock down is resolved by the timeout path with the clock already expired.
+    let clinched_in_overtime = clock.is_sudden_death() && !clock.is_expired();
     award_match_purse(
         winner,
         *captures,
+        clinched_in_overtime,
         &mut player_economy,
         &mut opponent_economy,
     );
@@ -3003,6 +3063,7 @@ mod tests {
                 player: 3,
                 opponents: 1,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3023,6 +3084,7 @@ mod tests {
                 player: 1,
                 opponents: 3,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3039,6 +3101,7 @@ mod tests {
         award_match_purse(
             CtfMatchWinner::Draw,
             CaptureScore::default(),
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3059,6 +3122,7 @@ mod tests {
                 player: 3,
                 opponents: 0,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3083,6 +3147,7 @@ mod tests {
                 player: 0,
                 opponents: 3,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3141,6 +3206,7 @@ mod tests {
                 player: CAPTURES_TO_WIN,
                 opponents: CAPTURES_TO_WIN - 1,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3165,6 +3231,7 @@ mod tests {
                 player: CAPTURES_TO_WIN - 1,
                 opponents: CAPTURES_TO_WIN,
             },
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -3174,6 +3241,106 @@ mod tests {
             VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS
         );
         assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_golden_goal_win_tops_the_purse_with_the_bonus_for_the_player() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Clinched 2-1 in overtime: the loser sat clear of zero (no clean sheet)
+        // and clear of match point (no nail-biter), isolating the golden-goal
+        // bonus the overtime finish earns.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: 2,
+                opponents: 1,
+            },
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + GOLDEN_GOAL_CASH_BONUS,
+            "clinching in overtime must top the purse with the golden-goal bonus"
+        );
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_golden_goal_win_tops_the_purse_with_the_bonus_for_the_opponents() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_match_purse(
+            CtfMatchWinner::Opponents,
+            CaptureScore {
+                player: 1,
+                opponents: 2,
+            },
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            opponent_economy.cash,
+            VICTORY_CASH_PURSE + GOLDEN_GOAL_CASH_BONUS
+        );
+        assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_clean_sheet_golden_goal_stacks_both_win_quality_bonuses() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // A 0-0 deadlock won 1-0 in overtime is both an airtight clean sheet and
+        // a golden goal, so the two orthogonal bonuses stack on the purse.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS + GOLDEN_GOAL_CASH_BONUS,
+            "a clean-sheet golden goal must bank both win-quality bonuses"
+        );
+    }
+
+    #[test]
+    fn a_nail_biter_golden_goal_stacks_both_win_quality_bonuses() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // A 2-2 deadlock won 3-2 in overtime leaves the loser on match point (a
+        // nail-biter) and was clinched by the golden goal, so both bonuses stack.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: CAPTURES_TO_WIN,
+                opponents: CAPTURES_TO_WIN - 1,
+            },
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS + GOLDEN_GOAL_CASH_BONUS,
+            "a nail-biter golden goal must bank both win-quality bonuses"
+        );
     }
 
     #[test]
@@ -3239,6 +3406,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_overtime_clincher_earns_the_golden_goal_bonus() {
+        assert_eq!(
+            golden_goal_bonus(CtfMatchWinner::Player, true),
+            GOLDEN_GOAL_CASH_BONUS,
+            "clinching the decider with an overtime capture is a golden goal"
+        );
+        assert_eq!(
+            golden_goal_bonus(CtfMatchWinner::Opponents, true),
+            GOLDEN_GOAL_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_win_not_clinched_in_overtime_earns_no_golden_goal_bonus() {
+        // A regulation win, or an overtime that ran its own clock down, is no
+        // golden goal: the bonus is for the capture that decides the decider.
+        assert_eq!(
+            golden_goal_bonus(CtfMatchWinner::Player, false),
+            0,
+            "a win not clinched by an overtime capture is no golden goal"
+        );
+    }
+
+    #[test]
+    fn a_draw_never_earns_a_golden_goal_bonus() {
+        // A golden goal always produces a decisive winner, so a level result
+        // earns nothing even were the overtime flag somehow set.
+        assert_eq!(golden_goal_bonus(CtfMatchWinner::Draw, true), 0);
+    }
+
     fn purse_app() -> App {
         let mut app = App::new();
         app.init_resource::<Score>();
@@ -3246,6 +3444,7 @@ mod tests {
         app.init_resource::<CaptureScore>();
         app.init_resource::<CtfMatchResult>();
         app.init_resource::<MatchPursePaid>();
+        app.init_resource::<MatchClock>();
         app.add_system(award_match_purse_on_resolution);
         app
     }
@@ -3348,6 +3547,58 @@ mod tests {
         assert_eq!(
             app.world.resource::<Score>().cash,
             VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn an_overtime_capture_banks_the_golden_goal_bonus_through_the_system() {
+        let mut app = purse_app();
+        // Won 2-1 with the clock still running in sudden death: a golden goal, so
+        // the resolution system reads the overtime clock and banks the bonus.
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 1,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.insert_resource(MatchClock {
+            frames_remaining: SUDDEN_DEATH_TIME_LIMIT_FRAMES,
+            phase: MatchPhase::SuddenDeath,
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            VICTORY_CASH_PURSE + GOLDEN_GOAL_CASH_BONUS,
+            "a capture that clinches a live overtime must bank the golden-goal bonus"
+        );
+    }
+
+    #[test]
+    fn an_overtime_resolved_on_the_clock_banks_no_golden_goal_bonus() {
+        let mut app = purse_app();
+        // Sudden death with the clock already expired: the timeout path decided
+        // the leader, so it is no golden goal and only the bare purse is banked.
+        app.insert_resource(CaptureScore {
+            player: 2,
+            opponents: 1,
+        });
+        app.insert_resource(CtfMatchResult {
+            winner: Some(CtfMatchWinner::Player),
+        });
+        app.insert_resource(MatchClock {
+            frames_remaining: 0,
+            phase: MatchPhase::SuddenDeath,
+        });
+
+        app.update();
+
+        assert_eq!(
+            app.world.resource::<Score>().cash,
+            VICTORY_CASH_PURSE,
+            "an overtime decided by the clock running out is no golden goal"
         );
     }
 }
