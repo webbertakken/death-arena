@@ -356,3 +356,783 @@ pub const fn resolve_wreck_bounties(
         opponent_clutch,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gameplay::combat::PAYBACK_WINDOW_FRAMES;
+    use crate::gameplay::ctf::{CAPTURE_CASH_BOUNTY, FLAG_RETURN_CASH_BOUNTY};
+
+    #[test]
+    fn a_lone_wreck_pays_the_base_bounty() {
+        assert_eq!(wreck_bounty_for_streak(0), WRECK_CASH_BOUNTY);
+        assert_eq!(wreck_bounty_for_streak(1), WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn each_consecutive_wreck_raises_the_bounty() {
+        let bounties: Vec<u32> = (1..=WRECK_STREAK_BONUS_CAP + 1)
+            .map(wreck_bounty_for_streak)
+            .collect();
+        for pair in bounties.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "a longer rampage must pay more: {bounties:?}"
+            );
+        }
+        assert_eq!(
+            wreck_bounty_for_streak(2),
+            WRECK_CASH_BOUNTY + WRECK_STREAK_BONUS
+        );
+    }
+
+    #[test]
+    fn the_rampage_bounty_is_capped() {
+        let capped = WRECK_CASH_BOUNTY + WRECK_STREAK_BONUS_CAP * WRECK_STREAK_BONUS;
+        assert_eq!(wreck_bounty_for_streak(WRECK_STREAK_BONUS_CAP + 1), capped);
+        assert_eq!(wreck_bounty_for_streak(99), capped);
+    }
+
+    #[test]
+    fn most_wanted_pays_nothing_for_wrecking_a_level_or_trailing_team() {
+        assert_eq!(
+            most_wanted_wreck_bonus(2, 2),
+            0,
+            "a level victim has no price on its head"
+        );
+        assert_eq!(
+            most_wanted_wreck_bonus(1, 2),
+            0,
+            "wrecking the team that is behind earns no comeback bonus"
+        );
+    }
+
+    #[test]
+    fn most_wanted_bonus_scales_with_the_leader_capture_lead() {
+        assert_eq!(
+            most_wanted_wreck_bonus(1, 0),
+            MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD,
+            "a one-capture lead is worth a single step"
+        );
+        assert_eq!(
+            most_wanted_wreck_bonus(2, 0),
+            2 * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD,
+            "a wider lead is worth proportionally more"
+        );
+    }
+
+    #[test]
+    fn most_wanted_bonus_is_capped_at_the_max_lead() {
+        let capped = MOST_WANTED_MAX_CAPTURE_LEAD * MOST_WANTED_BOUNTY_PER_CAPTURE_LEAD;
+        assert_eq!(
+            most_wanted_wreck_bonus(MOST_WANTED_MAX_CAPTURE_LEAD + 5, 0),
+            capped
+        );
+        assert_eq!(most_wanted_wreck_bonus(u32::MAX, 0), capped);
+    }
+
+    #[test]
+    fn taking_the_leader_down_never_out_earns_a_capture() {
+        assert!(
+            most_wanted_wreck_bonus(u32::MAX, 0) < CAPTURE_CASH_BOUNTY,
+            "the comeback lever must stay below the value of a capture"
+        );
+    }
+
+    #[test]
+    fn carrier_takedown_pays_nothing_for_wrecking_an_empty_handed_car() {
+        assert_eq!(
+            carrier_takedown_wreck_bonus(false),
+            0,
+            "wrecking a car that was not running a flag earns no takedown bonus"
+        );
+    }
+
+    #[test]
+    fn carrier_takedown_pays_the_bonus_for_wrecking_a_flag_carrier() {
+        assert_eq!(
+            carrier_takedown_wreck_bonus(true),
+            CARRIER_TAKEDOWN_WRECK_BONUS,
+            "cutting down the enemy flag carrier must pay the takedown bonus"
+        );
+    }
+
+    #[test]
+    fn taking_a_carrier_down_out_earns_a_return_but_not_a_capture() {
+        let takedown = carrier_takedown_wreck_bonus(true);
+        assert!(
+            takedown > FLAG_RETURN_CASH_BOUNTY,
+            "cutting the carrier down must beat merely returning the flag it drops: {takedown}"
+        );
+        assert!(
+            takedown < CAPTURE_CASH_BOUNTY,
+            "denying a capture must never out-earn scoring one: {takedown}"
+        );
+    }
+
+    #[test]
+    fn shutdown_pays_nothing_for_wrecking_a_team_not_on_a_rampage() {
+        assert_eq!(
+            shutdown_wreck_bonus(0),
+            0,
+            "a team with no kills has no price on its head"
+        );
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK),
+            0,
+            "a lone single wreck is no rampage, so ending it pays nothing"
+        );
+    }
+
+    #[test]
+    fn shutdown_bonus_scales_with_the_rampage_depth() {
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + 1),
+            SHUTDOWN_BOUNTY_PER_STREAK_STEP,
+            "ending a two-wreck rampage is worth a single step"
+        );
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + 2),
+            2 * SHUTDOWN_BOUNTY_PER_STREAK_STEP,
+            "a deeper rampage is worth proportionally more to end"
+        );
+    }
+
+    #[test]
+    fn shutdown_bonus_is_capped_at_the_max_rampage() {
+        let capped = SHUTDOWN_MAX_STREAK_STEPS * SHUTDOWN_BOUNTY_PER_STREAK_STEP;
+        assert_eq!(
+            shutdown_wreck_bonus(SHUTDOWN_MIN_STREAK + SHUTDOWN_MAX_STREAK_STEPS + 5),
+            capped,
+            "the shutdown reward tops out at the capped rampage depth"
+        );
+        assert_eq!(shutdown_wreck_bonus(u32::MAX), capped);
+    }
+
+    #[test]
+    fn the_shutdown_caps_where_the_rampage_earnings_do() {
+        assert_eq!(
+            SHUTDOWN_MAX_STREAK_STEPS, WRECK_STREAK_BONUS_CAP,
+            "ending a rampage must scale exactly as deep as the rampage's own payday"
+        );
+    }
+
+    #[test]
+    fn ending_a_rampage_never_out_earns_a_capture() {
+        assert!(
+            shutdown_wreck_bonus(u32::MAX) < CAPTURE_CASH_BOUNTY,
+            "the comeback lever must stay below the value of a capture"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_shutdown_for_ending_an_enemy_rampage() {
+        // The opponents were three wrecks deep into a rampage when the player team
+        // finally cut one of their cars down: ending the run pays the shutdown
+        // bounty on top of the base wreck bounty.
+        let before = WreckStreaks {
+            player: 0,
+            opponent: 3,
+        };
+        let bounties = resolve_wreck_bounties(
+            before,
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_shutdown, shutdown_wreck_bonus(3));
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + shutdown_wreck_bonus(3),
+            "ending the opponents' rampage must fold its shutdown bonus into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_shutdown, 0,
+            "the side that fell ended no run"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_shutdown_for_wrecking_a_calm_team() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_shutdown, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_stacks_streak_leader_and_carrier_rewards() {
+        // The player team wrecks the opponents, who lead by two captures and were
+        // hauling a flag: the base bounty, the most-wanted comeback bonus, and the
+        // carrier-takedown bonus all ride the same wreck.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 2,
+            },
+            WreckCarriers {
+                player: false,
+                opponent: true,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_most_wanted, most_wanted_wreck_bonus(2, 0));
+        assert_eq!(
+            bounties.player_carrier_takedown,
+            CARRIER_TAKEDOWN_WRECK_BONUS
+        );
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + most_wanted_wreck_bonus(2, 0) + CARRIER_TAKEDOWN_WRECK_BONUS,
+            "every reward the player team earns this frame must fold into its total"
+        );
+        assert_eq!(bounties.opponent, 0, "the side that fell banks nothing");
+        assert_eq!(
+            bounties.streaks.player, 1,
+            "dealing the wreck extends the player team's rampage"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_an_empty_handed_wreck_only_the_base_bounty() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+        assert_eq!(bounties.player_most_wanted, 0);
+        assert_eq!(bounties.player_carrier_takedown, 0);
+    }
+
+    #[test]
+    fn first_blood_pays_the_opening_wreck() {
+        assert_eq!(
+            first_blood_wreck_bonus(true, true),
+            FIRST_BLOOD_CASH_BONUS,
+            "dealing the round's first wreck while first blood is up draws it"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_once_spent() {
+        assert_eq!(
+            first_blood_wreck_bonus(false, true),
+            0,
+            "first blood is spent once drawn, so a later wreck pays nothing extra"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            first_blood_wreck_bonus(true, false),
+            0,
+            "first blood needs an actual wreck to be drawn"
+        );
+    }
+
+    #[test]
+    fn first_blood_pays_nothing_when_spent_and_no_wreck() {
+        assert_eq!(first_blood_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn payback_pays_a_retaliation_wreck() {
+        assert_eq!(
+            payback_wreck_bonus(true, true),
+            PAYBACK_CASH_BONUS,
+            "wrecking an enemy while still owed a riposte banks the payback bonus"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_without_a_live_window() {
+        assert_eq!(
+            payback_wreck_bonus(false, true),
+            0,
+            "a kill by a team not recently wrecked is no riposte"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            payback_wreck_bonus(true, false),
+            0,
+            "being owed a riposte pays nothing until an enemy is actually wrecked"
+        );
+    }
+
+    #[test]
+    fn payback_pays_nothing_when_idle_and_no_wreck() {
+        assert_eq!(payback_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn clutch_pays_a_closing_time_wreck() {
+        assert_eq!(
+            clutch_wreck_bonus(true, true),
+            CLUTCH_WRECK_CASH_BONUS,
+            "wrecking an enemy while the clock is closing out the round banks the clutch bonus"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_outside_closing_time() {
+        assert_eq!(
+            clutch_wreck_bonus(false, true),
+            0,
+            "a wreck landed before closing time pays nothing extra"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_without_a_wreck() {
+        assert_eq!(
+            clutch_wreck_bonus(true, false),
+            0,
+            "closing time pays nothing until an enemy is actually wrecked"
+        );
+    }
+
+    #[test]
+    fn clutch_pays_nothing_when_calm_and_no_wreck() {
+        assert_eq!(clutch_wreck_bonus(false, false), 0);
+    }
+
+    #[test]
+    fn landing_a_clutch_wreck_is_a_real_payday_below_a_capture() {
+        let bonus = clutch_wreck_bonus(true, true);
+        assert!(
+            bonus > 0,
+            "a clutch wreck must be a real dying-seconds payday"
+        );
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the closing-time reward must never eclipse scoring a capture"
+        );
+    }
+
+    #[test]
+    fn paying_back_a_wreck_is_a_real_payday_below_a_capture() {
+        let bonus = payback_wreck_bonus(true, true);
+        assert!(bonus > 0, "a payback must be a real retaliation payday");
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the riposte reward must never eclipse scoring a capture"
+        );
+        assert!(
+            bonus < WRECK_CASH_BOUNTY,
+            "a payback tops up the kill rather than being worth a second wreck"
+        );
+    }
+
+    #[test]
+    fn drawing_first_blood_is_a_real_payday_below_a_capture() {
+        let bonus = first_blood_wreck_bonus(true, true);
+        assert!(bonus > 0, "first blood must be a real opening-kill payday");
+        assert!(
+            bonus < CAPTURE_CASH_BOUNTY,
+            "the opening-kill reward must never eclipse scoring a capture"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_first_blood_on_the_opening_wreck() {
+        // The player team lands the round's opening wreck while first blood is up.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            true,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS,
+            "the opening wreck folds first blood into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_first_blood, 0,
+            "the side that fell drew no first blood"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_no_first_blood_once_spent() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_first_blood, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_draws_first_blood_for_both_on_a_double_opening_wreck() {
+        // Both teams are ground out on the same opening frame: each dealt a wreck,
+        // so each draws first blood, mirroring how the base bounty restarts for both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            true,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(bounties.opponent_first_blood, FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS);
+        assert_eq!(
+            bounties.opponent,
+            WRECK_CASH_BOUNTY + FIRST_BLOOD_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_payback_for_a_retaliation_wreck() {
+        // The player team was wrecked recently (its window is still live) and now
+        // grinds an opponent back down: the riposte banks the payback bonus on top
+        // of the base wreck bounty.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: 0,
+            },
+            false,
+        );
+
+        assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS,
+            "a retaliation wreck folds the payback into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_payback, 0,
+            "the side that fell landed no riposte"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_payback_without_a_live_window() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_payback, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_payback_to_both_on_a_mutual_revenge_wreck() {
+        // Both teams were owed a riposte and both wreck the other this frame: each
+        // collects its payback, mirroring how the base bounty restarts for both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: PAYBACK_WINDOW_FRAMES,
+            },
+            false,
+        );
+
+        assert_eq!(bounties.player_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.opponent_payback, PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS);
+        assert_eq!(bounties.opponent, WRECK_CASH_BOUNTY + PAYBACK_CASH_BONUS);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_payback_to_a_side_that_only_fell() {
+        // The player team is owed a riposte but it is the one wrecked this frame,
+        // not the one dealing the wreck: no payback rides a kill it did not land.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: false,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows {
+                player_frames: PAYBACK_WINDOW_FRAMES,
+                opponent_frames: 0,
+            },
+            false,
+        );
+
+        assert_eq!(
+            bounties.player_payback, 0,
+            "a payback rides the riposte, not being wrecked again"
+        );
+        assert_eq!(bounties.opponent_payback, 0);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_a_clutch_for_a_closing_time_wreck() {
+        // The player team grinds an opponent down while the clock is closing out
+        // the round: the kill banks the clutch bonus on top of the base bounty.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            true,
+        );
+
+        assert_eq!(bounties.player_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(
+            bounties.player,
+            WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS,
+            "a closing-time wreck folds the clutch bonus into the player total"
+        );
+        assert_eq!(
+            bounties.opponent_clutch, 0,
+            "the side that fell landed no clutch wreck"
+        );
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_no_clutch_outside_closing_time() {
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            false,
+        );
+
+        assert_eq!(bounties.player_clutch, 0);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY);
+    }
+
+    #[test]
+    fn resolve_wreck_bounties_pays_clutch_to_both_on_a_double_closing_time_wreck() {
+        // Both teams are ground out in closing time: the clock is shared, so each
+        // dealt wreck banks its clutch bonus, mirroring how first blood pays both.
+        let bounties = resolve_wreck_bounties(
+            WreckStreaks::default(),
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+            CaptureScore::default(),
+            WreckCarriers {
+                player: false,
+                opponent: false,
+            },
+            false,
+            PaybackWindows::default(),
+            true,
+        );
+
+        assert_eq!(bounties.player_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(bounties.opponent_clutch, CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(bounties.player, WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS);
+        assert_eq!(
+            bounties.opponent,
+            WRECK_CASH_BOUNTY + CLUTCH_WRECK_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_quiet_frame_leaves_streaks_and_pays_nothing() {
+        let before = WreckStreaks {
+            player: 2,
+            opponent: 1,
+        };
+        let payout = resolve_wreck_streaks(before, WreckEvents::default());
+        assert_eq!(payout.streaks, before);
+        assert_eq!(payout.player_bounty, 0);
+        assert_eq!(payout.opponent_bounty, 0);
+    }
+
+    #[test]
+    fn dealing_a_wreck_extends_the_dealer_and_resets_the_victim() {
+        let before = WreckStreaks {
+            player: 1,
+            opponent: 2,
+        };
+        // The opponent team is wrecked, so the player team dealt the wreck.
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_eq!(payout.streaks.player, 2);
+        assert_eq!(
+            payout.streaks.opponent, 0,
+            "a wrecked team loses its rampage"
+        );
+        assert_eq!(payout.player_bounty, wreck_bounty_for_streak(2));
+        assert_eq!(payout.opponent_bounty, 0);
+    }
+
+    #[test]
+    fn an_opponent_rampage_extends_them_and_resets_the_player() {
+        let before = WreckStreaks {
+            player: 3,
+            opponent: 1,
+        };
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_eq!(payout.streaks.opponent, 2);
+        assert_eq!(payout.streaks.player, 0);
+        assert_eq!(payout.opponent_bounty, wreck_bounty_for_streak(2));
+        assert_eq!(payout.player_bounty, 0);
+    }
+
+    #[test]
+    fn mutual_wrecks_restart_both_streaks_at_the_base_bounty() {
+        let before = WreckStreaks {
+            player: 3,
+            opponent: 3,
+        };
+        let payout = resolve_wreck_streaks(
+            before,
+            WreckEvents {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_eq!(payout.streaks.player, 1);
+        assert_eq!(payout.streaks.opponent, 1);
+        assert_eq!(payout.player_bounty, WRECK_CASH_BOUNTY);
+        assert_eq!(payout.opponent_bounty, WRECK_CASH_BOUNTY);
+    }
+}
