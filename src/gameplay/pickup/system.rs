@@ -295,7 +295,7 @@ pub fn pickup_respawn_system(
 mod tests {
     use super::*;
     use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
-    use crate::gameplay::pickup::PICKUP_RESPAWN_FRAMES;
+    use crate::gameplay::pickup::{PICKUP_RESPAWN_FRAMES, UTILITY_PICKUP_RESPAWN_FRAMES};
     use crate::gameplay::virtual_player::ai::AiTeam;
 
     fn test_player() -> Player {
@@ -844,7 +844,11 @@ mod tests {
         assert_eq!(respawns.pending.len(), 1);
         assert_eq!(respawns.pending[0].kind, PickupKind::Nitro);
         assert_eq!(respawns.pending[0].position, Vec2::new(10.0, 20.0));
-        assert_eq!(respawns.pending[0].frames_remaining, PICKUP_RESPAWN_FRAMES);
+        // A nitro is a utility grab, so it returns on the longer utility cooldown.
+        assert_eq!(
+            respawns.pending[0].frames_remaining,
+            UTILITY_PICKUP_RESPAWN_FRAMES
+        );
     }
 
     #[test]

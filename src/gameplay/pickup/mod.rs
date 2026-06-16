@@ -9,8 +9,27 @@ pub use collect::PickupKind;
 
 /// World-space distance at which a car collects a pickup it drives over.
 pub const PICKUP_RADIUS: f32 = 120.0;
-/// Number of fixed update frames before a collected pickup returns.
+/// Number of fixed update frames before a collected *staple* pickup (a cash bag or
+/// a repair) returns to the arena.
+///
+/// The bread-and-butter economy and heal grabs refresh promptly so cash keeps
+/// flowing and a battered team can rely on finding a patch-up. At the game's 60 FPS
+/// convention this is ten seconds.
 pub const PICKUP_RESPAWN_FRAMES: u32 = 600;
+/// Number of fixed update frames before a collected *utility* pickup (a nitro,
+/// shield or sabotage) returns to the arena.
+///
+/// The match-swinging utility grabs are scarcer than the staple cash and heal: a
+/// team that snatches the nitro, shield or sabotage denies it to the enemy for
+/// longer, so the utility spawn points are worth genuinely contesting rather than a
+/// constantly-replenished free-for-all. Pitched a clear step above the staple
+/// cooldown (fifteen seconds at 60 FPS) so the scarcity reads without ever starving
+/// the field of an item entirely.
+pub const UTILITY_PICKUP_RESPAWN_FRAMES: u32 = 900;
+/// A utility pickup must be scarcer than a staple one, enforced at compile time, so
+/// the match-swinging grabs stay worth contesting and the cooldown ordering can
+/// never silently drift.
+const _: () = assert!(UTILITY_PICKUP_RESPAWN_FRAMES > PICKUP_RESPAWN_FRAMES);
 /// Number of fixed update frames a nitro pickup boosts a car.
 pub const NITRO_BOOST_FRAMES: u32 = 180;
 /// Speed multiplier applied while a nitro boost is active.
@@ -65,7 +84,7 @@ impl PickupRespawns {
         self.pending.push(PendingPickupRespawn {
             kind,
             position,
-            frames_remaining: PICKUP_RESPAWN_FRAMES,
+            frames_remaining: kind.respawn_frames(),
         });
     }
 }
@@ -378,6 +397,40 @@ fn reset_pickup_match_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staple_pickups_respawn_on_the_base_cooldown() {
+        assert_eq!(PickupKind::Cash.respawn_frames(), PICKUP_RESPAWN_FRAMES);
+        assert_eq!(PickupKind::Repair.respawn_frames(), PICKUP_RESPAWN_FRAMES);
+    }
+
+    #[test]
+    fn utility_pickups_respawn_slower_than_the_staples() {
+        for kind in [PickupKind::Nitro, PickupKind::Shield, PickupKind::Sabotage] {
+            assert_eq!(
+                kind.respawn_frames(),
+                UTILITY_PICKUP_RESPAWN_FRAMES,
+                "a match-swinging {kind:?} should take the longer utility cooldown"
+            );
+            assert!(
+                kind.respawn_frames() > PickupKind::Cash.respawn_frames(),
+                "a {kind:?} must be scarcer than a constantly-replenished cash bag"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_stamps_each_pickup_with_its_own_kind_cooldown() {
+        let mut respawns = PickupRespawns::default();
+        respawns.queue(PickupKind::Cash, Vec2::ZERO);
+        respawns.queue(PickupKind::Nitro, Vec2::ZERO);
+
+        assert_eq!(respawns.pending[0].frames_remaining, PICKUP_RESPAWN_FRAMES);
+        assert_eq!(
+            respawns.pending[1].frames_remaining,
+            UTILITY_PICKUP_RESPAWN_FRAMES
+        );
+    }
 
     #[test]
     fn collecting_accumulates_cash_and_count() {

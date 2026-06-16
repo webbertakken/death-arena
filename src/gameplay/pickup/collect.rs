@@ -175,6 +175,23 @@ impl PickupKind {
         }
     }
 
+    /// Fixed update frames before this pickup returns to the arena after being
+    /// collected.
+    ///
+    /// The staple economy and heal grabs (cash, repair) refresh on the prompt
+    /// [`super::PICKUP_RESPAWN_FRAMES`] base so cash keeps flowing and a patch-up
+    /// stays reliable; the match-swinging utility grabs (nitro, shield, sabotage)
+    /// take the longer [`super::UTILITY_PICKUP_RESPAWN_FRAMES`], so snatching one
+    /// denies it to the enemy for longer and the utility spawns are worth
+    /// contesting rather than a constantly-replenished free-for-all.
+    #[must_use]
+    pub const fn respawn_frames(self) -> u32 {
+        match self {
+            Self::Cash | Self::Repair => super::PICKUP_RESPAWN_FRAMES,
+            Self::Nitro | Self::Shield | Self::Sabotage => super::UTILITY_PICKUP_RESPAWN_FRAMES,
+        }
+    }
+
     /// Tactical value virtual players use when choosing which pickup to chase.
     #[must_use]
     pub const fn virtual_player_priority(self) -> u32 {
