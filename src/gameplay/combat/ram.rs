@@ -784,3 +784,1251 @@ pub fn corner_crush_ram_damage(cars: &[RamCar], half_extents: Vec2) -> TeamDamag
 
     damage
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gameplay::combat::PINCER_MAX_RAM_DAMAGE_PER_FRAME;
+    use crate::gameplay::main::BOUNDS;
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= 1e-4,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    fn blue(position: Vec2) -> RamCar {
+        RamCar {
+            team: AiTeam::Blue,
+            position,
+            // Facing +Y, perpendicular to the +X contact axis these helpers
+            // place cars on, so the base ram tests never trip the aggressor cone.
+            forward: Vec2::Y,
+            carrying_flag: false,
+        }
+    }
+
+    fn red(position: Vec2) -> RamCar {
+        RamCar {
+            team: AiTeam::Red,
+            position,
+            forward: Vec2::Y,
+            carrying_flag: false,
+        }
+    }
+
+    /// A blue car at `position` charging head-first towards `target`.
+    fn blue_facing(position: Vec2, target: Vec2) -> RamCar {
+        RamCar {
+            forward: (target - position).normalize_or_zero(),
+            ..blue(position)
+        }
+    }
+
+    /// A red car at `position` charging head-first towards `target`.
+    fn red_facing(position: Vec2, target: Vec2) -> RamCar {
+        RamCar {
+            forward: (target - position).normalize_or_zero(),
+            ..red(position)
+        }
+    }
+
+    fn blue_carrier(position: Vec2) -> RamCar {
+        RamCar {
+            carrying_flag: true,
+            ..blue(position)
+        }
+    }
+
+    fn red_carrier(position: Vec2) -> RamCar {
+        RamCar {
+            carrying_flag: true,
+            ..red(position)
+        }
+    }
+
+    /// The arena half-extents the wall-crush tests pin cars against, matching the
+    /// real arena's `BOUNDS / 2.0`.
+    fn arena_half() -> Vec2 {
+        BOUNDS / 2.0
+    }
+
+    #[test]
+    fn no_damage_when_no_cars_are_touching() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS + 1.0, 0.0))];
+        let damage = ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn touching_opponents_each_wear_down_their_own_team() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = ram_damage(&cars);
+        assert_near(damage.player, RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn same_team_contact_deals_no_damage() {
+        let cars = [blue(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn outnumbered_team_takes_damage_per_car_in_contact() {
+        // Two reds bracket a single blue; both reds and the blue are in contact.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = ram_damage(&cars);
+        assert_near(damage.player, RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 2.0 * RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn no_nitro_means_no_ram_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(&cars, RamBoost::default());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn boosted_player_ram_wears_the_opponent() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, NITRO_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn boosted_opponent_ram_wears_the_player() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn boosted_car_out_of_contact_deals_no_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS + 1.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn both_teams_boosting_each_wear_the_enemy() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, NITRO_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn same_team_contact_deals_no_nitro_bonus() {
+        let cars = [blue(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn nitro_bonus_scales_per_boosted_car_in_contact() {
+        // Two boosted reds bracket a single blue: both reds are charging the
+        // lone blue, so the player team eats two ram hits this frame.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = nitro_ram_damage(
+            &cars,
+            RamBoost {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 2.0 * NITRO_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn no_surge_means_no_ram_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(&cars, RamSurge::default());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_surging_player_ram_wears_the_opponent() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, SURGE_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_surging_opponent_ram_wears_the_player() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, SURGE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_surging_car_out_of_contact_deals_no_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS + 1.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn same_team_contact_deals_no_surge_bonus() {
+        let cars = [blue(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: true,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn surge_bonus_scales_per_surging_car_in_contact() {
+        // Two surging reds bracket a single blue: both reds are pressing the lone
+        // blue, so the player team eats two surge hits this frame.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = surge_ram_damage(
+            &cars,
+            RamSurge {
+                player: false,
+                opponent: true,
+            },
+        );
+        assert_near(damage.player, 2.0 * SURGE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn ram_surge_reads_active_surge_timers() {
+        let mut surges = WreckSurges::default();
+        surges.trigger_opponent();
+        let surge = RamSurge::from_surges(surges);
+        assert!(!surge.player, "an idle team should not be surging");
+        assert!(surge.opponent, "a freshly-wrecking team should be surging");
+    }
+
+    #[test]
+    fn frame_ram_damage_folds_the_surge_into_the_stack_then_shields() {
+        // A surging, shielded player car trading paint with a red: the frame total
+        // is base scrape + surge, halved for the shielded player, proving the helper
+        // both folds the surge into the stack and mitigates the whole frame.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = frame_ram_damage(
+            &cars,
+            RamBoost::default(),
+            RamSurge {
+                player: true,
+                opponent: false,
+            },
+            RamShield {
+                player: true,
+                opponent: false,
+            },
+            BOUNDS / 2.0,
+        );
+        assert_near(
+            damage.player,
+            RAM_DAMAGE_PER_FRAME * SHIELD_DAMAGE_MULTIPLIER,
+        );
+        assert_near(
+            damage.opponent,
+            RAM_DAMAGE_PER_FRAME + SURGE_RAM_DAMAGE_PER_FRAME,
+        );
+    }
+
+    #[test]
+    fn an_empty_handed_car_bleeds_no_carrier_bonus() {
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rammed_blue_carrier_wears_the_player_team() {
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS - 10.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rammed_red_carrier_wears_the_opponent_team() {
+        let cars = [
+            red_carrier(Vec2::ZERO),
+            blue(Vec2::new(RAM_RADIUS - 10.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_carrier_out_of_contact_bleeds_no_carrier_bonus() {
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS + 1.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_carrier_touched_only_by_a_teammate_bleeds_no_carrier_bonus() {
+        // A blue carrier escorted by a blue teammate is not being defended
+        // against, so the carrier tax must not fire.
+        let cars = [blue_carrier(Vec2::ZERO), blue(Vec2::new(10.0, 0.0))];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn carrier_bonus_scales_per_defender_in_contact() {
+        // Two reds bracket the lone blue carrier; the carrier eats the tax once
+        // per frame regardless of how many defenders crowd it, because the tax
+        // is charged to the carrier, not summed per defender.
+        let cars = [
+            blue_carrier(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = carrier_ram_damage(&cars);
+        assert_near(damage.player, FLAG_CARRIER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_scrape_inflicts_no_aggressor_bonus() {
+        // Both cars face +Y while touching along the X axis: neither is charging
+        // the other, so only the base scrape (handled elsewhere) applies.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_charging_blue_car_wears_the_opponent_it_aims_at() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, enemy), red(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_charging_red_car_wears_the_player_it_aims_at() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [red_facing(Vec2::ZERO, enemy), blue(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_collision_charges_both_teams() {
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_charge_at_a_distant_enemy_inflicts_no_aggressor_bonus() {
+        let enemy = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, enemy), red(enemy)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn charging_a_teammate_inflicts_no_aggressor_bonus() {
+        let mate = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, mate), blue(mate)];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn facing_just_inside_the_cone_charges_but_just_outside_does_not() {
+        // Place the enemy on the X axis and aim the car at the cone's edge by
+        // rotating its heading until the dot product brackets the threshold.
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let inside_angle = AGGRESSOR_RAM_ALIGNMENT.acos() - 0.01;
+        let outside_angle = AGGRESSOR_RAM_ALIGNMENT.acos() + 0.01;
+
+        let inside = [
+            RamCar {
+                forward: Vec2::new(inside_angle.cos(), inside_angle.sin()),
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        assert_near(
+            aggressor_ram_damage(&inside).opponent,
+            AGGRESSOR_RAM_DAMAGE_PER_FRAME,
+        );
+
+        let outside = [
+            RamCar {
+                forward: Vec2::new(outside_angle.cos(), outside_angle.sin()),
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        assert_near(aggressor_ram_damage(&outside).opponent, 0.0);
+    }
+
+    #[test]
+    fn aggressor_bonus_scales_per_charging_car_in_contact() {
+        // Two reds both charge a lone blue from either side: the player team
+        // eats one aggressor hit per charging car this frame.
+        let blue_pos = Vec2::ZERO;
+        let cars = [
+            blue(blue_pos),
+            red_facing(Vec2::new(50.0, 0.0), blue_pos),
+            red_facing(Vec2::new(-50.0, 0.0), blue_pos),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 2.0 * AGGRESSOR_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_aggressor_bonus() {
+        let enemy = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red(enemy),
+        ];
+        let damage = aggressor_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_on_charge_broadsides_the_struck_team() {
+        // A red car charges in from the blue car's flank: blue faces +Y while
+        // the red striker comes from +X with its nose on blue's door.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_flank_charge_wears_the_red_team_it_t_bones() {
+        // The mirror: a blue car charges a red car square in the side.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(-(RAM_RADIUS - 10.0), 0.0);
+        let cars = [red(victim), blue_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.opponent, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.player, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charge_is_no_broadside() {
+        // Nose to nose: each car is hit on its front, not its flank, so the
+        // broadside bonus stays silent and only the aggressor charge applies.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_parallel_scrape_is_no_broadside() {
+        // Two cars running side by side, both facing +Y: a flank position alone
+        // earns no broadside without a striker charging into it.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_glancing_front_quarter_charge_is_no_broadside() {
+        // The striker charges from 30 degrees off the victim's nose: inside the
+        // aggressor cone but short of the side arc, a frontal clip not a T-bone.
+        let victim = Vec2::ZERO;
+        let angle = std::f32::consts::FRAC_PI_6;
+        let striker = Vec2::new(angle.sin(), angle.cos()) * (RAM_RADIUS - 10.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_broadside_needs_contact() {
+        // A perfect side-on charge just out of ram range deals nothing.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_double_flank_charges_the_victim_once() {
+        // Two reds T-bone a lone blue from both flanks: the struck car bleeds a
+        // single broadside, not one per striker (the per-victim model).
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            red_facing(Vec2::new(50.0, 0.0), victim),
+            red_facing(Vec2::new(-50.0, 0.0), victim),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, BROADSIDE_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_broadside() {
+        // A victim with no facing cannot be judged side-on, so it is skipped.
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red_facing(striker, Vec2::ZERO),
+        ];
+        let damage = broadside_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_tail_charge_rear_ends_the_struck_team() {
+        // A red car runs the blue car down from directly behind: blue faces +Y
+        // while the red striker chases from -Y with its nose on blue's tail.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_tail_charge_wears_the_red_team_it_runs_down() {
+        // The mirror: a blue car runs a red car down from directly behind.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [red(victim), blue_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.opponent, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.player, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charge_is_no_rear_end() {
+        // Nose to nose: each car is struck on its front, not its tail, so the
+        // rear-end bonus stays silent and only the aggressor charge applies.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_on_charge_is_no_rear_end() {
+        // A clean flank T-bone falls inside the side arc, short of the rear
+        // wedge, so it earns a broadside but never a rear-end: the two arcs are
+        // disjoint, and a single strike is one or the other, never both.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue(victim), red_facing(striker, victim)];
+        assert_near(
+            broadside_ram_damage(&cars).player,
+            BROADSIDE_RAM_DAMAGE_PER_FRAME,
+        );
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_tail_position_without_a_charge_is_no_rear_end() {
+        // A red car sits dead behind the blue car but faces away (-Y), so it is
+        // tailing without committing: a rear position alone earns no rear-end.
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            RamCar {
+                forward: Vec2::NEG_Y,
+                ..red(Vec2::new(0.0, -(RAM_RADIUS - 10.0)))
+            },
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_rear_end_needs_contact() {
+        // A perfect tail charge just out of ram range deals nothing.
+        let victim = Vec2::ZERO;
+        let striker = Vec2::new(0.0, -(RAM_RADIUS + 1.0));
+        let cars = [blue(victim), red_facing(striker, victim)];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_double_tail_charge_rear_ends_the_victim_once() {
+        // Two reds pile into a lone blue's tail: the struck car bleeds a single
+        // rear-end, not one per striker (the per-victim model).
+        let victim = Vec2::ZERO;
+        let cars = [
+            blue(victim),
+            red_facing(Vec2::new(0.0, -50.0), victim),
+            red_facing(Vec2::new(0.0, -90.0), victim),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, REAR_END_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_inflicts_no_rear_end() {
+        // A victim with no facing cannot be judged from behind, so it is skipped.
+        let striker = Vec2::new(0.0, -(RAM_RADIUS - 10.0));
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(Vec2::ZERO)
+            },
+            red_facing(striker, Vec2::ZERO),
+        ];
+        let damage = rear_end_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_smash_wears_both_teams() {
+        // Nose to nose: both cars commit a charge straight into each other, so
+        // the smash bites both teams at once.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_one_sided_charge_is_no_head_on() {
+        // The blue car charges nose-first while the red car keeps its +Y facing,
+        // so the red is not charging back: a head-on needs both noses committed.
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(Vec2::ZERO, red_pos), red(red_pos)];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_side_scrape_is_no_head_on() {
+        // Both cars face +Y while touching along the X axis: neither nose is on
+        // the other, so a parallel scrape earns no head-on smash.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(RAM_RADIUS - 10.0, 0.0))];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_smash_needs_contact() {
+        // A perfect nose-to-nose pair just out of ram range deals nothing.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS + 1.0, 0.0);
+        let cars = [
+            blue_facing(blue_pos, red_pos),
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn charging_a_teammate_is_no_head_on() {
+        // Two friendly cars meeting nose-to-nose are not enemies, so no smash.
+        let a = Vec2::ZERO;
+        let b = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [blue_facing(a, b), blue_facing(b, a)];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_degenerate_heading_is_no_head_on() {
+        // One car has no facing, so the mutual-charge condition cannot hold and
+        // neither side eats the smash.
+        let blue_pos = Vec2::ZERO;
+        let red_pos = Vec2::new(RAM_RADIUS - 10.0, 0.0);
+        let cars = [
+            RamCar {
+                forward: Vec2::ZERO,
+                ..blue(blue_pos)
+            },
+            red_facing(red_pos, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_head_on_charges_a_car_once_however_many_noses_it_meets() {
+        // A lone blue noses into a wedge of two reds, both charging straight
+        // back: the blue eats a single smash (the per-victim model) while each
+        // red bleeds its own, so the two-car team takes twice the lone blue's.
+        let blue_pos = Vec2::ZERO;
+        let red_one = Vec2::new(100.0, 8.0);
+        let red_two = Vec2::new(100.0, -8.0);
+        let cars = [
+            blue_facing(blue_pos, Vec2::new(100.0, 0.0)),
+            red_facing(red_one, blue_pos),
+            red_facing(red_two, blue_pos),
+        ];
+        let damage = head_on_ram_damage(&cars);
+        assert_near(damage.player, HEAD_ON_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 2.0 * HEAD_ON_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn a_lone_ram_is_no_pincer() {
+        // A single enemy in contact is just a ram, not a gang-up.
+        let cars = [blue(Vec2::ZERO), red(Vec2::new(50.0, 0.0))];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn two_enemies_pincer_the_surrounded_team() {
+        // Two reds bracket a lone blue: the blue is hemmed in by a pincer, while
+        // each red faces only the single blue, so only the blue team bleeds.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_bigger_swarm_bites_harder_but_still_lands_once() {
+        // Three reds swarm one blue: the struck car bleeds a single, swarm-scaled
+        // pincer (the three-attacker bite), not one charge per attacker. The
+        // per-victim model holds (mirroring the broadside bonus), it just scales.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, pincer_ram_bonus(3));
+        assert!(
+            damage.player > PINCER_RAM_DAMAGE_PER_FRAME,
+            "a three-car swarm must out-bite a two-car pincer: {}",
+            damage.player
+        );
+        assert!(
+            damage.player < 3.0 * PINCER_RAM_DAMAGE_PER_FRAME,
+            "the scaled charge must not stack one full pincer per attacker: {}",
+            damage.player
+        );
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn pincer_bonus_is_zero_below_the_minimum_gang_up() {
+        assert_near(pincer_ram_bonus(0), 0.0);
+        assert_near(pincer_ram_bonus(PINCER_MIN_ATTACKERS - 1), 0.0);
+        assert_near(
+            pincer_ram_bonus(PINCER_MIN_ATTACKERS),
+            PINCER_RAM_DAMAGE_PER_FRAME,
+        );
+    }
+
+    #[test]
+    fn pincer_bonus_rises_with_every_extra_attacker() {
+        let two = pincer_ram_bonus(2);
+        let three = pincer_ram_bonus(3);
+        let four = pincer_ram_bonus(4);
+        assert_near(two, PINCER_RAM_DAMAGE_PER_FRAME);
+        // Each extra attacker adds exactly one per-extra step to the bite.
+        assert_near(two - PINCER_RAM_DAMAGE_PER_FRAME, 0.0);
+        assert_near(three - two, PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER);
+        assert_near(four - three, PINCER_RAM_DAMAGE_PER_EXTRA_ATTACKER);
+        assert!(three > two && four > three, "swarm bite must escalate");
+    }
+
+    #[test]
+    fn pincer_bonus_caps_at_the_swarm_ceiling() {
+        let max = PINCER_MAX_RAM_DAMAGE_PER_FRAME;
+        // One past the cap and a huge dogpile both land at the ceiling, no more.
+        let beyond_cap = PINCER_MIN_ATTACKERS + PINCER_MAX_EXTRA_ATTACKERS + 1;
+        assert_near(pincer_ram_bonus(beyond_cap), max);
+        assert_near(pincer_ram_bonus(64), max);
+        assert!(
+            max < NITRO_RAM_DAMAGE_PER_FRAME,
+            "even a maxed swarm must stay under the earned nitro charge: {max}"
+        );
+    }
+
+    #[test]
+    fn a_growing_swarm_grinds_the_victim_down_harder() {
+        // The same lone blue, hemmed in by two then three then four reds, bleeds a
+        // strictly heavier pincer each time another foe piles in.
+        let two = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+        ])
+        .player;
+        let three = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+        ])
+        .player;
+        let four = pincer_ram_damage(&[
+            blue(Vec2::ZERO),
+            red(Vec2::new(50.0, 0.0)),
+            red(Vec2::new(-50.0, 0.0)),
+            red(Vec2::new(0.0, 50.0)),
+            red(Vec2::new(0.0, -50.0)),
+        ])
+        .player;
+        assert!(
+            three > two && four > three,
+            "the surrounded team must bleed more as the swarm grows: {two} {three} {four}"
+        );
+    }
+
+    #[test]
+    fn friendly_crowding_is_no_pincer() {
+        // A car flanked by its own teammates is not pincered: only enemies count.
+        let cars = [
+            blue(Vec2::ZERO),
+            blue(Vec2::new(50.0, 0.0)),
+            blue(Vec2::new(-50.0, 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_pincer_needs_contact() {
+        // Two reds bracket a blue but both sit out of ram range: no pincer.
+        let cars = [
+            blue(Vec2::ZERO),
+            red(Vec2::new(RAM_RADIUS + 1.0, 0.0)),
+            red(Vec2::new(-(RAM_RADIUS + 1.0), 0.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn a_mutual_pincer_wears_both_teams() {
+        // Two blues and two reds bunch together so every car has both enemies in
+        // range: each of the four is pincered, so each team bleeds two pincers.
+        let cars = [
+            blue(Vec2::ZERO),
+            blue(Vec2::new(20.0, 0.0)),
+            red(Vec2::new(0.0, 20.0)),
+            red(Vec2::new(20.0, 20.0)),
+        ];
+        let damage = pincer_ram_damage(&cars);
+        assert_near(damage.player, 2.0 * PINCER_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 2.0 * PINCER_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn armour_halves_only_a_shielded_teams_damage() {
+        let damage = TeamDamage {
+            player: 2.0,
+            opponent: 4.0,
+        };
+        let mitigated = armour_mitigated_damage(
+            damage,
+            RamShield {
+                player: true,
+                opponent: false,
+            },
+        );
+        assert_near(mitigated.player, 2.0 * SHIELD_DAMAGE_MULTIPLIER);
+        assert_near(mitigated.opponent, 4.0);
+    }
+
+    #[test]
+    fn armour_passes_unshielded_damage_through_untouched() {
+        let damage = TeamDamage {
+            player: 2.0,
+            opponent: 4.0,
+        };
+        let mitigated = armour_mitigated_damage(damage, RamShield::default());
+        assert_near(mitigated.player, 2.0);
+        assert_near(mitigated.opponent, 4.0);
+    }
+
+    #[test]
+    fn ram_shield_reads_active_armour_timers() {
+        let mut boosts = ArmourBoosts::default();
+        boosts.trigger_opponent();
+        let shield = RamShield::from_armour(&boosts);
+        assert!(!shield.player, "an idle team should not be shielded");
+        assert!(shield.opponent, "a triggered team should be shielded");
+    }
+
+    #[test]
+    fn wall_crush_hits_a_car_pinned_against_a_wall_by_a_charging_enemy() {
+        // A red victim shoved up against the +X wall; a blue striker charges +X
+        // into it, leaving it nowhere to escape.
+        let cars = [
+            blue_facing(Vec2::new(810.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn wall_crush_spares_a_car_trading_paint_in_open_field() {
+        // The same charge at the arena centre is just a ram, not a wall pin.
+        let cars = [
+            blue_facing(Vec2::new(-90.0, 0.0), Vec2::ZERO),
+            red(Vec2::ZERO),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_needs_a_charging_enemy_not_a_mere_wall_hugger() {
+        // The red sits against the +X wall, but the blue alongside it faces +Y,
+        // not into the victim, so it is not charging and no crush lands.
+        let cars = [blue(Vec2::new(810.0, 0.0)), red(Vec2::new(900.0, 0.0))];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_ignores_a_charge_from_the_wall_side() {
+        // The blue striker is wedged between the red victim and the +X wall,
+        // charging -X: it shoves the victim away from the wall, not into it.
+        let cars = [
+            blue_facing(Vec2::new(960.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_charges_a_pinned_victim_once_regardless_of_attackers() {
+        // Two blue strikers both charge the red car pinned against the +X wall;
+        // the victim eats the crush once, mirroring the per-victim broadside model.
+        let cars = [
+            red(Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(820.0, 40.0), Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(820.0, -40.0), Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn wall_crush_wears_a_pinned_blue_victim_into_the_player_pool() {
+        // Symmetry: a blue car pinned against the -X wall by a charging red
+        // bleeds the player pool.
+        let cars = [
+            blue(Vec2::new(-900.0, 0.0)),
+            red_facing(Vec2::new(-810.0, 0.0), Vec2::new(-900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_needs_the_enemy_within_ram_range() {
+        // The blue charges the wall-pinned red, but from beyond ram range.
+        let cars = [
+            blue_facing(Vec2::new(700.0, 0.0), Vec2::new(900.0, 0.0)),
+            red(Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_spares_a_same_team_pin() {
+        // A blue teammate charging another blue against the wall deals no crush.
+        let cars = [
+            blue(Vec2::new(900.0, 0.0)),
+            blue_facing(Vec2::new(810.0, 0.0), Vec2::new(900.0, 0.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn wall_crush_pins_a_cornered_car() {
+        // A red wedged into the +X/+Y corner, charged toward +X, is pinned.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(810.0, 500.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = wall_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, WALL_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn corner_crush_wears_a_car_wedged_into_a_corner() {
+        // A red in the +X/+Y corner; a blue charges diagonally from the open
+        // quadrant, shoving it into both walls at once with nowhere left to run.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(820.0, 420.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, CORNER_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn corner_crush_spares_a_single_wall_pin() {
+        // The red sits in the corner region but the blue charges straight +X, so
+        // it is shoved into the +X wall only and can still escape along +Y: a wall
+        // crush, not a corner crush.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(810.0, 500.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_ignores_a_charge_that_frees_the_second_wall() {
+        // The red is in the +X/+Y corner, but the blue strikes from above it,
+        // shoving it into +X yet *away* from +Y: an escape lane stays open, so no
+        // corner crush lands.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(820.0, 560.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_spares_a_car_trading_paint_in_open_field() {
+        // The same diagonal charge at the arena centre is just a ram.
+        let cars = [
+            red(Vec2::ZERO),
+            blue_facing(Vec2::new(-80.0, -80.0), Vec2::ZERO),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_needs_a_charging_enemy_not_a_mere_corner_loiterer() {
+        // The blue sits in the open quadrant of the red's corner but faces away,
+        // so it is not charging and no corner crush lands.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(820.0, 420.0), Vec2::new(740.0, 340.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_needs_the_enemy_within_ram_range() {
+        // The blue charges into the corner but from beyond ram range.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(760.0, 360.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_charges_a_cornered_victim_once_regardless_of_attackers() {
+        // Two blue strikers both wedge the red into the +X/+Y corner; the victim
+        // eats the crush once, mirroring the per-victim wall-crush model.
+        let cars = [
+            red(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(820.0, 420.0), Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(830.0, 430.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, CORNER_CRUSH_RAM_DAMAGE_PER_FRAME);
+    }
+
+    #[test]
+    fn corner_crush_wears_a_pinned_blue_victim_into_the_player_pool() {
+        // Symmetry: a blue car wedged into the -X/-Y corner by a charging red
+        // bleeds the player pool.
+        let cars = [
+            blue(Vec2::new(-900.0, -500.0)),
+            red_facing(Vec2::new(-820.0, -420.0), Vec2::new(-900.0, -500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, CORNER_CRUSH_RAM_DAMAGE_PER_FRAME);
+        assert_near(damage.opponent, 0.0);
+    }
+
+    #[test]
+    fn corner_crush_spares_a_same_team_pin() {
+        // A blue teammate wedging another blue into the corner deals no crush.
+        let cars = [
+            blue(Vec2::new(900.0, 500.0)),
+            blue_facing(Vec2::new(820.0, 420.0), Vec2::new(900.0, 500.0)),
+        ];
+        let damage = corner_crush_ram_damage(&cars, arena_half());
+        assert_near(damage.player, 0.0);
+        assert_near(damage.opponent, 0.0);
+    }
+}
