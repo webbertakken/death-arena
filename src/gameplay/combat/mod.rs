@@ -1,6 +1,6 @@
 use crate::gameplay::ctf::{
     CaptureScore, CtfFlag, CtfMatchResult, FlagTeam, MatchClock, CAPTURES_TO_WIN,
-    CAPTURE_CASH_BOUNTY, FLAG_RETURN_CASH_BOUNTY,
+    CAPTURE_CASH_BOUNTY, FLAG_RETURN_CASH_BOUNTY, FLAG_STEAL_CASH_BOUNTY,
 };
 use crate::gameplay::main::BOUNDS;
 use crate::gameplay::pickup::{ArmourBoosts, NitroBoosts, OpponentScore, Score};
@@ -42,6 +42,15 @@ pub const NITRO_RAM_DAMAGE_PER_FRAME: f32 = 0.5;
 /// per wreck, on the frame integrity crosses to zero, so a team only cashes in
 /// again after its victim limps to a repair and is wrecked anew.
 pub const WRECK_CASH_BOUNTY: u32 = 150;
+/// Wrecking must out-earn a flag steal, enforced at compile time, so grinding an
+/// enemy car down to zero stays the meatier payday the pricing intends rather than
+/// dropping to a mere steal.
+const _: () = assert!(WRECK_CASH_BOUNTY > FLAG_STEAL_CASH_BOUNTY);
+/// A wreck must never out-earn scoring a capture, enforced at compile time, so the
+/// combat payday stays a meaningful earner without eclipsing the CTF objective, the
+/// same ceiling every derived wreck bonus already respects but the base bounty they
+/// build on did not yet pin.
+const _: () = assert!(WRECK_CASH_BOUNTY < CAPTURE_CASH_BOUNTY);
 /// Extra cash each consecutive wreck adds on top of [`WRECK_CASH_BOUNTY`].
 ///
 /// A team that keeps grinding enemies down without being wrecked itself is on a
