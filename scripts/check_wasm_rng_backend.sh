@@ -8,7 +8,7 @@ set -euo pipefail
 # entropy through `getrandom`, whose default wasm backend is `Unsupported`: every
 # call errors, so `rand::thread_rng()` / `rand::random()` panic at runtime. The
 # arena loader picks its arena with `rand::random()` the instant a match starts
-# (on entering AppState::InGame), so without a real wasm entropy backend the demo
+# (on entering AppState::Loading), so without a real wasm entropy backend the demo
 # crashes on the first match, a failure no `cargo check`, clippy or test gate can
 # see because it only surfaces at runtime in a browser.
 #

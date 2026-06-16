@@ -1,6 +1,7 @@
 use crate::app::physics::collider::ColliderData;
 
 use crate::gameplay::arena::scene::{Position, Scale, Scene, SpriteData};
+use crate::gameplay::arena::selection::select_arena;
 use crate::gameplay::ctf::{flag_team_from_asset_path, CtfFlag};
 use crate::gameplay::main::BOUNDS;
 
@@ -13,6 +14,7 @@ use bevy::{
 };
 use bevy_rapier2d::prelude::*;
 
+use rand::random;
 use serde_json::from_slice;
 use std::default::Default;
 
@@ -92,7 +94,11 @@ pub struct SceneState {
 }
 
 pub fn load(mut state: ResMut<SceneState>, asset_server: Res<AssetServer>) {
-    state.handle = asset_server.load("textures/church-ctf.2dtf");
+    // Roll the arena rotation the moment a match starts loading. `select_arena`
+    // owns the list and the wrap, so the loaded scene is always a validated arena.
+    let arena = select_arena(random::<usize>());
+    info!("Loading arena: {arena}");
+    state.handle = asset_server.load(arena);
 }
 
 pub fn load_sprites_from_scene(

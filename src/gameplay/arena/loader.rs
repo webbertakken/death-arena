@@ -1,27 +1,16 @@
-use crate::gameplay::arena::scene::Scene;
 use bevy::prelude::*;
 
-use rand::random;
-
-struct ArenaData {
-    path: String,
-}
-
+/// Marker for the arena root entity spawned for the current match.
 #[derive(Component)]
 pub struct Arena;
 
-pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let arenas = [ArenaData {
-        path: "textures/church-ctf.2dtf".to_string(),
-    }];
-
-    // Pick a random arena from the list
-    let arena_id = random::<usize>() % arenas.len();
-    let arena = &arenas[arena_id];
-
-    // Spawn the Arena
+/// Spawns the arena root marker when a match begins.
+///
+/// The arena scene itself, its sprites, colliders and flags, is chosen and loaded
+/// earlier, during [`crate::AppState::Loading`], by [`super::scene_loader::load`]
+/// (which rolls the rotation via [`super::selection::select_arena`]). This system
+/// only marks the arena root for the in-game world; it does not re-load the scene,
+/// so the choice the loader made is the one that plays.
+pub fn setup(mut commands: Commands) {
     commands.spawn((Arena, Name::new("Arena")));
-
-    // Load Scene for that Arena
-    let _scene: Handle<Scene> = asset_server.load(&arena.path);
 }

@@ -75,6 +75,29 @@ else
   done
 fi
 
+# --- 3. Arena rotation scene literals, resolved against assets/ ----------------
+#
+# The arena rotation (src/gameplay/arena/selection.rs) names its scene files as
+# plain string constants, not as .load("literal") calls: the loader picks one at
+# runtime with .load(select_arena(..)), a dynamic load class 1 cannot see. So scan
+# the source for every "*.2dtf" string literal and assert each ships in assets/,
+# keeping the rotation's arenas covered now that the path is a constant rather than
+# an inline load argument. Catches a typo or a removed arena file at build time
+# instead of as an empty arena on the live demo.
+
+if ((${#rust_sources[@]} > 0)); then
+  mapfile -t arena_paths < <(
+    rg --no-filename --no-line-number -o -r '$1' \
+      '"([^"]+\.2dtf)"' "${rust_sources[@]}" | sort -u
+  )
+  for path in "${arena_paths[@]}"; do
+    [[ -z "${path}" ]] && continue
+    if [[ ! -f "assets/${path}" ]]; then
+      missing+=("assets/${path}  (arena rotation scene literal \"${path}\")")
+    fi
+  done
+fi
+
 # --- Report -------------------------------------------------------------------
 
 if ((${#missing[@]} > 0)); then

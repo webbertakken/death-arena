@@ -12,6 +12,7 @@ mod loader;
 mod music;
 mod scene;
 mod scene_loader;
+mod selection;
 
 #[derive(Default)]
 pub struct ArenaPlugin;
