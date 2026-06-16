@@ -4,6 +4,7 @@ use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
 };
+use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
@@ -99,13 +100,18 @@ pub fn car_movement_system(
         wall_scrape_speed_multiplier(transform.translation.xy(), BOUNDS / 2.0);
     // A trailing team's chasers earn a small catch-up urge, just like the field.
     let comeback_multiplier = player_comeback_multiplier(captures.as_deref(), carrying_flag);
+    // A leading team's flag runner carries the front-runner's burden, just like the
+    // field, so its run home is weighed down the further its side leads.
+    let front_runner_multiplier =
+        player_front_runner_multiplier(captures.as_deref(), carrying_flag);
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
         * carry_fatigue_multiplier
         * draft_multiplier
         * wall_scrape_multiplier
-        * comeback_multiplier;
+        * comeback_multiplier
+        * front_runner_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -235,5 +241,16 @@ fn player_carry_fatigue_multiplier(
 fn player_comeback_multiplier(captures: Option<&CaptureScore>, carrying_flag: bool) -> f32 {
     captures.map_or(1.0, |score| {
         comeback_speed_multiplier(score.player, score.opponents, carrying_flag)
+    })
+}
+
+/// Front-runner's burden the human carrier carries while its side leads on
+/// captures, or `1.0` with no match in progress. The human is the player side, so
+/// its lead is the margin over the opponents' captures; only a flag carrier carries
+/// the burden, mirroring the field, so a leading side's chasers stay unhindered and
+/// the drag only ever weighs down a flag run home.
+fn player_front_runner_multiplier(captures: Option<&CaptureScore>, carrying_flag: bool) -> f32 {
+    captures.map_or(1.0, |score| {
+        front_runner_speed_multiplier(score.player, score.opponents, carrying_flag)
     })
 }

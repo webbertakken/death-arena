@@ -5,6 +5,7 @@ use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
     FlagTeam, MatchClock,
 };
+use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
@@ -404,17 +405,22 @@ fn car_speed_multiplier(
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
-/// The two per-car factors keyed on the capture standing and how the car sits in
-/// the round, folded together: the catch-up urge a trailing side earns, and the
-/// fatigue a carrier sheds for clinging to the flag. Read as a separate factor
-/// beside the per-car [`car_speed_multiplier`], mirroring the human.
+/// The three per-car factors keyed on the capture standing and how the car sits in
+/// the round, folded together: the catch-up urge a trailing side earns, the fatigue
+/// a carrier sheds for clinging to the flag, and the front-runner's burden a leading
+/// side's carrier carries. Read as a separate factor beside the per-car
+/// [`car_speed_multiplier`], mirroring the human.
 ///
 /// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
 /// can never speed a flag run home, mirroring the slipstream); a car level or
-/// ahead earns none. The fatigue does the opposite, biting only the *carrier* and
-/// scrubbing more pace the longer it holds the enemy flag, so a chasing pack is
-/// handed a widening window to run the carrier down. The carrier check is shared
-/// between the two, so exactly one of the pair can ever move a given car.
+/// ahead earns none. The other two bite the *carrier* alone: fatigue scrubs more
+/// pace the longer it holds the enemy flag, and the front-runner's burden (see
+/// [`front_runner_speed_multiplier`]) drags it back the further its team leads on
+/// captures, the anti-snowball mirror of the trailing side's catch-up. So a chaser
+/// is only ever urged on and a carrier only ever weighed down, never both: the
+/// catch-up and the carrier penalties move mutually exclusive cars, and a leading,
+/// tired carrier simply stacks the two carrier drags. Every one of the three can
+/// only help the chase, never speed a flag run home.
 fn team_standing_multiplier(
     team: AiTeam,
     captures: CaptureScore,
@@ -430,7 +436,8 @@ fn team_standing_multiplier(
     } else {
         1.0
     };
-    comeback * fatigue
+    let front_runner = front_runner_speed_multiplier(own, enemy, is_carrier);
+    comeback * fatigue * front_runner
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`
