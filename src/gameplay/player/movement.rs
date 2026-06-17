@@ -5,6 +5,7 @@ use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers, FlagTeam,
 };
+use crate::gameplay::flag_escort::flag_escort_speed_multiplier;
 use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
@@ -113,6 +114,10 @@ pub fn car_movement_system(
     // its flag is held, just like the field, so a long keep-away is squeezed harder.
     let chase_resolve_multiplier =
         player_chase_resolve_multiplier(&flag_query, carrying_flag, flag_carry_timers.as_deref());
+    // The human's side rallies its empty-handed cars to escort their own carrier home
+    // while one of them holds the enemy flag, just like the field, so a capture is
+    // shepherded in rather than running the gauntlet alone.
+    let flag_escort_multiplier = player_flag_escort_multiplier(&flag_query, carrying_flag);
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
@@ -122,7 +127,8 @@ pub fn car_movement_system(
         * comeback_multiplier
         * front_runner_multiplier
         * flag_rally_multiplier
-        * chase_resolve_multiplier;
+        * chase_resolve_multiplier
+        * flag_escort_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -276,6 +282,19 @@ fn player_flag_rally_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: boo
         .iter()
         .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
     flag_rally_speed_multiplier(own_flag_stolen, carrying_flag)
+}
+
+/// Escort urge the human earns while its side is hauling the enemy flag home, or
+/// `1.0` when no blue car holds it. The human is the player (blue) side, so the enemy
+/// flag is the red flag, held exactly when that flag has a holder (a flag is only ever
+/// carried by the opposing side); only an empty-handed car escorts, mirroring the
+/// field, so the carrier being shepherded earns none and the urge never speeds a flag
+/// run home.
+fn player_flag_escort_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: bool) -> f32 {
+    let we_hold_enemy_flag = flag_query
+        .iter()
+        .any(|flag| flag.team == FlagTeam::Red && flag.holder.is_some());
+    flag_escort_speed_multiplier(we_hold_enemy_flag, carrying_flag)
 }
 
 /// Chase resolve the human's empty-handed chasers build while its own flag is in

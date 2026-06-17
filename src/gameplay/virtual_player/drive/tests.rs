@@ -848,7 +848,74 @@ fn a_virtual_player_carrier_earns_no_rally_in_a_double_steal() {
     );
     assert!(
         (multiplier - 1.0).abs() <= f32::EPSILON,
-        "a double-steal carrier must earn no rally (nor any standing bonus): {multiplier}"
+        "a double-steal carrier must earn no rally (nor any standing bonus, escort included): \
+         {multiplier}"
+    );
+}
+
+#[test]
+fn a_held_enemy_flag_rallies_a_teams_escorts() {
+    // Red is level on captures with a fresh carry clock, so the only standing factor
+    // in play is the escort: an empty-handed red car whose team is hauling the enemy
+    // (blue) flag home finds the escort urge, while a team with no flag in flight does
+    // not. The carrier holding the blue flag is a separate red entity, so the measured
+    // car is empty-handed.
+    let escort = Entity::from_raw(1);
+    let carrier = Entity::from_raw(2);
+
+    let calm = team_standing_multiplier(
+        AiTeam::Red,
+        CaptureScore::default(),
+        escort,
+        &[
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            },
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+        ],
+        FlagCarryTimers::default(),
+    );
+    let escorting = team_standing_multiplier(
+        AiTeam::Red,
+        CaptureScore::default(),
+        escort,
+        &[
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            },
+            // The blue (enemy) flag carried home by a red teammate.
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::ZERO,
+                holder: Some(carrier),
+            },
+        ],
+        FlagCarryTimers::default(),
+    );
+
+    assert!(
+        (calm - 1.0).abs() <= f32::EPSILON,
+        "no flag in flight earns no escort: {calm}"
+    );
+    assert!(
+        (escorting - flag_escort_speed_multiplier(true, false)).abs() <= f32::EPSILON,
+        "a team hauling the enemy flag should rally an empty-handed escort: {escorting}"
+    );
+    assert!(
+        escorting > calm,
+        "the escort must speed the clearing car: calm={calm}, escorting={escorting}"
     );
 }
 

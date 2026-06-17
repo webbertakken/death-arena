@@ -6,6 +6,7 @@ use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
     FlagTeam, MatchClock,
 };
+use crate::gameplay::flag_escort::flag_escort_speed_multiplier;
 use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
@@ -412,12 +413,13 @@ fn car_speed_multiplier(
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
-/// The five per-car factors keyed on the capture standing and how the car sits in
+/// The six per-car factors keyed on the capture standing and how the car sits in
 /// the round, folded together: the catch-up urge a trailing side earns, the fatigue
 /// a carrier sheds for clinging to the flag, the front-runner's burden a leading
 /// side's carrier carries, the flag-recovery rally a side finds while its own flag
-/// is out, and the chase resolve that side's empty-handed cars build the longer the
-/// steal drags on. Read as a separate factor beside the per-car
+/// is out, the chase resolve that side's empty-handed cars build the longer the
+/// steal drags on, and the escort that urges a raiding side's empty-handed cars while
+/// one of them hauls the enemy flag home. Read as a separate factor beside the per-car
 /// [`car_speed_multiplier`], mirroring the human.
 ///
 /// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
@@ -426,17 +428,20 @@ fn car_speed_multiplier(
 /// *chasers* of a team whose own flag is in enemy hands, so a steal is run down
 /// rather than coasting home; both skip the carrier. The rally is a flat push the
 /// instant the flag goes out, the resolve (see [`chase_resolve_speed_multiplier`])
-/// the slow-building top-up that hardens with the carry. The other two bite the
-/// *carrier* alone: fatigue scrubs more pace the longer it holds the enemy flag,
-/// and the front-runner's burden (see [`front_runner_speed_multiplier`]) drags it
-/// back the further its team leads on captures, the anti-snowball mirror of the
-/// trailing side's catch-up. So a chaser is only ever urged on and a carrier only
-/// ever weighed down, never both: the catch-up, rally and resolve move empty-handed
-/// cars while the carrier penalties move the carrier, and a leading, tired carrier
-/// simply stacks the two carrier drags. The carrier's ramping fatigue and the pack's
-/// ramping resolve read the very same carry-frame count, so a long keep-away is
-/// squeezed from both ends at once. Every one of the five can only help the chase,
-/// never speed a flag run home.
+/// the slow-building top-up that hardens with the carry. The escort (see
+/// [`flag_escort_speed_multiplier`]) is the offensive mirror of the rally: it urges
+/// the *empty-handed* cars of a side that holds the enemy flag, so the carrier is
+/// shepherded home rather than running the gauntlet alone, and it too skips the
+/// carrier. The other two bite the *carrier* alone: fatigue scrubs more pace the
+/// longer it holds the enemy flag, and the front-runner's burden (see
+/// [`front_runner_speed_multiplier`]) drags it back the further its team leads on
+/// captures, the anti-snowball mirror of the trailing side's catch-up. So a chaser is
+/// only ever urged on and a carrier only ever weighed down, never both: the catch-up,
+/// rally, resolve and escort move empty-handed cars while the carrier penalties move
+/// the carrier, and a leading, tired carrier simply stacks the two carrier drags. The
+/// carrier's ramping fatigue and the pack's ramping resolve read the very same
+/// carry-frame count, so a long keep-away is squeezed from both ends at once. Every
+/// one of the six can only help the chase, never speed a flag run home.
 fn team_standing_multiplier(
     team: AiTeam,
     captures: CaptureScore,
@@ -467,7 +472,14 @@ fn team_standing_multiplier(
         is_carrier,
         carry_timers.frames_for(FlagTeam::from(team)),
     );
-    comeback * fatigue * front_runner * rally * chase_resolve
+    // The side rallies its empty-handed cars to escort their own carrier home while one
+    // of them holds the enemy flag (the enemy flag is only ever held by this side),
+    // mirroring the human, so a capture is shepherded in rather than running alone.
+    let we_hold_enemy_flag = flags
+        .iter()
+        .any(|flag| flag.team == team.enemy() && flag.holder.is_some());
+    let escort = flag_escort_speed_multiplier(we_hold_enemy_flag, is_carrier);
+    comeback * fatigue * front_runner * rally * chase_resolve * escort
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`

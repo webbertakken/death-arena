@@ -841,6 +841,71 @@ mod tests {
     }
 
     #[test]
+    fn a_held_enemy_flag_rallies_the_human_escort() {
+        use crate::gameplay::flag_escort::flag_escort_speed_multiplier;
+
+        // Control: no red (enemy) flag is in flight, so the human's empty-handed driver
+        // earns no escort and keeps its plain pace straight up.
+        let mut calm_app = setup_test_app();
+        let calm = spawn_player(&mut calm_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut calm_app, calm);
+        calm_app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(0.0, 1000.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(0.0, 1000.0, 0.0)),
+        ));
+        calm_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        calm_app.update();
+        let calm_y = calm_app.world.get::<Transform>(calm).unwrap().translation.y;
+
+        // Escorting: a blue teammate hauls the captured red flag home, so the human's
+        // empty-handed driver finds the escort urge and covers more ground on the same
+        // heading. The holder is any non-player entity, so the human is not the carrier
+        // and is urged to clear the path for the capture.
+        let mut escort_app = setup_test_app();
+        let escort = spawn_player(&mut escort_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut escort_app, escort);
+        let carrier = escort_app.world.spawn_empty().id();
+        escort_app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Red,
+                home: Vec2::new(0.0, 1000.0),
+                holder: Some(carrier),
+            },
+            Transform::from_translation(Vec3::new(500.0, 0.0, 0.0)),
+        ));
+        escort_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        escort_app.update();
+        let escort_y = escort_app
+            .world
+            .get::<Transform>(escort)
+            .unwrap()
+            .translation
+            .y;
+
+        let escort_mult = flag_escort_speed_multiplier(true, false);
+        assert!(
+            escort_mult > 1.0,
+            "the fixture must actually escort, got {escort_mult}"
+        );
+        assert!(escort_y > calm_y, "calm={calm_y}, escort={escort_y}");
+        assert!(
+            (escort_y - calm_y * escort_mult).abs() <= 1e-3,
+            "a human escorting a teammate's capture should drive at the escort multiplier: \
+             calm={calm_y}, escort={escort_y}, escort_mult={escort_mult}"
+        );
+    }
+
+    #[test]
     fn test_car_movement_backward() {
         let mut app = setup_test_app();
 
