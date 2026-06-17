@@ -705,4 +705,43 @@ mod tests {
             "aggregate corner commitment must be level: blue={blue_corner}, red={red_corner}"
         );
     }
+
+    #[test]
+    fn the_roster_preserves_the_chase_invariant_against_the_carry_tax() {
+        use crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER;
+
+        // The single balance promise the whole feel-modifier family rests on (see
+        // the module docs of slipstream, comeback, front_runner, carry_fatigue,
+        // flag_rally and chase_resolve): "even the slowest chaser outpaces the
+        // fastest carrier". Every carrier penalty only ever slows a carrier further
+        // and every chaser bonus only ever speeds a chaser further, so the worst
+        // case reduces to the flat carry tax alone against a bare base speed,
+        // holding the transient team effects (nitro, wreck surge) and the
+        // positional ones (draft, wall scrape) equal across both. That leaves a
+        // single relation over the roster's base speeds: the fastest driver, slowed
+        // to the carry tax while hauling a flag, must still be slower than the
+        // slowest driver chasing it empty-handed, so a flag run can always be run
+        // down.
+        //
+        // The roster speed-band assertions (`360..=480`) do NOT guarantee this: a
+        // driver at the `480` ceiling carrying a flag (`480 * 0.8 = 384`) would
+        // outrun one at the `360` floor. Only this direct check over the *actual*
+        // fielded speeds catches a future roster edit (a bumped top speed, a new
+        // slow archetype, or a carry tax nudged toward `1.0`) that would let a flag
+        // run outpace the field. The human mirrors the all-rounder, which the
+        // roster already fields, so iterating the roster covers the human too.
+        let speeds: Vec<f32> = spawn_roster()
+            .iter()
+            .map(|spawn| spawn.profile.movement_speed)
+            .collect();
+        let fastest = speeds.iter().copied().fold(f32::MIN, f32::max);
+        let slowest = speeds.iter().copied().fold(f32::MAX, f32::min);
+
+        let fastest_carrier = fastest * FLAG_CARRIER_SPEED_MULTIPLIER;
+        assert!(
+            fastest_carrier < slowest,
+            "the fastest carrier under the carry tax ({fastest_carrier}) must stay slower \
+             than the slowest chaser ({slowest}), or a flag run could outrun the field"
+        );
+    }
 }
