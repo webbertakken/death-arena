@@ -280,6 +280,9 @@ jobs:
       - name: Check effect-multiplier parity (human and field share the timed-effect stack)
         run: bash scripts/check_effect_multiplier_parity.sh
 
+      - name: Check pickup-effect parity (human and field reap the same pickup effects)
+        run: bash scripts/check_pickup_effect_parity.sh
+
       - name: Check match-over halt parity (every per-frame system stops when the match is won)
         run: bash scripts/check_match_over_halt_parity.sh
 

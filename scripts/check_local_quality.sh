@@ -18,6 +18,7 @@ bash scripts/check_temporary_fix_markers.sh
 bash scripts/check_duplicate_comment_blocks.sh
 bash scripts/check_speed_modifier_parity.sh
 bash scripts/check_effect_multiplier_parity.sh
+bash scripts/check_pickup_effect_parity.sh
 bash scripts/check_match_over_halt_parity.sh
 bash scripts/check_wreck_bounty_fold.sh
 bash scripts/check_wreck_bounty_breakdown.sh
