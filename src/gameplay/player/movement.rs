@@ -263,10 +263,12 @@ fn player_comeback_multiplier(captures: Option<&CaptureScore>, carrying_flag: bo
 /// captures, or `1.0` with no match in progress. The human is the player side, so
 /// its lead is the margin over the opponents' captures; only a flag carrier carries
 /// the burden, mirroring the field, so a leading side's chasers stay unhindered and
-/// the drag only ever weighs down a flag run home.
+/// the drag only ever weighs down a flag run home. The human has no driving
+/// personality, so it carries the burden on the neutral [`MIN_THROTTLE`] commitment
+/// the all-rounder corners on, keeping its weight at the unscaled baseline.
 fn player_front_runner_multiplier(captures: Option<&CaptureScore>, carrying_flag: bool) -> f32 {
     captures.map_or(1.0, |score| {
-        front_runner_speed_multiplier(score.player, score.opponents, carrying_flag)
+        front_runner_speed_multiplier(score.player, score.opponents, carrying_flag, MIN_THROTTLE)
     })
 }
 

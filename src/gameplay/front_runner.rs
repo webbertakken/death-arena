@@ -26,6 +26,7 @@
 //! carrier.
 
 use crate::gameplay::ctf::CAPTURES_TO_WIN;
+use crate::gameplay::virtual_player::ai::MIN_THROTTLE;
 
 /// Largest fraction of its speed a fully-ahead team's carrier sheds to the burden.
 ///
@@ -53,36 +54,114 @@ const _: () =
 /// and the penalty ramps rather than snapping straight to full.
 const _: () = assert!(CAPTURES_TO_WIN > 1);
 
+/// How far a driver's front-runner burden flexes per unit of cornering commitment
+/// away from the neutral [`MIN_THROTTLE`] baseline.
+///
+/// The carrier-side mirror of the catch-up's commitment scaling
+/// ([`crate::gameplay::comeback::comeback_speed_multiplier`]): a keener driver (a
+/// higher [`crate::gameplay::virtual_player::VirtualPlayer::corner_throttle`]) sheds
+/// *less* of the burden, staying on the gas to barrel its lead home, while a
+/// disciplined one eases off and yields more of its pace to the weight. So a keen
+/// driver is faster everywhere it commits: clawing a deficit back harder
+/// (catch-up), squeezing a tighter line home ([`crate::gameplay::virtual_player::ai`]'s
+/// `carrier_juke_offset`), nosing a kill deeper (`pursuit_arrive_radius`), and now
+/// shrugging off the front-runner's weight. Centred on [`MIN_THROTTLE`], so the
+/// all-rounder and the human keep the exact original uniform burden.
+const FRONT_RUNNER_COMMITMENT_SCALE_GAIN: f32 = 1.5;
+
+/// Floor on the commitment-driven burden scale: a safety net so a degenerate or
+/// extreme-keen `corner_throttle` can never lighten the burden to nothing (or invert
+/// it). The keenest asserted roster commitment (`0.5`) maps exactly to this floor,
+/// and the rest of the roster sits inside it, so the clamp only ever guards a
+/// throttle past the whole roster, never a real driver's personality.
+const FRONT_RUNNER_COMMITMENT_SCALE_MIN: f32 = 0.7;
+
+/// Ceiling on the commitment-driven burden scale: the disciplined counterpart to the
+/// floor, so a degenerate or extreme-disciplined `corner_throttle` deepens the burden
+/// no further than this. Pitched a notch below the catch-up's `1.3` ceiling because
+/// the front-runner burden stacks on the flat carry tax and full carrier fatigue (see
+/// the integrity-floor assert below), so its deepest scaled bite is bound by that
+/// floor rather than by headroom to a slipstream tow. The most-disciplined asserted
+/// roster commitment (`0.15`) maps strictly inside this ceiling, so the clamp only
+/// ever guards a throttle past the whole roster.
+const FRONT_RUNNER_COMMITMENT_SCALE_MAX: f32 = 1.25;
+
+/// The burden scale is centred on the baseline driver (scale `1.0`, the original
+/// uniform burden) and never inverts commitment: a keener driver always sheds no
+/// more of the burden than a more disciplined one. Enforced at compile time.
+const _: () =
+    assert!(FRONT_RUNNER_COMMITMENT_SCALE_MIN < 1.0 && FRONT_RUNNER_COMMITMENT_SCALE_MAX > 1.0);
+
+/// Commitment must genuinely lighten the burden for a keener driver, never deepen or
+/// flatten it, enforced at compile time.
+const _: () = assert!(FRONT_RUNNER_COMMITMENT_SCALE_GAIN > 0.0);
+
+/// Scales a driver's front-runner burden by its cornering commitment.
+///
+/// A driver cornering on the neutral [`MIN_THROTTLE`] floor scales by exactly `1.0`,
+/// so the all-rounder baseline and the human's mirror keep the original uniform
+/// burden untouched. A keener driver (a higher `corner_throttle`) scales down toward
+/// [`FRONT_RUNNER_COMMITMENT_SCALE_MIN`] (a lighter burden); a disciplined one up
+/// toward [`FRONT_RUNNER_COMMITMENT_SCALE_MAX`] (a heavier one). The affine map is
+/// clamped to the [[`FRONT_RUNNER_COMMITMENT_SCALE_MIN`],
+/// [`FRONT_RUNNER_COMMITMENT_SCALE_MAX`]] band as a safety net for a degenerate
+/// throttle. The exact mirror of
+/// [`crate::gameplay::comeback::comeback_speed_multiplier`]'s scaling, only flipped:
+/// where commitment *grows* the catch-up bonus it *shrinks* the front-runner penalty,
+/// so a keen driver ends up faster either way.
+#[must_use]
+fn front_runner_commitment_scale(corner_throttle: f32) -> f32 {
+    let ease = (corner_throttle - MIN_THROTTLE) * FRONT_RUNNER_COMMITMENT_SCALE_GAIN;
+    (1.0 - ease).clamp(
+        FRONT_RUNNER_COMMITMENT_SCALE_MIN,
+        FRONT_RUNNER_COMMITMENT_SCALE_MAX,
+    )
+}
+
 /// A fully-burdened carrier on an otherwise sound engine must still out-roll a
 /// near-wrecked one limping on minimum integrity, enforced at compile time. The
 /// burden layers on top of the flat carry tax
 /// ([`crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER`]) and full carrier
 /// fatigue ([`crate::gameplay::carry_fatigue::CARRY_FATIGUE_MAX_SPEED_PENALTY`]),
-/// and even with all three stacked the carrier must out-pace
+/// and even with all three stacked, and even for the most disciplined driver whose
+/// commitment scales the burden to its deepest
+/// ([`FRONT_RUNNER_COMMITMENT_SCALE_MAX`]), the carrier must out-pace
 /// [`crate::gameplay::combat::MIN_INTEGRITY_SPEED_MULTIPLIER`], so the worst a
 /// leading, tired carry can cost still never tips below a battered engine and the
-/// speed-penalty ordering stays coherent.
+/// speed-penalty ordering stays coherent. This deepest-scaled bound is what pins the
+/// commitment ceiling below the catch-up's.
 const _: () = assert!(
     crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER
         * (1.0 - crate::gameplay::carry_fatigue::CARRY_FATIGUE_MAX_SPEED_PENALTY)
-        * (1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY)
+        * (1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY * FRONT_RUNNER_COMMITMENT_SCALE_MAX)
         > crate::gameplay::combat::MIN_INTEGRITY_SPEED_MULTIPLIER
 );
 
-/// Speed multiplier a flag carrier suffers from its team leading on captures.
+/// Speed multiplier a flag carrier suffers from its team leading on captures, scaled
+/// by the driver's cornering commitment `corner_throttle`.
 ///
 /// Returns `1.0` (no burden) when the team is level or behind, or when the car is
 /// not a flag carrier (the burden is for the flag run, never for the chasers). When
-/// a carrier's team leads, the penalty scales linearly with the lead: a part of
-/// [`FRONT_RUNNER_MAX_SPEED_PENALTY`] one capture up, building to the full penalty
-/// at the largest lead a live match can hold ([`CAPTURES_TO_WIN`] `- 1`, since a
-/// team reaching [`CAPTURES_TO_WIN`] ends the match). A lead beyond that band is
-/// clamped, so the result is always in `1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY ..= 1.0`.
+/// a carrier's team leads, the penalty scales linearly with the lead: a part of the
+/// commitment-scaled cap one capture up, building to the full scaled penalty at the
+/// largest lead a live match can hold ([`CAPTURES_TO_WIN`] `- 1`, since a team
+/// reaching [`CAPTURES_TO_WIN`] ends the match). A lead beyond that band is clamped.
+///
+/// The cap itself is scaled by the driver's commitment (see
+/// [`front_runner_commitment_scale`]): a driver on the neutral [`MIN_THROTTLE`] floor
+/// sheds exactly [`FRONT_RUNNER_MAX_SPEED_PENALTY`], so the all-rounder baseline and
+/// the human's mirror (which pass `MIN_THROTTLE`) keep the original uniform burden; a
+/// keener driver sheds less of it (barrels its lead home), a disciplined one more. The
+/// scaled cap stays shallow enough that even the most disciplined, tired, leading
+/// carry out-rolls a near-wrecked engine (compile-asserted above), so the result is
+/// always in
+/// `1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY * FRONT_RUNNER_COMMITMENT_SCALE_MAX ..= 1.0`.
 #[must_use]
 pub fn front_runner_speed_multiplier(
     own_captures: u32,
     enemy_captures: u32,
     carrying_flag: bool,
+    corner_throttle: f32,
 ) -> f32 {
     if !carrying_flag {
         return 1.0;
@@ -94,7 +173,8 @@ pub fn front_runner_speed_multiplier(
         return 1.0;
     }
     let fraction = captures_to_f32(steps) / captures_to_f32(CAPTURES_TO_WIN - 1);
-    FRONT_RUNNER_MAX_SPEED_PENALTY.mul_add(-fraction, 1.0)
+    let penalty = FRONT_RUNNER_MAX_SPEED_PENALTY * front_runner_commitment_scale(corner_throttle);
+    penalty.mul_add(-fraction, 1.0)
 }
 
 /// Losslessly widens a tiny capture count to `f32` for the lead ramp.
@@ -110,6 +190,13 @@ fn captures_to_f32(value: u32) -> f32 {
 mod tests {
     use super::*;
 
+    /// A keen, reckless driver and a disciplined one, both well inside the asserted
+    /// roster commitment band (`0.15..=0.5`), so the tests read the real scaling
+    /// without coupling to the private roster profiles. The baseline is
+    /// [`MIN_THROTTLE`], the neutral throttle the all-rounder and the human mirror.
+    const KEEN_THROTTLE: f32 = 0.45;
+    const DISCIPLINED_THROTTLE: f32 = 0.2;
+
     fn assert_near(actual: f32, expected: f32) {
         assert!(
             (actual - expected).abs() <= f32::EPSILON,
@@ -119,17 +206,17 @@ mod tests {
 
     #[test]
     fn a_level_team_carries_no_burden() {
-        assert_near(front_runner_speed_multiplier(1, 1, true), 1.0);
+        assert_near(front_runner_speed_multiplier(1, 1, true, MIN_THROTTLE), 1.0);
     }
 
     #[test]
     fn a_trailing_team_carries_no_burden() {
-        assert_near(front_runner_speed_multiplier(0, 2, true), 1.0);
+        assert_near(front_runner_speed_multiplier(0, 2, true, MIN_THROTTLE), 1.0);
     }
 
     #[test]
     fn a_leading_carrier_is_weighed_down() {
-        let multiplier = front_runner_speed_multiplier(1, 0, true);
+        let multiplier = front_runner_speed_multiplier(1, 0, true, MIN_THROTTLE);
         assert!(
             (1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY..1.0).contains(&multiplier),
             "expected a capped burden, got {multiplier}"
@@ -138,8 +225,8 @@ mod tests {
 
     #[test]
     fn the_burden_strengthens_with_the_lead() {
-        let one_up = front_runner_speed_multiplier(1, 0, true);
-        let two_up = front_runner_speed_multiplier(2, 0, true);
+        let one_up = front_runner_speed_multiplier(1, 0, true, MIN_THROTTLE);
+        let two_up = front_runner_speed_multiplier(2, 0, true, MIN_THROTTLE);
         assert!(
             two_up < one_up,
             "a larger lead should weigh heavier: two_up={two_up}, one_up={one_up}"
@@ -148,22 +235,23 @@ mod tests {
 
     #[test]
     fn the_largest_live_lead_reaches_the_full_penalty() {
-        let full = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true);
+        let full = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, MIN_THROTTLE);
         assert_near(full, 1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY);
     }
 
     #[test]
     fn a_lead_beyond_the_band_is_capped() {
-        let capped = front_runner_speed_multiplier(CAPTURES_TO_WIN + 5, 0, true);
+        let capped = front_runner_speed_multiplier(CAPTURES_TO_WIN + 5, 0, true, MIN_THROTTLE);
         assert_near(capped, 1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY);
     }
 
     #[test]
     fn a_non_carrier_never_carries_the_burden() {
-        // Even at the largest lead, a chaser drives unhindered: the burden falls
-        // only on the flag run, the mirror of the catch-up sparing a carrier.
+        // Even at the largest lead, and even a keen driver, a chaser drives unhindered:
+        // the burden falls only on the flag run, the mirror of the catch-up sparing a
+        // carrier.
         assert_near(
-            front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, false),
+            front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, false, KEEN_THROTTLE),
             1.0,
         );
     }
@@ -173,10 +261,63 @@ mod tests {
         // One capture up must be a genuine part penalty, strictly between nothing
         // and the full cap, so the weight builds with the lead rather than snapping
         // straight to its top rate the instant a team edges ahead.
-        let one_up = front_runner_speed_multiplier(1, 0, true);
+        let one_up = front_runner_speed_multiplier(1, 0, true, MIN_THROTTLE);
         assert!(
             one_up > 1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY && one_up < 1.0,
             "one capture up should be a part penalty, got {one_up}"
         );
     }
+
+    #[test]
+    fn the_baseline_driver_keeps_the_original_uniform_burden() {
+        // The all-rounder and the human corner on the neutral MIN_THROTTLE floor, so
+        // they keep the exact pre-personality burden: the full lead sheds the unscaled
+        // cap, never a notch more or less.
+        let full = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, MIN_THROTTLE);
+        assert_near(full, 1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY);
+    }
+
+    #[test]
+    fn the_commitment_scale_is_neutral_at_the_baseline_throttle() {
+        // The all-rounder (and the human that mirrors it) corner on MIN_THROTTLE, so
+        // the scale is exactly 1.0 there and the baseline burden is untouched.
+        assert_near(front_runner_commitment_scale(MIN_THROTTLE), 1.0);
+    }
+
+    #[test]
+    fn a_keener_driver_sheds_less_burden_than_the_baseline() {
+        // The personality lever: at the same lead a keener, gas-committed driver sheds
+        // a lighter burden than the neutral baseline (a higher multiplier = faster), so
+        // it barrels its lead home rather than easing off, yet still carries a real
+        // weight (below 1.0).
+        let baseline = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, MIN_THROTTLE);
+        let keen = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, KEEN_THROTTLE);
+        assert!(
+            keen > baseline && keen < 1.0,
+            "a keener driver should shed a lighter, but still real, burden: \
+             keen={keen}, baseline={baseline}"
+        );
+    }
+
+    #[test]
+    fn a_disciplined_driver_sheds_more_burden_than_the_baseline() {
+        // The mirror of the keen case: a disciplined driver yields more of its pace to
+        // the weight (a lower multiplier = slower) than the neutral baseline, yet never
+        // so much that it tips below the deepest scaled bound the integrity floor pins.
+        let baseline = front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, MIN_THROTTLE);
+        let disciplined =
+            front_runner_speed_multiplier(CAPTURES_TO_WIN - 1, 0, true, DISCIPLINED_THROTTLE);
+        let deepest_scaled_floor =
+            FRONT_RUNNER_MAX_SPEED_PENALTY.mul_add(-FRONT_RUNNER_COMMITMENT_SCALE_MAX, 1.0);
+        assert!(
+            disciplined < baseline && disciplined >= deepest_scaled_floor,
+            "a disciplined driver should yield a heavier burden, capped by the integrity \
+             floor: disciplined={disciplined}, baseline={baseline}"
+        );
+    }
+
+    // The invariant "even the deepest scaled, tired, leading carry out-rolls a
+    // near-wrecked engine" is enforced at compile time by the integrity-floor
+    // `const _: () = assert!(..)` block above, so a runtime test would only assert a
+    // constant clippy already proves.
 }

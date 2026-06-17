@@ -465,7 +465,10 @@ fn team_standing_multiplier(
     } else {
         1.0
     };
-    let front_runner = front_runner_speed_multiplier(own, enemy, is_carrier);
+    // A keener (more gas-committed) driver sheds less of the front-runner burden, a
+    // disciplined one more; the neutral all-rounder, like the human, scales by exactly
+    // 1.0, so its burden is unchanged. The carrier-side mirror of the catch-up scaling.
+    let front_runner = front_runner_speed_multiplier(own, enemy, is_carrier, ai.corner_throttle);
     // The side rallies its empty-handed cars while its own flag is in enemy hands,
     // mirroring the human, so a steal is chased down rather than coasting to capture.
     let own_flag_stolen = flags
