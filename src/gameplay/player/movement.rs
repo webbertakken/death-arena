@@ -291,12 +291,14 @@ fn player_flag_rally_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: boo
 /// flag is the red flag, held exactly when that flag has a holder (a flag is only ever
 /// carried by the opposing side); only an empty-handed car escorts, mirroring the
 /// field, so the carrier being shepherded earns none and the urge never speeds a flag
-/// run home.
+/// run home. The human has no driving personality, so it presses the escort on the
+/// neutral [`MIN_THROTTLE`] commitment the all-rounder corners on, keeping its urge at
+/// the unscaled baseline.
 fn player_flag_escort_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: bool) -> f32 {
     let we_hold_enemy_flag = flag_query
         .iter()
         .any(|flag| flag.team == FlagTeam::Red && flag.holder.is_some());
-    flag_escort_speed_multiplier(we_hold_enemy_flag, carrying_flag)
+    flag_escort_speed_multiplier(we_hold_enemy_flag, carrying_flag, MIN_THROTTLE)
 }
 
 /// Chase resolve the human's empty-handed chasers build while its own flag is in

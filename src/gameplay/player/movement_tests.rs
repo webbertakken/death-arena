@@ -896,7 +896,11 @@ mod tests {
             .translation
             .y;
 
-        let escort_mult = flag_escort_speed_multiplier(true, false);
+        let escort_mult = flag_escort_speed_multiplier(
+            true,
+            false,
+            crate::gameplay::virtual_player::ai::MIN_THROTTLE,
+        );
         assert!(
             escort_mult > 1.0,
             "the fixture must actually escort, got {escort_mult}"

@@ -928,7 +928,7 @@ fn a_held_enemy_flag_rallies_a_teams_escorts() {
         "no flag in flight earns no escort: {calm}"
     );
     assert!(
-        (escorting - flag_escort_speed_multiplier(true, false)).abs() <= f32::EPSILON,
+        (escorting - flag_escort_speed_multiplier(true, false, MIN_THROTTLE)).abs() <= f32::EPSILON,
         "a team hauling the enemy flag should rally an empty-handed escort: {escorting}"
     );
     assert!(

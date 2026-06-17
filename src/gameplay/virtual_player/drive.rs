@@ -494,7 +494,11 @@ fn team_standing_multiplier(
     let we_hold_enemy_flag = flags
         .iter()
         .any(|flag| flag.team == team.enemy() && flag.holder.is_some());
-    let escort = flag_escort_speed_multiplier(we_hold_enemy_flag, is_carrier);
+    // A keener (more gas-committed) driver shepherds the carrier home harder, a
+    // disciplined one more gently; the neutral all-rounder, like the human, scales by
+    // exactly 1.0, so its escort is unchanged. The flag-carry mirror of the rally
+    // scaling above.
+    let escort = flag_escort_speed_multiplier(we_hold_enemy_flag, is_carrier, ai.corner_throttle);
     // On top of the flat escort, the pack's resolve hardens with the very frames the
     // carrier tires over (this side's enemy-flag carry count, the same count the
     // carrier fatigue above reads), mirroring the human, so a long contested run home
