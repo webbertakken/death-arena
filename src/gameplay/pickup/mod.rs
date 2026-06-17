@@ -288,6 +288,14 @@ impl Score {
     pub const fn bank_comeback_capture_bonus(&mut self, bonus: u32) {
         self.cash += bonus;
     }
+
+    /// Bank a comeback flag-event bonus: the anti-snowball cash a team behind on
+    /// captures pockets for an enemy-flag steal or home-flag return that builds
+    /// toward the answer. Pure cash on top of the flat steal or return bounty, so
+    /// it leaves the play tallies untouched.
+    pub const fn bank_comeback_flag_event_bonus(&mut self, bonus: u32) {
+        self.cash += bonus;
+    }
 }
 
 /// Running tally of pickups stolen by virtual opponents.
@@ -348,6 +356,14 @@ impl OpponentScore {
     /// pockets for clawing one back. Pure cash on top of the capture bounty, so
     /// it leaves the play tallies untouched.
     pub const fn bank_comeback_capture_bonus(&mut self, bonus: u32) {
+        self.cash += bonus;
+    }
+
+    /// Bank a comeback flag-event bonus: the anti-snowball cash a team behind on
+    /// captures pockets for an enemy-flag steal or home-flag return that builds
+    /// toward the answer. Pure cash on top of the flat steal or return bounty, so
+    /// it leaves the play tallies untouched.
+    pub const fn bank_comeback_flag_event_bonus(&mut self, bonus: u32) {
         self.cash += bonus;
     }
 }

@@ -51,6 +51,42 @@ const _: () = assert!(COMEBACK_CAPTURE_BONUS_PER_DEFICIT > 0);
 const _: () = assert!(CAPTURES_TO_WIN > 1);
 const _: () =
     assert!(COMEBACK_CAPTURE_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1) < CAPTURE_CASH_BOUNTY);
+/// Cash a team behind on captures banks per capture of deficit for a flag steal or
+/// return it lands while trailing, on top of the flat [`FLAG_STEAL_CASH_BOUNTY`] or
+/// [`FLAG_RETURN_CASH_BOUNTY`].
+///
+/// The intermediate-objective companion to [`COMEBACK_CAPTURE_BONUS_PER_DEFICIT`]:
+/// where that pays a trailing side for answering on the capture itself, this pays it
+/// for the steps that lead there, lifting the enemy flag off its base and clawing its
+/// own flag back, so a behind team's fightback is funded even on the frames it makes
+/// ground without yet completing a capture. Like the capture comeback it is an
+/// anti-snowball lever keyed on the capture standing, the same axis the most-wanted
+/// wreck bounty and the speed-side catch-up ([`crate::gameplay::comeback`]) answer.
+/// Priced per capture of deficit so a deeper hole pays more, and pinned (see the
+/// compile asserts below) below the capture comeback per deficit and far enough
+/// below a capture's own bounty that a comeback steal or return can never out-earn
+/// taking a flag.
+pub const COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT: u32 = 50;
+/// A comeback steal/return bonus must be a real payday, not a token, enforced at
+/// compile time.
+const _: () = assert!(COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT > 0);
+/// Answering on the marquee capture must out-reward an intermediate steal or return
+/// per capture of deficit, enforced at compile time, so the comeback economy still
+/// points hardest at the objective that takes the round.
+const _: () = assert!(COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT < COMEBACK_CAPTURE_BONUS_PER_DEFICIT);
+/// A comeback steal, even from the deepest live deficit, must never out-earn taking
+/// a flag, enforced at compile time, so the intermediate reward never eclipses the
+/// objective it builds toward.
+const _: () = assert!(
+    FLAG_STEAL_CASH_BOUNTY + COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1)
+        < CAPTURE_CASH_BOUNTY
+);
+/// A comeback return, even from the deepest live deficit, must never out-earn taking
+/// a flag, enforced at compile time.
+const _: () = assert!(
+    FLAG_RETURN_CASH_BOUNTY + COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1)
+        < CAPTURE_CASH_BOUNTY
+);
 /// Cash the winning team banks the instant a match resolves in its favour.
 ///
 /// The Death Rally payday that closes the round: every in-match bounty grinds
@@ -469,6 +505,7 @@ pub fn capture_the_flag_system(
     award_flag_steal_bounties(
         previous_steals,
         *steals,
+        *score,
         &mut player_economy,
         &mut opponent_economy,
     );
@@ -477,6 +514,7 @@ pub fn capture_the_flag_system(
     award_flag_return_bounties(
         previous_returns,
         *returns,
+        *score,
         &mut player_economy,
         &mut opponent_economy,
     );

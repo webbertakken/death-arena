@@ -14,7 +14,8 @@
 
 use super::{
     CaptureScore, FlagReturnScore, FlagStealScore, CAPTURES_TO_WIN, CAPTURE_CASH_BOUNTY,
-    COMEBACK_CAPTURE_BONUS_PER_DEFICIT, FLAG_RETURN_CASH_BOUNTY, FLAG_STEAL_CASH_BOUNTY,
+    COMEBACK_CAPTURE_BONUS_PER_DEFICIT, COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT,
+    FLAG_RETURN_CASH_BOUNTY, FLAG_STEAL_CASH_BOUNTY,
 };
 use crate::gameplay::pickup::{NitroBoosts, OpponentScore, Score};
 
@@ -70,6 +71,7 @@ const fn comeback_capture_bonus(previous_own: u32, previous_enemy: u32, current_
 pub(super) const fn award_flag_steal_bounties(
     previous: FlagStealScore,
     current: FlagStealScore,
+    captures: CaptureScore,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
@@ -77,15 +79,57 @@ pub(super) const fn award_flag_steal_bounties(
         current.player.saturating_sub(previous.player),
         FLAG_STEAL_CASH_BOUNTY,
     );
+    player_economy.bank_comeback_flag_event_bonus(comeback_flag_event_bonus(
+        previous.player,
+        current.player,
+        captures.player,
+        captures.opponents,
+    ));
     opponent_economy.bank_flag_steal_bonus(
         current.opponents.saturating_sub(previous.opponents),
         FLAG_STEAL_CASH_BOUNTY,
     );
+    opponent_economy.bank_comeback_flag_event_bonus(comeback_flag_event_bonus(
+        previous.opponents,
+        current.opponents,
+        captures.opponents,
+        captures.player,
+    ));
+}
+
+/// Cash a team banks for a flag steal or return landed while behind on captures,
+/// given its event tally `previous_own_events`/`current_own_events` for the frame
+/// and the capture standing (`own_captures`, `enemy_captures`).
+///
+/// Pays [`COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT`] for every capture the team trails
+/// by, capped at the deepest deficit a live match can hold ([`CAPTURES_TO_WIN`]
+/// `- 1`). A team level or ahead on captures earns nothing, and a frame in which the
+/// team landed no fresh steal or return earns nothing. The capture standing is the
+/// same anti-snowball axis [`comeback_capture_bonus`] keys on, so the two comeback
+/// levers read a behind team the same way.
+const fn comeback_flag_event_bonus(
+    previous_own_events: u32,
+    current_own_events: u32,
+    own_captures: u32,
+    enemy_captures: u32,
+) -> u32 {
+    if current_own_events <= previous_own_events {
+        return 0;
+    }
+    let deficit = enemy_captures.saturating_sub(own_captures);
+    let max_deficit = CAPTURES_TO_WIN - 1;
+    let steps = if deficit < max_deficit {
+        deficit
+    } else {
+        max_deficit
+    };
+    COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT * steps
 }
 
 pub(super) const fn award_flag_return_bounties(
     previous: FlagReturnScore,
     current: FlagReturnScore,
+    captures: CaptureScore,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
@@ -93,10 +137,22 @@ pub(super) const fn award_flag_return_bounties(
         current.player.saturating_sub(previous.player),
         FLAG_RETURN_CASH_BOUNTY,
     );
+    player_economy.bank_comeback_flag_event_bonus(comeback_flag_event_bonus(
+        previous.player,
+        current.player,
+        captures.player,
+        captures.opponents,
+    ));
     opponent_economy.bank_flag_return_bonus(
         current.opponents.saturating_sub(previous.opponents),
         FLAG_RETURN_CASH_BOUNTY,
     );
+    opponent_economy.bank_comeback_flag_event_bonus(comeback_flag_event_bonus(
+        previous.opponents,
+        current.opponents,
+        captures.opponents,
+        captures.player,
+    ));
 }
 
 pub(super) const fn award_capture_momentum_boosts(
@@ -312,6 +368,14 @@ mod tests {
         assert_eq!(opponent_economy.collected, 0);
     }
 
+    /// A level capture standing, so a steal or return fixture pays only its flat
+    /// bounty and keeps the comeback flag-event lever out (that lever has its own
+    /// tests), mirroring the level fixture the capture-bounty test uses.
+    const LEVEL_CAPTURES: CaptureScore = CaptureScore {
+        player: 1,
+        opponents: 1,
+    };
+
     #[test]
     fn flag_steal_bounty_rewards_only_new_steals() {
         let mut player_economy = Score::default();
@@ -326,6 +390,7 @@ mod tests {
                 player: 2,
                 opponents: 1,
             },
+            LEVEL_CAPTURES,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -350,6 +415,7 @@ mod tests {
                 player: 2,
                 opponents: 1,
             },
+            LEVEL_CAPTURES,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -358,6 +424,158 @@ mod tests {
         assert_eq!(player_economy.returns, 1);
         assert_eq!(opponent_economy.cash, FLAG_RETURN_CASH_BOUNTY);
         assert_eq!(opponent_economy.returns, 1);
+    }
+
+    #[test]
+    fn a_behind_team_banks_a_comeback_bonus_on_top_of_a_steal() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Player trails 0-1 on captures and lifts the enemy flag: the fresh steal
+        // pays its flat bounty plus a one-step comeback bonus for fighting back
+        // from one capture down.
+        award_flag_steal_bounties(
+            FlagStealScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagStealScore {
+                player: 1,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 1,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            FLAG_STEAL_CASH_BOUNTY + COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT
+        );
+        assert_eq!(player_economy.steals, 1);
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_behind_team_banks_a_comeback_bonus_on_top_of_a_return() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // Player trails 0-2 on captures and recovers its own flag: the fresh return
+        // pays its flat bounty plus a two-step comeback bonus for the deeper hole.
+        award_flag_return_bounties(
+            FlagReturnScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagReturnScore {
+                player: 1,
+                opponents: 0,
+            },
+            CaptureScore {
+                player: 0,
+                opponents: 2,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            FLAG_RETURN_CASH_BOUNTY + 2 * COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT
+        );
+        assert_eq!(player_economy.returns, 1);
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_level_or_leading_team_banks_no_comeback_flag_event_bonus() {
+        // Level on captures: no deficit, so a steal pays only its flat bounty.
+        assert_eq!(comeback_flag_event_bonus(0, 1, 1, 1), 0);
+        // Ahead on captures: a leading team's steal earns no comeback either.
+        assert_eq!(comeback_flag_event_bonus(0, 1, 2, 1), 0);
+    }
+
+    #[test]
+    fn the_comeback_flag_event_bonus_scales_with_the_deficit() {
+        // Clawing from two down pays more than from one down.
+        let one_down = comeback_flag_event_bonus(0, 1, 0, 1);
+        let two_down = comeback_flag_event_bonus(0, 1, 0, 2);
+        assert!(
+            two_down > one_down,
+            "a deeper hole should pay more: two_down={two_down}, one_down={one_down}"
+        );
+        assert_eq!(one_down, COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT);
+        assert_eq!(two_down, 2 * COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT);
+    }
+
+    #[test]
+    fn the_comeback_flag_event_bonus_is_capped_at_the_deepest_live_deficit() {
+        // A deficit beyond the largest a live match can hold is clamped.
+        let capped = comeback_flag_event_bonus(0, 1, 0, CAPTURES_TO_WIN + 5);
+        assert_eq!(
+            capped,
+            COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT * (CAPTURES_TO_WIN - 1)
+        );
+    }
+
+    #[test]
+    fn the_comeback_flag_event_bonus_needs_a_fresh_event() {
+        // No steal/return this frame (tally unchanged) pays nothing however deep the
+        // deficit.
+        assert_eq!(comeback_flag_event_bonus(1, 1, 0, 2), 0);
+    }
+
+    #[test]
+    fn a_comeback_steal_or_return_never_out_earns_taking_a_flag() {
+        // Even the deepest comeback bonus stacked on the flat bounty stays below a
+        // capture's own bounty, so an intermediate event never out-earns a capture.
+        let deepest = comeback_flag_event_bonus(0, 1, 0, CAPTURES_TO_WIN - 1);
+        assert!(
+            FLAG_STEAL_CASH_BOUNTY + deepest < CAPTURE_CASH_BOUNTY,
+            "a comeback steal ({}) must stay below the capture bounty {CAPTURE_CASH_BOUNTY}",
+            FLAG_STEAL_CASH_BOUNTY + deepest
+        );
+        assert!(
+            FLAG_RETURN_CASH_BOUNTY + deepest < CAPTURE_CASH_BOUNTY,
+            "a comeback return ({}) must stay below the capture bounty {CAPTURE_CASH_BOUNTY}",
+            FLAG_RETURN_CASH_BOUNTY + deepest
+        );
+    }
+
+    #[test]
+    fn an_opponent_steal_from_behind_routes_its_comeback_to_the_opponent_economy() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // The opponent (red) trails 0-1 and steals: its comeback rides on the
+        // opponent economy alone, never the player's.
+        award_flag_steal_bounties(
+            FlagStealScore {
+                player: 0,
+                opponents: 0,
+            },
+            FlagStealScore {
+                player: 0,
+                opponents: 1,
+            },
+            CaptureScore {
+                player: 1,
+                opponents: 0,
+            },
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(player_economy.cash, 0);
+        assert_eq!(
+            opponent_economy.cash,
+            FLAG_STEAL_CASH_BOUNTY + COMEBACK_FLAG_EVENT_BONUS_PER_DEFICIT
+        );
+        assert_eq!(opponent_economy.steals, 1);
     }
 
     #[test]
