@@ -738,6 +738,7 @@ mod tests {
     #[test]
     fn a_stolen_flag_rallies_the_human() {
         use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
+        use crate::gameplay::virtual_player::ai::MIN_THROTTLE;
 
         // Control: the human's blue flag sits safe at home (no holder), so its
         // empty-handed driver earns no rally and keeps its plain pace straight up.
@@ -787,7 +788,7 @@ mod tests {
             .translation
             .y;
 
-        let rally = flag_rally_speed_multiplier(true, false);
+        let rally = flag_rally_speed_multiplier(true, false, MIN_THROTTLE);
         assert!(rally > 1.0, "the fixture must actually rally, got {rally}");
         assert!(stolen_y > safe_y, "safe={safe_y}, stolen={stolen_y}");
         assert!(

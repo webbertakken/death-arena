@@ -276,12 +276,14 @@ fn player_front_runner_multiplier(captures: Option<&CaptureScore>, carrying_flag
 /// `1.0` when its flag is safe. The human is the player (blue) side, so its flag is
 /// the blue flag, stolen exactly when that flag has a holder; only an empty-handed
 /// car rallies, mirroring the field, so a double-steal carrier earns none and the
-/// urge never speeds a flag run home.
+/// urge never speeds a flag run home. The human has no driving personality, so it
+/// presses the rally on the neutral [`MIN_THROTTLE`] commitment the all-rounder
+/// corners on, keeping its urge at the unscaled baseline.
 fn player_flag_rally_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: bool) -> f32 {
     let own_flag_stolen = flag_query
         .iter()
         .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
-    flag_rally_speed_multiplier(own_flag_stolen, carrying_flag)
+    flag_rally_speed_multiplier(own_flag_stolen, carrying_flag, MIN_THROTTLE)
 }
 
 /// Escort urge the human earns while its side is hauling the enemy flag home, or

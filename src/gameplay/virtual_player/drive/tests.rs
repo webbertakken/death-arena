@@ -825,7 +825,7 @@ fn a_stolen_flag_rallies_a_teams_chasers() {
         "a safe flag earns no rally: {safe}"
     );
     assert!(
-        (stolen - flag_rally_speed_multiplier(true, false)).abs() <= f32::EPSILON,
+        (stolen - flag_rally_speed_multiplier(true, false, MIN_THROTTLE)).abs() <= f32::EPSILON,
         "a stolen flag should rally an empty-handed chaser: {stolen}"
     );
     assert!(

@@ -430,9 +430,11 @@ fn car_speed_multiplier(
 /// the deficit back harder, the neutral all-rounder keeps the baseline urge. The
 /// rally and the chase resolve likewise urge only the
 /// *chasers* of a team whose own flag is in enemy hands, so a steal is run down
-/// rather than coasting home; both skip the carrier. The rally is a flat push the
-/// instant the flag goes out, the resolve (see [`chase_resolve_speed_multiplier`])
-/// the slow-building top-up that hardens with the carry. The escort (see
+/// rather than coasting home; both skip the carrier. The rally is a commitment-scaled
+/// push the instant the flag goes out (a keener chaser runs the thief down harder, the
+/// neutral all-rounder keeps the baseline), the resolve (see
+/// [`chase_resolve_speed_multiplier`]) the slow-building top-up that hardens with the
+/// carry. The escort (see
 /// [`flag_escort_speed_multiplier`]) is the offensive mirror of the rally: it urges
 /// the *empty-handed* cars of a side that holds the enemy flag, so the carrier is
 /// shepherded home rather than running the gauntlet alone, and it too skips the
@@ -474,8 +476,11 @@ fn team_standing_multiplier(
     let own_flag_stolen = flags
         .iter()
         .any(|flag| flag.team == team && flag.holder.is_some());
-    let rally = flag_rally_speed_multiplier(own_flag_stolen, is_carrier);
-    // On top of the flat rally, the pack's resolve hardens with the very frames the
+    // A keener (more gas-committed) driver runs the thief down harder, a disciplined
+    // one more gently; the neutral all-rounder, like the human, scales by exactly 1.0,
+    // so its rally is unchanged. The flag-steal mirror of the catch-up scaling above.
+    let rally = flag_rally_speed_multiplier(own_flag_stolen, is_carrier, ai.corner_throttle);
+    // On top of the rally, the pack's resolve hardens with the very frames the
     // carrier tires over (the robbed team's own flag's carry count), mirroring the
     // human, so a long keep-away is squeezed from both ends at once.
     let chase_resolve = chase_resolve_speed_multiplier(
