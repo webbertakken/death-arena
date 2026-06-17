@@ -138,6 +138,44 @@ const _: () = assert!(GOLDEN_GOAL_CASH_BONUS < CLEAN_SHEET_CASH_BONUS);
 /// enrich a win without ever out-paying taking the round itself, enforced at
 /// compile time.
 const _: () = assert!(GOLDEN_GOAL_CASH_BONUS + CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
+/// Cash a decisive winner banks on top of [`VICTORY_CASH_PURSE`] for a demolition
+/// decider: settling a sudden-death overtime that ran level on every objective by
+/// the wreck tiebreak.
+///
+/// The combat-flavoured counterpart to [`GOLDEN_GOAL_CASH_BONUS`]. Where the golden
+/// goal prices the overtime *capture* that wins the decider outright, this prices
+/// the other dramatic overtime finish: a regulation deadlock carried into overtime,
+/// still level on captures, steals and returns when the overtime clock expires, and
+/// then settled by [`break_level_overtime_by_wrecks`] in favour of the heavier
+/// wrecker. The quintessential Death Rally finish in a car-combat game: a side that
+/// could not out-score the enemy out-wrecks it instead.
+///
+/// Like the golden goal it keys on the finish mode, not the final tally, so it
+/// stacks on whichever scoreline bonus the level overtime leaves: a 0-0 demolition
+/// decider is also a clean sheet, a 2-2 one a nail-biter. It is mutually exclusive
+/// with the golden goal (a golden goal clinches *before* the overtime clock expires,
+/// a demolition decider only *once* it has) and with the cash tiebreak (that settles
+/// only an overtime level on wrecks too, which a demolition decider never is).
+/// Pitched above the nail-biter (out-wrecking the decider is a more active feat than
+/// merely denying the enemy match point) yet below the golden goal (a scored decider
+/// outranks a wreck-tiebreak one), and kept clear below the victory purse so it
+/// enriches a win without ever out-paying taking the round; a level draw never earns
+/// it.
+pub const DEMOLITION_DECIDER_CASH_BONUS: u32 = 300;
+/// A demolition-decider bonus must be a real payday, not a token, enforced at
+/// compile time.
+const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS > 0);
+/// Out-wrecking a deadlocked decider must edge out merely denying the enemy match
+/// point, enforced at compile time.
+const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS > NAIL_BITER_CASH_BONUS);
+/// A scored golden-goal decider must outrank a wreck-tiebreak one, enforced at
+/// compile time.
+const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS < GOLDEN_GOAL_CASH_BONUS);
+/// A demolition decider stacks on a scoreline bonus, so even its largest stack
+/// (with the clean sheet, the dearer of the two disjoint scoreline bonuses) must
+/// still enrich a win without ever out-paying taking the round itself, enforced at
+/// compile time.
+const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS + CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
 /// Speed multiplier a car suffers while hauling the enemy flag home.
 ///
 /// The classic capture-the-flag tax: the heavy flag drags on the car, so the
@@ -166,6 +204,14 @@ type CtfMatchResources<'w> = (
     ResMut<'w, OpponentScore>,
     ResMut<'w, NitroBoosts>,
     ResMut<'w, CtfMatchResult>,
+);
+/// The three objective tallies the purse system reads to spot a wreck-settled
+/// overtime, bundled into one system parameter to keep the resolution system's
+/// signature within the argument-count lint (mirrors [`CtfMatchResources`]).
+type MatchObjectiveStandings<'w> = (
+    Res<'w, CaptureScore>,
+    Res<'w, FlagStealScore>,
+    Res<'w, FlagReturnScore>,
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -531,7 +577,7 @@ const fn award_golden_goal(
 /// result lingers for the rest of the frozen round.
 fn award_match_purse_on_resolution(
     result: Res<CtfMatchResult>,
-    captures: Res<CaptureScore>,
+    standings: MatchObjectiveStandings,
     clock: Res<MatchClock>,
     mut paid: ResMut<MatchPursePaid>,
     mut player_economy: ResMut<Score>,
@@ -543,15 +589,30 @@ fn award_match_purse_on_resolution(
     let Some(winner) = result.winner else {
         return;
     };
+    let (captures, steals, returns) = standings;
 
     // A decisive winner settled while overtime is still running (not yet expired)
     // can only have come from a golden-goal capture; an overtime that ran its
     // clock down is resolved by the timeout path with the clock already expired.
     let clinched_in_overtime = clock.is_sudden_death() && !clock.is_expired();
+    // The timeout counterpart to the golden goal: an overtime that ran level on
+    // every objective down to its expiring clock and was then settled by the wreck
+    // tiebreak (not the cash decider). The expired-clock guard tells it apart from a
+    // golden goal, which clinches before the clock runs out.
+    let overtime_wreck_decider = clock.is_sudden_death()
+        && clock.is_expired()
+        && overtime_decided_by_wrecks(
+            *captures,
+            *steals,
+            *returns,
+            player_economy.wrecks,
+            opponent_economy.wrecks,
+        );
     purse::award_match_purse(
         winner,
         *captures,
         clinched_in_overtime,
+        overtime_wreck_decider,
         &mut player_economy,
         &mut opponent_economy,
     );

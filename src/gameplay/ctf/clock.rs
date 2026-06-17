@@ -155,6 +155,34 @@ pub const fn break_level_overtime_by_cash(player_cash: u32, opponent_cash: u32) 
     }
 }
 
+/// Whether a timed-out sudden-death overtime was settled by the wreck tiebreak: the
+/// "demolition decider".
+///
+/// True exactly when the overtime ran level on every objective (so
+/// [`time_limit_winner`] returns [`CtfMatchWinner::Draw`] and the round falls through
+/// to the damage decider) and the wreck counts were not themselves level (so
+/// [`break_level_overtime_by_wrecks`] produces a decisive winner rather than chaining
+/// on to the cash decider). The caller pairs this with the clock state (sudden death,
+/// expired) to tell a wreck-settled overtime apart from a golden goal, which clinches
+/// before the overtime clock runs out. Prices the
+/// [`crate::gameplay::ctf::DEMOLITION_DECIDER_CASH_BONUS`] win-quality bonus.
+#[must_use]
+pub fn overtime_decided_by_wrecks(
+    captures: CaptureScore,
+    steals: FlagStealScore,
+    returns: FlagReturnScore,
+    player_wrecks: u32,
+    opponent_wrecks: u32,
+) -> bool {
+    matches!(
+        time_limit_winner(captures, steals, returns),
+        CtfMatchWinner::Draw
+    ) && !matches!(
+        break_level_overtime_by_wrecks(player_wrecks, opponent_wrecks),
+        CtfMatchWinner::Draw
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +393,69 @@ mod tests {
             break_level_overtime_by_cash(0, 0),
             CtfMatchWinner::Draw,
             "a penniless deadlock stays a draw"
+        );
+    }
+
+    #[test]
+    fn an_objective_deadlock_broken_on_wrecks_is_a_demolition_decider() {
+        // Captures, steals and returns all level, but one side wrecked more: the
+        // round fell to the wreck tiebreak, the demolition decider.
+        assert!(overtime_decided_by_wrecks(
+            CaptureScore {
+                player: 2,
+                opponents: 2,
+            },
+            FlagStealScore {
+                player: 1,
+                opponents: 1,
+            },
+            FlagReturnScore {
+                player: 3,
+                opponents: 3,
+            },
+            5,
+            2,
+        ));
+    }
+
+    #[test]
+    fn an_overtime_won_on_objectives_is_no_demolition_decider() {
+        // A side led on an objective (here steals) when the overtime clock expired,
+        // so the round was settled by the objective decider, not the wreck tiebreak.
+        assert!(
+            !overtime_decided_by_wrecks(
+                CaptureScore {
+                    player: 1,
+                    opponents: 1,
+                },
+                FlagStealScore {
+                    player: 3,
+                    opponents: 0,
+                },
+                FlagReturnScore::default(),
+                1,
+                4,
+            ),
+            "an objective-decided overtime is not a demolition decider"
+        );
+    }
+
+    #[test]
+    fn an_overtime_level_on_wrecks_too_is_no_demolition_decider() {
+        // Objectives level and wrecks level: the round falls past the wreck tiebreak
+        // to the cash decider, so it is no demolition decider.
+        assert!(
+            !overtime_decided_by_wrecks(
+                CaptureScore {
+                    player: 1,
+                    opponents: 1,
+                },
+                FlagStealScore::default(),
+                FlagReturnScore::default(),
+                3,
+                3,
+            ),
+            "an overtime level on wrecks is settled on cash, not by demolition"
         );
     }
 }

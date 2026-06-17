@@ -1445,6 +1445,8 @@ fn purse_app() -> App {
     app.init_resource::<Score>();
     app.init_resource::<OpponentScore>();
     app.init_resource::<CaptureScore>();
+    app.init_resource::<FlagStealScore>();
+    app.init_resource::<FlagReturnScore>();
     app.init_resource::<CtfMatchResult>();
     app.init_resource::<MatchPursePaid>();
     app.init_resource::<MatchClock>();
@@ -1602,5 +1604,68 @@ fn an_overtime_resolved_on_the_clock_banks_no_golden_goal_bonus() {
         app.world.resource::<Score>().cash,
         VICTORY_CASH_PURSE,
         "an overtime decided by the clock running out is no golden goal"
+    );
+}
+
+#[test]
+fn an_overtime_wreck_tiebreak_banks_the_demolition_bonus_through_the_system() {
+    let mut app = purse_app();
+    // A 1-1 objective deadlock that ran the overtime clock down and was settled by
+    // the wreck tiebreak: the resolution system must read the expired overtime
+    // clock and the level objectives and bank the demolition-decider bonus. The
+    // loser sat clear of zero (no clean sheet) and of match point (no nail-biter),
+    // isolating the demolition bonus.
+    app.insert_resource(CaptureScore {
+        player: 1,
+        opponents: 1,
+    });
+    app.insert_resource(Score {
+        wrecks: 4,
+        ..Score::default()
+    });
+    app.insert_resource(CtfMatchResult {
+        winner: Some(CtfMatchWinner::Player),
+    });
+    app.insert_resource(MatchClock {
+        frames_remaining: 0,
+        phase: MatchPhase::SuddenDeath,
+    });
+
+    app.update();
+
+    assert_eq!(
+        app.world.resource::<Score>().cash,
+        VICTORY_CASH_PURSE + DEMOLITION_DECIDER_CASH_BONUS,
+        "an overtime deadlock settled by the wreck tiebreak must bank the demolition bonus"
+    );
+}
+
+#[test]
+fn an_overtime_level_on_wrecks_banks_no_demolition_bonus_through_the_system() {
+    let mut app = purse_app();
+    // A 1-1 objective deadlock level on wrecks too falls through to the cash
+    // decider, so it is no demolition decider and only the bare purse is banked.
+    app.insert_resource(CaptureScore {
+        player: 1,
+        opponents: 1,
+    });
+    app.insert_resource(Score {
+        cash: 1,
+        ..Score::default()
+    });
+    app.insert_resource(CtfMatchResult {
+        winner: Some(CtfMatchWinner::Player),
+    });
+    app.insert_resource(MatchClock {
+        frames_remaining: 0,
+        phase: MatchPhase::SuddenDeath,
+    });
+
+    app.update();
+
+    assert_eq!(
+        app.world.resource::<Score>().cash,
+        1 + VICTORY_CASH_PURSE,
+        "an overtime level on wrecks is settled on cash, banking no demolition bonus"
     );
 }

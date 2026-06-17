@@ -12,8 +12,9 @@
 //! results into the per-team [`Score`] and [`OpponentScore`] tallies.
 
 use super::{
-    CaptureScore, CtfMatchWinner, CAPTURES_TO_WIN, CLEAN_SHEET_CASH_BONUS, DRAW_CASH_PURSE,
-    GOLDEN_GOAL_CASH_BONUS, NAIL_BITER_CASH_BONUS, VICTORY_CASH_PURSE,
+    CaptureScore, CtfMatchWinner, CAPTURES_TO_WIN, CLEAN_SHEET_CASH_BONUS,
+    DEMOLITION_DECIDER_CASH_BONUS, DRAW_CASH_PURSE, GOLDEN_GOAL_CASH_BONUS, NAIL_BITER_CASH_BONUS,
+    VICTORY_CASH_PURSE,
 };
 use crate::gameplay::pickup::{OpponentScore, Score};
 
@@ -81,27 +82,56 @@ const fn golden_goal_bonus(winner: CtfMatchWinner, clinched_in_overtime: bool) -
     }
 }
 
+/// Cash a decisive winner banks for a demolition decider given whether the round
+/// was settled by the sudden-death wreck tiebreak: [`DEMOLITION_DECIDER_CASH_BONUS`]
+/// if it was, else 0.
+///
+/// `overtime_wreck_decider` is true only when an overtime ran level on every
+/// objective down to its expiring clock and the heavier wrecker took it (see
+/// [`super::overtime_decided_by_wrecks`]); a golden goal clinches before the clock
+/// expires and earns the [`golden_goal_bonus`] instead, so the two never both fire.
+/// A level [`CtfMatchWinner::Draw`] never earns it, since the wreck tiebreak always
+/// produces a decisive winner. Like the golden goal it keys on the finish mode
+/// rather than the final tally, so it stacks on whichever scoreline bonus the level
+/// overtime leaves.
+#[must_use]
+const fn demolition_decider_bonus(winner: CtfMatchWinner, overtime_wreck_decider: bool) -> u32 {
+    let demolition_decider = overtime_wreck_decider
+        && matches!(winner, CtfMatchWinner::Player | CtfMatchWinner::Opponents);
+    if demolition_decider {
+        DEMOLITION_DECIDER_CASH_BONUS
+    } else {
+        0
+    }
+}
+
 /// Banks the end-of-match purse to whichever side the result favours.
 ///
 /// A win pays the victor [`VICTORY_CASH_PURSE`], topped by a win-quality bonus:
 /// a [`CLEAN_SHEET_CASH_BONUS`] when the beaten team never captured (see
 /// [`clean_sheet_bonus`]), or a [`NAIL_BITER_CASH_BONUS`] when it finished on
 /// match point (see [`nail_biter_bonus`]). Those two scoreline bonuses are
-/// disjoint, so a win banks at most one, and a [`GOLDEN_GOAL_CASH_BONUS`] stacks
-/// on top of either when the round was clinched in sudden-death overtime (see
-/// [`golden_goal_bonus`]). A draw pays both teams the smaller [`DRAW_CASH_PURSE`]
-/// for fighting to a standstill. Pure cash, banked on top of every in-match
-/// bounty.
+/// disjoint, so a win banks at most one. On top of either, exactly one finish-mode
+/// bonus may stack: a [`GOLDEN_GOAL_CASH_BONUS`] when the round was clinched by an
+/// overtime capture (see [`golden_goal_bonus`]), or a
+/// [`DEMOLITION_DECIDER_CASH_BONUS`] when an overtime level on every objective was
+/// settled by the wreck tiebreak (see [`demolition_decider_bonus`]). The two
+/// finish-mode bonuses are themselves disjoint (a golden goal clinches before the
+/// overtime clock expires, a demolition decider only once it has). A draw pays both
+/// teams the smaller [`DRAW_CASH_PURSE`] for fighting to a standstill. Pure cash,
+/// banked on top of every in-match bounty.
 pub(super) const fn award_match_purse(
     winner: CtfMatchWinner,
     captures: CaptureScore,
     clinched_in_overtime: bool,
+    overtime_wreck_decider: bool,
     player_economy: &mut Score,
     opponent_economy: &mut OpponentScore,
 ) {
     let win_quality_bonus = clean_sheet_bonus(winner, captures)
         + nail_biter_bonus(winner, captures)
-        + golden_goal_bonus(winner, clinched_in_overtime);
+        + golden_goal_bonus(winner, clinched_in_overtime)
+        + demolition_decider_bonus(winner, overtime_wreck_decider);
     match winner {
         CtfMatchWinner::Player => {
             player_economy.bank_match_purse(VICTORY_CASH_PURSE + win_quality_bonus);
@@ -133,6 +163,7 @@ mod tests {
                 opponents: 1,
             },
             false,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -154,6 +185,7 @@ mod tests {
                 opponents: 3,
             },
             false,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -170,6 +202,7 @@ mod tests {
         award_match_purse(
             CtfMatchWinner::Draw,
             CaptureScore::default(),
+            false,
             false,
             &mut player_economy,
             &mut opponent_economy,
@@ -191,6 +224,7 @@ mod tests {
                 player: 3,
                 opponents: 0,
             },
+            false,
             false,
             &mut player_economy,
             &mut opponent_economy,
@@ -216,6 +250,7 @@ mod tests {
                 player: 0,
                 opponents: 3,
             },
+            false,
             false,
             &mut player_economy,
             &mut opponent_economy,
@@ -276,6 +311,7 @@ mod tests {
                 opponents: CAPTURES_TO_WIN - 1,
             },
             false,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -300,6 +336,7 @@ mod tests {
                 player: CAPTURES_TO_WIN - 1,
                 opponents: CAPTURES_TO_WIN,
             },
+            false,
             false,
             &mut player_economy,
             &mut opponent_economy,
@@ -327,6 +364,7 @@ mod tests {
                 opponents: 1,
             },
             true,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -351,6 +389,7 @@ mod tests {
                 opponents: 2,
             },
             true,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -376,6 +415,7 @@ mod tests {
                 opponents: 0,
             },
             true,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -401,6 +441,7 @@ mod tests {
                 opponents: CAPTURES_TO_WIN - 1,
             },
             true,
+            false,
             &mut player_economy,
             &mut opponent_economy,
         );
@@ -504,5 +545,156 @@ mod tests {
         // A golden goal always produces a decisive winner, so a level result
         // earns nothing even were the overtime flag somehow set.
         assert_eq!(golden_goal_bonus(CtfMatchWinner::Draw, true), 0);
+    }
+
+    #[test]
+    fn a_demolition_decider_win_tops_the_purse_with_the_bonus_for_the_player() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // A 1-1 objective deadlock settled in overtime by the wreck tiebreak: the
+        // loser sat clear of zero (no clean sheet) and clear of match point (no
+        // nail-biter), isolating the demolition-decider bonus the finish earns.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            false,
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + DEMOLITION_DECIDER_CASH_BONUS,
+            "out-wrecking a deadlocked decider must top the purse with the demolition bonus"
+        );
+        assert_eq!(opponent_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_demolition_decider_win_tops_the_purse_with_the_bonus_for_the_opponents() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        award_match_purse(
+            CtfMatchWinner::Opponents,
+            CaptureScore {
+                player: 1,
+                opponents: 1,
+            },
+            false,
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            opponent_economy.cash,
+            VICTORY_CASH_PURSE + DEMOLITION_DECIDER_CASH_BONUS
+        );
+        assert_eq!(player_economy.cash, 0);
+    }
+
+    #[test]
+    fn a_clean_sheet_demolition_decider_stacks_both_win_quality_bonuses() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // A 0-0 deadlock carried into overtime and won on the wreck tiebreak is
+        // both an airtight clean sheet and a demolition decider, so the two
+        // orthogonal bonuses stack on the purse.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: 0,
+                opponents: 0,
+            },
+            false,
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + CLEAN_SHEET_CASH_BONUS + DEMOLITION_DECIDER_CASH_BONUS,
+            "a clean-sheet demolition decider must bank both win-quality bonuses"
+        );
+    }
+
+    #[test]
+    fn a_nail_biter_demolition_decider_stacks_both_win_quality_bonuses() {
+        let mut player_economy = Score::default();
+        let mut opponent_economy = OpponentScore::default();
+
+        // A 2-2 deadlock carried into overtime and won on the wreck tiebreak leaves
+        // the loser on match point (a nail-biter) and was settled by demolition, so
+        // both bonuses stack.
+        award_match_purse(
+            CtfMatchWinner::Player,
+            CaptureScore {
+                player: CAPTURES_TO_WIN - 1,
+                opponents: CAPTURES_TO_WIN - 1,
+            },
+            false,
+            true,
+            &mut player_economy,
+            &mut opponent_economy,
+        );
+
+        assert_eq!(
+            player_economy.cash,
+            VICTORY_CASH_PURSE + NAIL_BITER_CASH_BONUS + DEMOLITION_DECIDER_CASH_BONUS,
+            "a nail-biter demolition decider must bank both win-quality bonuses"
+        );
+    }
+
+    #[test]
+    fn settling_an_overtime_deadlock_on_wrecks_earns_the_demolition_bonus() {
+        assert_eq!(
+            demolition_decider_bonus(CtfMatchWinner::Player, true),
+            DEMOLITION_DECIDER_CASH_BONUS,
+            "winning a wreck-settled overtime is a demolition decider"
+        );
+        assert_eq!(
+            demolition_decider_bonus(CtfMatchWinner::Opponents, true),
+            DEMOLITION_DECIDER_CASH_BONUS
+        );
+    }
+
+    #[test]
+    fn a_win_not_settled_by_the_wreck_tiebreak_earns_no_demolition_bonus() {
+        // A regulation win, a golden goal, or an overtime decided on an objective
+        // or on cash is no demolition decider: the bonus is for the wreck tiebreak.
+        assert_eq!(
+            demolition_decider_bonus(CtfMatchWinner::Player, false),
+            0,
+            "a win not settled by the wreck tiebreak is no demolition decider"
+        );
+    }
+
+    #[test]
+    fn a_draw_never_earns_a_demolition_bonus() {
+        // The wreck tiebreak always produces a decisive winner, so a level result
+        // earns nothing even were the overtime flag somehow set.
+        assert_eq!(demolition_decider_bonus(CtfMatchWinner::Draw, true), 0);
+    }
+
+    #[test]
+    fn the_two_overtime_finish_bonuses_never_both_fire() {
+        // A demolition decider settles a wreck-tiebreak overtime (clock expired); a
+        // golden goal clinches before the clock expires. The two are fed
+        // mutually-exclusive flags, so a single win banks at most one finish-mode
+        // bonus: here the wreck-settled overtime earns the demolition bonus and no
+        // golden goal.
+        assert_eq!(golden_goal_bonus(CtfMatchWinner::Player, false), 0);
+        assert_eq!(
+            demolition_decider_bonus(CtfMatchWinner::Player, true),
+            DEMOLITION_DECIDER_CASH_BONUS
+        );
     }
 }
