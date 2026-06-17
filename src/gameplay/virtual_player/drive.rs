@@ -1,4 +1,5 @@
 use crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier;
+use crate::gameplay::chase_resolve::chase_resolve_speed_multiplier;
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges, RAM_RADIUS};
 use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
@@ -411,25 +412,31 @@ fn car_speed_multiplier(
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
-/// The four per-car factors keyed on the capture standing and how the car sits in
+/// The five per-car factors keyed on the capture standing and how the car sits in
 /// the round, folded together: the catch-up urge a trailing side earns, the fatigue
 /// a carrier sheds for clinging to the flag, the front-runner's burden a leading
-/// side's carrier carries, and the flag-recovery rally a side finds while its own
-/// flag is out. Read as a separate factor beside the per-car
+/// side's carrier carries, the flag-recovery rally a side finds while its own flag
+/// is out, and the chase resolve that side's empty-handed cars build the longer the
+/// steal drags on. Read as a separate factor beside the per-car
 /// [`car_speed_multiplier`], mirroring the human.
 ///
 /// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
 /// can never speed a flag run home, mirroring the slipstream); a car level or
-/// ahead earns none. The rally likewise urges only the *chasers* of a team whose
-/// own flag is in enemy hands, so a steal is run down rather than coasting home; it
-/// too skips the carrier. The other two bite the *carrier* alone: fatigue scrubs
-/// more pace the longer it holds the enemy flag, and the front-runner's burden (see
-/// [`front_runner_speed_multiplier`]) drags it back the further its team leads on
-/// captures, the anti-snowball mirror of the trailing side's catch-up. So a chaser
-/// is only ever urged on and a carrier only ever weighed down, never both: the
-/// catch-up and rally move empty-handed cars while the carrier penalties move the
-/// carrier, and a leading, tired carrier simply stacks the two carrier drags. Every
-/// one of the four can only help the chase, never speed a flag run home.
+/// ahead earns none. The rally and the chase resolve likewise urge only the
+/// *chasers* of a team whose own flag is in enemy hands, so a steal is run down
+/// rather than coasting home; both skip the carrier. The rally is a flat push the
+/// instant the flag goes out, the resolve (see [`chase_resolve_speed_multiplier`])
+/// the slow-building top-up that hardens with the carry. The other two bite the
+/// *carrier* alone: fatigue scrubs more pace the longer it holds the enemy flag,
+/// and the front-runner's burden (see [`front_runner_speed_multiplier`]) drags it
+/// back the further its team leads on captures, the anti-snowball mirror of the
+/// trailing side's catch-up. So a chaser is only ever urged on and a carrier only
+/// ever weighed down, never both: the catch-up, rally and resolve move empty-handed
+/// cars while the carrier penalties move the carrier, and a leading, tired carrier
+/// simply stacks the two carrier drags. The carrier's ramping fatigue and the pack's
+/// ramping resolve read the very same carry-frame count, so a long keep-away is
+/// squeezed from both ends at once. Every one of the five can only help the chase,
+/// never speed a flag run home.
 fn team_standing_multiplier(
     team: AiTeam,
     captures: CaptureScore,
@@ -452,7 +459,15 @@ fn team_standing_multiplier(
         .iter()
         .any(|flag| flag.team == team && flag.holder.is_some());
     let rally = flag_rally_speed_multiplier(own_flag_stolen, is_carrier);
-    comeback * fatigue * front_runner * rally
+    // On top of the flat rally, the pack's resolve hardens with the very frames the
+    // carrier tires over (the robbed team's own flag's carry count), mirroring the
+    // human, so a long keep-away is squeezed from both ends at once.
+    let chase_resolve = chase_resolve_speed_multiplier(
+        own_flag_stolen,
+        is_carrier,
+        carry_timers.frames_for(FlagTeam::from(team)),
+    );
+    comeback * fatigue * front_runner * rally * chase_resolve
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`

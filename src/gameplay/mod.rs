@@ -10,6 +10,7 @@ use virtual_player::VirtualPlayerPlugin;
 
 mod arena;
 mod carry_fatigue;
+mod chase_resolve;
 mod combat;
 mod comeback;
 mod ctf;

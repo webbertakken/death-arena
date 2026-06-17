@@ -1,4 +1,5 @@
 use crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier;
+use crate::gameplay::chase_resolve::chase_resolve_speed_multiplier;
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
 use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
@@ -108,6 +109,10 @@ pub fn car_movement_system(
     // The human's side rallies its empty-handed cars while its own flag is in enemy
     // hands, just like the field, so a steal is chased down rather than coasting home.
     let flag_rally_multiplier = player_flag_rally_multiplier(&flag_query, carrying_flag);
+    // On top of the flat rally, the human's chasers find resolve building the longer
+    // its flag is held, just like the field, so a long keep-away is squeezed harder.
+    let chase_resolve_multiplier =
+        player_chase_resolve_multiplier(&flag_query, carrying_flag, flag_carry_timers.as_deref());
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
@@ -116,7 +121,8 @@ pub fn car_movement_system(
         * wall_scrape_multiplier
         * comeback_multiplier
         * front_runner_multiplier
-        * flag_rally_multiplier;
+        * flag_rally_multiplier
+        * chase_resolve_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -270,4 +276,23 @@ fn player_flag_rally_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: boo
         .iter()
         .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
     flag_rally_speed_multiplier(own_flag_stolen, carrying_flag)
+}
+
+/// Chase resolve the human's empty-handed chasers build while its own flag is in
+/// enemy hands, hardening the longer the steal drags on, or `1.0` when its flag is
+/// safe (or no match is in progress, so the timers are absent). The human is the
+/// player (blue) side, so its flag is the blue flag, stolen exactly when that flag
+/// has a holder, and the resolve reads the blue flag's continuous-carry frame count;
+/// only an empty-handed car digs in, mirroring the field, so a double-steal carrier
+/// finds none and the urge never speeds a flag run home.
+fn player_chase_resolve_multiplier(
+    flag_query: &Query<&CtfFlag>,
+    carrying_flag: bool,
+    carry_timers: Option<&FlagCarryTimers>,
+) -> f32 {
+    let own_flag_stolen = flag_query
+        .iter()
+        .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
+    let carry_frames = carry_timers.map_or(0, |timers| timers.frames_for(FlagTeam::Blue));
+    chase_resolve_speed_multiplier(own_flag_stolen, carrying_flag, carry_frames)
 }
