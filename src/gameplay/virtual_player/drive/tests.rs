@@ -754,6 +754,105 @@ fn a_long_held_flag_tires_a_virtual_player_carrier() {
 }
 
 #[test]
+fn a_stolen_flag_rallies_a_teams_chasers() {
+    // Red is level on captures with a fresh carry clock, so the only standing factor
+    // in play is the rally: an empty-handed red chaser whose own (red) flag is in
+    // enemy hands finds the flag-recovery urge, while one whose flag is safe does not.
+    let chaser = Entity::from_raw(1);
+    let thief = Entity::from_raw(2);
+
+    let safe = team_standing_multiplier(
+        AiTeam::Red,
+        CaptureScore::default(),
+        chaser,
+        &[
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::new(500.0, 0.0),
+                holder: None,
+            },
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+        ],
+        FlagCarryTimers::default(),
+    );
+    let stolen = team_standing_multiplier(
+        AiTeam::Red,
+        CaptureScore::default(),
+        chaser,
+        &[
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::ZERO,
+                holder: Some(thief),
+            },
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::new(-500.0, 0.0),
+                holder: None,
+            },
+        ],
+        FlagCarryTimers::default(),
+    );
+
+    assert!(
+        (safe - 1.0).abs() <= f32::EPSILON,
+        "a safe flag earns no rally: {safe}"
+    );
+    assert!(
+        (stolen - flag_rally_speed_multiplier(true, false)).abs() <= f32::EPSILON,
+        "a stolen flag should rally an empty-handed chaser: {stolen}"
+    );
+    assert!(
+        stolen > safe,
+        "the rally must speed the chaser: safe={safe}, stolen={stolen}"
+    );
+}
+
+#[test]
+fn a_virtual_player_carrier_earns_no_rally_in_a_double_steal() {
+    // The red car hauls the blue flag home (carrier) while red's own flag is also
+    // stolen. The carry exclusion holds, so with a level score and a fresh carry
+    // clock the carrier's standing multiplier stays neutral: the rally never speeds
+    // a flag run home, even in a double steal.
+    let carrier = Entity::from_raw(1);
+    let thief = Entity::from_raw(2);
+    let multiplier = team_standing_multiplier(
+        AiTeam::Red,
+        CaptureScore::default(),
+        carrier,
+        &[
+            // Red's own flag stolen by a blue thief.
+            FlagTarget {
+                team: AiTeam::Red,
+                home: Vec2::new(500.0, 0.0),
+                position: Vec2::ZERO,
+                holder: Some(thief),
+            },
+            // The blue flag carried home by this very red car.
+            FlagTarget {
+                team: AiTeam::Blue,
+                home: Vec2::new(-500.0, 0.0),
+                position: Vec2::ZERO,
+                holder: Some(carrier),
+            },
+        ],
+        FlagCarryTimers::default(),
+    );
+    assert!(
+        (multiplier - 1.0).abs() <= f32::EPSILON,
+        "a double-steal carrier must earn no rally (nor any standing bonus): {multiplier}"
+    );
+}
+
+#[test]
 fn a_flag_carrier_catches_no_slipstream() {
     // A red carrier running the blue flag home, measured with and without a
     // team-mate planted directly on its run-home line. A non-carrier in that

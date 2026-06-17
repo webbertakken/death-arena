@@ -13,6 +13,7 @@ mod carry_fatigue;
 mod combat;
 mod comeback;
 mod ctf;
+mod flag_rally;
 mod front_runner;
 mod main;
 mod pickup;

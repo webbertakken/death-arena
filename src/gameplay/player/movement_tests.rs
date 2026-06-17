@@ -733,6 +733,114 @@ mod tests {
     }
 
     #[test]
+    fn a_stolen_flag_rallies_the_human() {
+        use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
+
+        // Control: the human's blue flag sits safe at home (no holder), so its
+        // empty-handed driver earns no rally and keeps its plain pace straight up.
+        let mut safe_app = setup_test_app();
+        let safe = spawn_player(&mut safe_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut safe_app, safe);
+        safe_app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-1000.0, 0.0),
+                holder: None,
+            },
+            Transform::from_translation(Vec3::new(-1000.0, 0.0, 0.0)),
+        ));
+        safe_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        safe_app.update();
+        let safe_y = safe_app.world.get::<Transform>(safe).unwrap().translation.y;
+
+        // Stolen: a thief hauls the human's blue flag away, so its empty-handed
+        // driver finds the flag-recovery rally and covers more ground on the same
+        // heading. The holder is any non-player entity, so the human is not the
+        // carrier and is urged to chase the thief down.
+        let mut stolen_app = setup_test_app();
+        let stolen = spawn_player(&mut stolen_app, Vec3::new(0.0, 0.0, 5.0));
+        spawn_wheels(&mut stolen_app, stolen);
+        let thief = stolen_app.world.spawn_empty().id();
+        stolen_app.world.spawn((
+            CtfFlag {
+                team: FlagTeam::Blue,
+                home: Vec2::new(-1000.0, 0.0),
+                holder: Some(thief),
+            },
+            Transform::from_translation(Vec3::new(500.0, 0.0, 0.0)),
+        ));
+        stolen_app
+            .world
+            .resource_mut::<Input<KeyCode>>()
+            .press(KeyCode::Up);
+        stolen_app.update();
+        let stolen_y = stolen_app
+            .world
+            .get::<Transform>(stolen)
+            .unwrap()
+            .translation
+            .y;
+
+        let rally = flag_rally_speed_multiplier(true, false);
+        assert!(rally > 1.0, "the fixture must actually rally, got {rally}");
+        assert!(stolen_y > safe_y, "safe={safe_y}, stolen={stolen_y}");
+        assert!(
+            (stolen_y - safe_y * rally).abs() <= 1e-3,
+            "a human whose flag is stolen should drive at the rally multiplier: \
+             safe={safe_y}, stolen={stolen_y}, rally={rally}"
+        );
+    }
+
+    #[test]
+    fn a_human_carrier_earns_no_rally_in_a_double_steal() {
+        // Both fixtures carry the captured red flag home, so both pay the flat carry
+        // tax; they differ only in whether the human's own blue flag is also out.
+        // The carry exclusion means the double-steal carrier earns no rally, so it
+        // covers the identical ground: the rally can never speed a flag run home.
+        fn carrier_y(own_flag_stolen: bool) -> f32 {
+            let mut app = setup_test_app();
+            let carrier = spawn_player(&mut app, Vec3::new(0.0, 0.0, 5.0));
+            spawn_wheels(&mut app, carrier);
+            // The captured red flag the human hauls home.
+            app.world.spawn((
+                CtfFlag {
+                    team: FlagTeam::Red,
+                    home: Vec2::new(0.0, 1000.0),
+                    holder: Some(carrier),
+                },
+                Transform::from_translation(Vec3::ZERO),
+            ));
+            // The human's own blue flag, optionally stolen by a thief.
+            let blue_holder = own_flag_stolen.then(|| app.world.spawn_empty().id());
+            app.world.spawn((
+                CtfFlag {
+                    team: FlagTeam::Blue,
+                    home: Vec2::new(-1000.0, 0.0),
+                    holder: blue_holder,
+                },
+                Transform::from_translation(Vec3::new(500.0, 0.0, 0.0)),
+            ));
+            app.world
+                .resource_mut::<Input<KeyCode>>()
+                .press(KeyCode::Up);
+            app.update();
+            app.world.get::<Transform>(carrier).unwrap().translation.y
+        }
+
+        let safe_flag = carrier_y(false);
+        let double_steal = carrier_y(true);
+        assert!(safe_flag > 0.0, "the carrier should move, got {safe_flag}");
+        assert!(
+            (double_steal - safe_flag).abs() <= 1e-3,
+            "a double-steal carrier must earn no rally, driving the identical ground: \
+             safe_flag={safe_flag}, double_steal={double_steal}"
+        );
+    }
+
+    #[test]
     fn test_car_movement_backward() {
         let mut app = setup_test_app();
 

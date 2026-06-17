@@ -2,8 +2,9 @@ use crate::gameplay::carry_fatigue::carry_fatigue_speed_multiplier;
 use crate::gameplay::combat::{VehicleIntegrity, WreckStuns, WreckSurges};
 use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
-    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
+    flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers, FlagTeam,
 };
+use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
@@ -104,6 +105,9 @@ pub fn car_movement_system(
     // field, so its run home is weighed down the further its side leads.
     let front_runner_multiplier =
         player_front_runner_multiplier(captures.as_deref(), carrying_flag);
+    // The human's side rallies its empty-handed cars while its own flag is in enemy
+    // hands, just like the field, so a steal is chased down rather than coasting home.
+    let flag_rally_multiplier = player_flag_rally_multiplier(&flag_query, carrying_flag);
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
@@ -111,7 +115,8 @@ pub fn car_movement_system(
         * draft_multiplier
         * wall_scrape_multiplier
         * comeback_multiplier
-        * front_runner_multiplier;
+        * front_runner_multiplier
+        * flag_rally_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -253,4 +258,16 @@ fn player_front_runner_multiplier(captures: Option<&CaptureScore>, carrying_flag
     captures.map_or(1.0, |score| {
         front_runner_speed_multiplier(score.player, score.opponents, carrying_flag)
     })
+}
+
+/// Flag-recovery rally the human earns while its own flag is in enemy hands, or
+/// `1.0` when its flag is safe. The human is the player (blue) side, so its flag is
+/// the blue flag, stolen exactly when that flag has a holder; only an empty-handed
+/// car rallies, mirroring the field, so a double-steal carrier earns none and the
+/// urge never speeds a flag run home.
+fn player_flag_rally_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: bool) -> f32 {
+    let own_flag_stolen = flag_query
+        .iter()
+        .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
+    flag_rally_speed_multiplier(own_flag_stolen, carrying_flag)
 }

@@ -5,6 +5,7 @@ use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
     FlagTeam, MatchClock,
 };
+use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
 use crate::gameplay::main::{BOUNDS, TIME_STEP};
 use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
@@ -410,22 +411,25 @@ fn car_speed_multiplier(
         * wall_scrape_speed_multiplier(position, BOUNDS / 2.0)
 }
 
-/// The three per-car factors keyed on the capture standing and how the car sits in
+/// The four per-car factors keyed on the capture standing and how the car sits in
 /// the round, folded together: the catch-up urge a trailing side earns, the fatigue
-/// a carrier sheds for clinging to the flag, and the front-runner's burden a leading
-/// side's carrier carries. Read as a separate factor beside the per-car
+/// a carrier sheds for clinging to the flag, the front-runner's burden a leading
+/// side's carrier carries, and the flag-recovery rally a side finds while its own
+/// flag is out. Read as a separate factor beside the per-car
 /// [`car_speed_multiplier`], mirroring the human.
 ///
 /// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
 /// can never speed a flag run home, mirroring the slipstream); a car level or
-/// ahead earns none. The other two bite the *carrier* alone: fatigue scrubs more
-/// pace the longer it holds the enemy flag, and the front-runner's burden (see
+/// ahead earns none. The rally likewise urges only the *chasers* of a team whose
+/// own flag is in enemy hands, so a steal is run down rather than coasting home; it
+/// too skips the carrier. The other two bite the *carrier* alone: fatigue scrubs
+/// more pace the longer it holds the enemy flag, and the front-runner's burden (see
 /// [`front_runner_speed_multiplier`]) drags it back the further its team leads on
 /// captures, the anti-snowball mirror of the trailing side's catch-up. So a chaser
 /// is only ever urged on and a carrier only ever weighed down, never both: the
-/// catch-up and the carrier penalties move mutually exclusive cars, and a leading,
-/// tired carrier simply stacks the two carrier drags. Every one of the three can
-/// only help the chase, never speed a flag run home.
+/// catch-up and rally move empty-handed cars while the carrier penalties move the
+/// carrier, and a leading, tired carrier simply stacks the two carrier drags. Every
+/// one of the four can only help the chase, never speed a flag run home.
 fn team_standing_multiplier(
     team: AiTeam,
     captures: CaptureScore,
@@ -442,7 +446,13 @@ fn team_standing_multiplier(
         1.0
     };
     let front_runner = front_runner_speed_multiplier(own, enemy, is_carrier);
-    comeback * fatigue * front_runner
+    // The side rallies its empty-handed cars while its own flag is in enemy hands,
+    // mirroring the human, so a steal is chased down rather than coasting to capture.
+    let own_flag_stolen = flags
+        .iter()
+        .any(|flag| flag.team == team && flag.holder.is_some());
+    let rally = flag_rally_speed_multiplier(own_flag_stolen, is_carrier);
+    comeback * fatigue * front_runner * rally
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`
