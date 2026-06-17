@@ -506,12 +506,16 @@ fn team_standing_multiplier(
     // On top of the flat escort, the pack's resolve hardens with the very frames the
     // carrier tires over (this side's enemy-flag carry count, the same count the
     // carrier fatigue above reads), mirroring the human, so a long contested run home
-    // is shepherded harder rather than the escorts easing off. The offensive time
-    // mirror of the chase resolve.
+    // is shepherded harder rather than the escorts easing off. A keener (more
+    // gas-committed) driver digs into the resolve harder, a disciplined one more gently;
+    // the neutral all-rounder, like the human, scales by exactly 1.0, so its resolve is
+    // unchanged. The offensive time mirror of the chase resolve, scaled on the same
+    // commitment axis as the flat escort above.
     let escort_resolve = escort_resolve_speed_multiplier(
         we_hold_enemy_flag,
         is_carrier,
         carry_timers.frames_for(FlagTeam::from(team).enemy()),
+        ai.corner_throttle,
     );
     comeback * fatigue * front_runner * rally * chase_resolve * escort * escort_resolve
 }

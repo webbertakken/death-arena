@@ -329,7 +329,9 @@ fn player_chase_resolve_multiplier(
 /// has a holder, and the resolve reads the red flag's continuous-carry frame count
 /// (the same count the carrier's own fatigue reads); only an empty-handed car digs in,
 /// mirroring the field, so the shepherded carrier finds none and the urge never speeds
-/// a flag run home.
+/// a flag run home. The human has no driving personality, so it digs into the resolve on
+/// the neutral [`MIN_THROTTLE`] commitment the all-rounder corners on, keeping its urge at
+/// the unscaled baseline.
 fn player_escort_resolve_multiplier(
     flag_query: &Query<&CtfFlag>,
     carrying_flag: bool,
@@ -339,7 +341,12 @@ fn player_escort_resolve_multiplier(
         .iter()
         .any(|flag| flag.team == FlagTeam::Red && flag.holder.is_some());
     let carry_frames = carry_timers.map_or(0, |timers| timers.frames_for(FlagTeam::Red));
-    escort_resolve_speed_multiplier(we_hold_enemy_flag, carrying_flag, carry_frames)
+    escort_resolve_speed_multiplier(
+        we_hold_enemy_flag,
+        carrying_flag,
+        carry_frames,
+        MIN_THROTTLE,
+    )
 }
 
 /// The combined flag-in-flight feel multiplier the human earns from the four levers a
