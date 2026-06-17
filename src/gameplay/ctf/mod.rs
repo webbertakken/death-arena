@@ -212,6 +212,47 @@ const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS < GOLDEN_GOAL_CASH_BONUS);
 /// still enrich a win without ever out-paying taking the round itself, enforced at
 /// compile time.
 const _: () = assert!(DEMOLITION_DECIDER_CASH_BONUS + CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
+/// Cash a decisive winner banks on top of [`VICTORY_CASH_PURSE`] for a treasury
+/// decider: settling a sudden-death overtime that ran level on captures, steals,
+/// returns *and* wrecks by the cash tiebreak, money the final Death Rally arbiter.
+///
+/// The money-talks counterpart to [`GOLDEN_GOAL_CASH_BONUS`] and
+/// [`DEMOLITION_DECIDER_CASH_BONUS`], the third and last of the overtime finish
+/// bonuses. Where the golden goal prices the overtime *capture* and the demolition
+/// decider the *wreck* tiebreak, this prices the final resort: a deadlock neither the
+/// objective nor raw aggression could break, carried down to whichever side ran the
+/// richer campaign and settled by [`break_level_overtime_by_cash`]. In Death Rally
+/// money is the whole point, so the wealthier side edging a standstill nothing else
+/// could is a finish worth a payday of its own.
+///
+/// Like the other two it keys on the finish mode, not the final tally, so it stacks
+/// on whichever scoreline bonus the level overtime leaves: a 0-0 treasury decider is
+/// also a clean sheet, a 2-2 one a nail-biter. It is mutually exclusive with both
+/// other finish bonuses (a golden goal clinches before the overtime clock expires, a
+/// demolition decider settles an overtime the wreck tiebreak could break, which a
+/// treasury decider by definition could not), so a single win still banks at most one
+/// finish-mode bonus. Pitched below the demolition decider (winning on the bankroll is
+/// a more passive feat than out-wrecking the decider) and below the nail-biter too,
+/// the smallest win-quality bonus of all, yet kept clear below the victory purse so it
+/// enriches a win without ever out-paying taking the round; a level draw never earns
+/// it.
+pub const TREASURY_DECIDER_CASH_BONUS: u32 = 200;
+/// A treasury-decider bonus must be a real payday, not a token, enforced at compile
+/// time.
+const _: () = assert!(TREASURY_DECIDER_CASH_BONUS > 0);
+/// Out-wrecking a deadlocked decider must edge out winning it on the bankroll,
+/// enforced at compile time, so a more active overtime finish always out-earns the
+/// most passive one.
+const _: () = assert!(TREASURY_DECIDER_CASH_BONUS < DEMOLITION_DECIDER_CASH_BONUS);
+/// Winning purely on the bankroll, the most passive finish, must be the smallest
+/// win-quality bonus, below even denying the enemy match point, enforced at compile
+/// time.
+const _: () = assert!(TREASURY_DECIDER_CASH_BONUS < NAIL_BITER_CASH_BONUS);
+/// A treasury decider stacks on a scoreline bonus, so even its largest stack (with
+/// the clean sheet, the dearer of the two disjoint scoreline bonuses) must still
+/// enrich a win without ever out-paying taking the round itself, enforced at compile
+/// time.
+const _: () = assert!(TREASURY_DECIDER_CASH_BONUS + CLEAN_SHEET_CASH_BONUS < VICTORY_CASH_PURSE);
 /// Speed multiplier a car suffers while hauling the enemy flag home.
 ///
 /// The classic capture-the-flag tax: the heavy flag drags on the car, so the
@@ -646,11 +687,29 @@ fn award_match_purse_on_resolution(
             player_economy.wrecks,
             opponent_economy.wrecks,
         );
+    // The last of the overtime finish bonuses: an overtime level on every objective
+    // and on wrecks too, run down to its expiring clock and settled by the cash
+    // tiebreak. Read from the in-match cash before the purse is banked below, so the
+    // tally that decided the overtime is the one priced. The expired-clock guard
+    // tells it apart from a golden goal; the wreck-level requirement inside
+    // [`overtime_decided_by_cash`] keeps it disjoint from the demolition decider.
+    let overtime_cash_decider = clock.is_sudden_death()
+        && clock.is_expired()
+        && overtime_decided_by_cash(
+            *captures,
+            *steals,
+            *returns,
+            player_economy.wrecks,
+            opponent_economy.wrecks,
+            player_economy.cash,
+            opponent_economy.cash,
+        );
     purse::award_match_purse(
         winner,
         *captures,
         clinched_in_overtime,
         overtime_wreck_decider,
+        overtime_cash_decider,
         &mut player_economy,
         &mut opponent_economy,
     );

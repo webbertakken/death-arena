@@ -1641,10 +1641,12 @@ fn an_overtime_wreck_tiebreak_banks_the_demolition_bonus_through_the_system() {
 }
 
 #[test]
-fn an_overtime_level_on_wrecks_banks_no_demolition_bonus_through_the_system() {
+fn an_overtime_cash_tiebreak_banks_the_treasury_bonus_through_the_system() {
     let mut app = purse_app();
-    // A 1-1 objective deadlock level on wrecks too falls through to the cash
-    // decider, so it is no demolition decider and only the bare purse is banked.
+    // A 1-1 objective deadlock level on wrecks too falls through to the cash decider:
+    // the player banked one more coin, so the resolution system reads the expired
+    // overtime clock, the level objectives and wrecks, and banks the treasury-decider
+    // bonus (never the demolition bonus, which the level wrecks rule out).
     app.insert_resource(CaptureScore {
         player: 1,
         opponents: 1,
@@ -1665,7 +1667,7 @@ fn an_overtime_level_on_wrecks_banks_no_demolition_bonus_through_the_system() {
 
     assert_eq!(
         app.world.resource::<Score>().cash,
-        1 + VICTORY_CASH_PURSE,
-        "an overtime level on wrecks is settled on cash, banking no demolition bonus"
+        1 + VICTORY_CASH_PURSE + TREASURY_DECIDER_CASH_BONUS,
+        "an overtime deadlock settled by the cash tiebreak must bank the treasury bonus"
     );
 }
