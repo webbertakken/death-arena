@@ -623,6 +623,7 @@ mod tests {
     fn a_trailing_humans_catch_up_increases_forward_distance() {
         use crate::gameplay::comeback::comeback_speed_multiplier;
         use crate::gameplay::ctf::CAPTURES_TO_WIN;
+        use crate::gameplay::virtual_player::ai::MIN_THROTTLE;
 
         // Control: a level scoreline, so the human earns no catch-up urge.
         let mut level_app = setup_test_app();
@@ -661,7 +662,9 @@ mod tests {
             .translation
             .y;
 
-        let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false);
+        // The human has no driving personality, so it presses the catch-up on the
+        // neutral MIN_THROTTLE baseline (scale 1.0), reading the unscaled cap.
+        let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false, MIN_THROTTLE);
         assert!(
             catch_up > 1.0,
             "the fixture must actually trail, got {catch_up}"

@@ -278,7 +278,7 @@ pub fn virtual_player_drive_system(
         // Translation along the (rotated) forward vector.
         let movement_direction = transform.rotation * Vec3::Y;
         let car_speed = car_speed_multiplier(entity, ai.team, position, forward, &flags, &wakes)
-            * team_standing_multiplier(ai.team, captures, entity, &flags, carry_timers);
+            * team_standing_multiplier(&ai, captures, entity, &flags, carry_timers);
         let team_effects = team_movement_multiplier(
             ai.team,
             nitro_boosts.as_deref(),
@@ -425,7 +425,10 @@ fn car_speed_multiplier(
 ///
 /// The catch-up urges a trailing team's *chasers* (never its flag runner, so it
 /// can never speed a flag run home, mirroring the slipstream); a car level or
-/// ahead earns none. The rally and the chase resolve likewise urge only the
+/// ahead earns none. How hard a chaser presses the catch-up scales with its
+/// cornering commitment (see [`comeback_speed_multiplier`]): a keener driver claws
+/// the deficit back harder, the neutral all-rounder keeps the baseline urge. The
+/// rally and the chase resolve likewise urge only the
 /// *chasers* of a team whose own flag is in enemy hands, so a steal is run down
 /// rather than coasting home; both skip the carrier. The rally is a flat push the
 /// instant the flag goes out, the resolve (see [`chase_resolve_speed_multiplier`])
@@ -444,15 +447,19 @@ fn car_speed_multiplier(
 /// carry-frame count, so a long keep-away is squeezed from both ends at once. Every
 /// one of the six can only help the chase, never speed a flag run home.
 fn team_standing_multiplier(
-    team: AiTeam,
+    ai: &VirtualPlayer,
     captures: CaptureScore,
     entity: Entity,
     flags: &[FlagTarget],
     carry_timers: FlagCarryTimers,
 ) -> f32 {
+    let team = ai.team;
     let is_carrier = carries_enemy_flag(entity, team, flags);
     let (own, enemy) = captures.standings(FlagTeam::from(team));
-    let comeback = comeback_speed_multiplier(own, enemy, is_carrier);
+    // A keener (more gas-committed) driver presses the catch-up harder, a
+    // disciplined one more gently; the neutral all-rounder, like the human, scales
+    // by exactly 1.0, so its catch-up is unchanged.
+    let comeback = comeback_speed_multiplier(own, enemy, is_carrier, ai.corner_throttle);
     let fatigue = if is_carrier {
         carry_fatigue_speed_multiplier(carry_timers.frames_for(FlagTeam::from(team).enemy()))
     } else {

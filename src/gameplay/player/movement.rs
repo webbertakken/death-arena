@@ -14,6 +14,7 @@ use crate::gameplay::pickup::{NitroBoosts, SabotageEffects};
 use crate::gameplay::player::car::{FrontLeftWheel, FrontRightWheel};
 use crate::gameplay::player::Player;
 use crate::gameplay::slipstream::{slipstream_speed_multiplier, LeadingCar};
+use crate::gameplay::virtual_player::ai::MIN_THROTTLE;
 use crate::gameplay::virtual_player::VirtualPlayer;
 use crate::gameplay::wall_scrape::wall_scrape_speed_multiplier;
 use bevy::math::Vec3Swizzles;
@@ -249,10 +250,12 @@ fn player_carry_fatigue_multiplier(
 /// Catch-up urge the human earns while its side trails on captures, or `1.0` with
 /// no match in progress. The human is the player side, so its deficit is the
 /// opponents' capture lead; a flag carrier earns none, mirroring the field, so the
-/// catch-up never speeds a flag run home.
+/// catch-up never speeds a flag run home. The human has no driving personality, so
+/// it presses the catch-up on the neutral [`MIN_THROTTLE`] commitment the
+/// all-rounder corners on, keeping its urge at the unscaled baseline.
 fn player_comeback_multiplier(captures: Option<&CaptureScore>, carrying_flag: bool) -> f32 {
     captures.map_or(1.0, |score| {
-        comeback_speed_multiplier(score.player, score.opponents, carrying_flag)
+        comeback_speed_multiplier(score.player, score.opponents, carrying_flag, MIN_THROTTLE)
     })
 }
 

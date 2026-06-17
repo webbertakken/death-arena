@@ -66,6 +66,22 @@ fn spawn_ai_with_pursuit(
         .id()
 }
 
+/// A bare baseline driver for the standing-multiplier unit tests: the all-rounder
+/// personality (cornering on [`MIN_THROTTLE`]), so its catch-up scales by exactly
+/// 1.0 and the flag-in-flight levers read at their neutral baseline.
+fn standing_driver(team: AiTeam) -> VirtualPlayer {
+    VirtualPlayer {
+        team,
+        movement_speed: 500.0,
+        rotation_speed: f32::to_radians(360.0),
+        waypoints: Vec::new(),
+        current_waypoint: 0,
+        player_pursuit_radius: TEST_PURSUIT_RADIUS,
+        pickup_pursuit_radius: TEST_PICKUP_PURSUIT_RADIUS,
+        corner_throttle: MIN_THROTTLE,
+    }
+}
+
 /// Spawns a Red driver with a bespoke pickup-scavenging radius (and the
 /// baseline player-pursuit reach), so a test can pit a greedy personality
 /// against a disciplined one on the same pickup.
@@ -682,7 +698,9 @@ fn a_trailing_teams_catch_up_speeds_a_virtual_player() {
         .translation
         .y;
 
-    let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false);
+    // The fixture car corners on MIN_THROTTLE (the all-rounder baseline), so its
+    // catch-up scales by exactly 1.0 and reads the unscaled cap.
+    let catch_up = comeback_speed_multiplier(0, CAPTURES_TO_WIN - 1, false, MIN_THROTTLE);
     assert!(
         catch_up > 1.0,
         "the fixture must actually trail, got {catch_up}"
@@ -762,7 +780,7 @@ fn a_stolen_flag_rallies_a_teams_chasers() {
     let thief = Entity::from_raw(2);
 
     let safe = team_standing_multiplier(
-        AiTeam::Red,
+        &standing_driver(AiTeam::Red),
         CaptureScore::default(),
         chaser,
         &[
@@ -782,7 +800,7 @@ fn a_stolen_flag_rallies_a_teams_chasers() {
         FlagCarryTimers::default(),
     );
     let stolen = team_standing_multiplier(
-        AiTeam::Red,
+        &standing_driver(AiTeam::Red),
         CaptureScore::default(),
         chaser,
         &[
@@ -825,7 +843,7 @@ fn a_virtual_player_carrier_earns_no_rally_in_a_double_steal() {
     let carrier = Entity::from_raw(1);
     let thief = Entity::from_raw(2);
     let multiplier = team_standing_multiplier(
-        AiTeam::Red,
+        &standing_driver(AiTeam::Red),
         CaptureScore::default(),
         carrier,
         &[
@@ -864,7 +882,7 @@ fn a_held_enemy_flag_rallies_a_teams_escorts() {
     let carrier = Entity::from_raw(2);
 
     let calm = team_standing_multiplier(
-        AiTeam::Red,
+        &standing_driver(AiTeam::Red),
         CaptureScore::default(),
         escort,
         &[
@@ -884,7 +902,7 @@ fn a_held_enemy_flag_rallies_a_teams_escorts() {
         FlagCarryTimers::default(),
     );
     let escorting = team_standing_multiplier(
-        AiTeam::Red,
+        &standing_driver(AiTeam::Red),
         CaptureScore::default(),
         escort,
         &[
