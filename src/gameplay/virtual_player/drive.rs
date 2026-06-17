@@ -6,6 +6,7 @@ use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers,
     FlagTeam, MatchClock,
 };
+use crate::gameplay::escort_resolve::escort_resolve_speed_multiplier;
 use crate::gameplay::flag_escort::flag_escort_speed_multiplier;
 use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
@@ -479,7 +480,17 @@ fn team_standing_multiplier(
         .iter()
         .any(|flag| flag.team == team.enemy() && flag.holder.is_some());
     let escort = flag_escort_speed_multiplier(we_hold_enemy_flag, is_carrier);
-    comeback * fatigue * front_runner * rally * chase_resolve * escort
+    // On top of the flat escort, the pack's resolve hardens with the very frames the
+    // carrier tires over (this side's enemy-flag carry count, the same count the
+    // carrier fatigue above reads), mirroring the human, so a long contested run home
+    // is shepherded harder rather than the escorts easing off. The offensive time
+    // mirror of the chase resolve.
+    let escort_resolve = escort_resolve_speed_multiplier(
+        we_hold_enemy_flag,
+        is_carrier,
+        carry_timers.frames_for(FlagTeam::from(team).enemy()),
+    );
+    comeback * fatigue * front_runner * rally * chase_resolve * escort * escort_resolve
 }
 
 /// Slipstream tow `entity` earns from the cars ahead of it this frame, or `1.0`

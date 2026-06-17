@@ -5,6 +5,7 @@ use crate::gameplay::comeback::comeback_speed_multiplier;
 use crate::gameplay::ctf::{
     flag_carrier_speed_multiplier, CaptureScore, CtfFlag, CtfMatchResult, FlagCarryTimers, FlagTeam,
 };
+use crate::gameplay::escort_resolve::escort_resolve_speed_multiplier;
 use crate::gameplay::flag_escort::flag_escort_speed_multiplier;
 use crate::gameplay::flag_rally::flag_rally_speed_multiplier;
 use crate::gameplay::front_runner::front_runner_speed_multiplier;
@@ -107,17 +108,13 @@ pub fn car_movement_system(
     // field, so its run home is weighed down the further its side leads.
     let front_runner_multiplier =
         player_front_runner_multiplier(captures.as_deref(), carrying_flag);
-    // The human's side rallies its empty-handed cars while its own flag is in enemy
-    // hands, just like the field, so a steal is chased down rather than coasting home.
-    let flag_rally_multiplier = player_flag_rally_multiplier(&flag_query, carrying_flag);
-    // On top of the flat rally, the human's chasers find resolve building the longer
-    // its flag is held, just like the field, so a long keep-away is squeezed harder.
-    let chase_resolve_multiplier =
-        player_chase_resolve_multiplier(&flag_query, carrying_flag, flag_carry_timers.as_deref());
-    // The human's side rallies its empty-handed cars to escort their own carrier home
-    // while one of them holds the enemy flag, just like the field, so a capture is
-    // shepherded in rather than running the gauntlet alone.
-    let flag_escort_multiplier = player_flag_escort_multiplier(&flag_query, carrying_flag);
+    // The four flag-in-flight feel levers, each mirroring the field: while the human's
+    // own flag is out, the defensive flag-recovery rally and its time-ramped chase
+    // resolve; while the human hauls the enemy flag home, the offensive flag escort and
+    // its time-ramped escort resolve. Folded together so the system reads the whole
+    // flag-pressure stack in one call.
+    let flag_feel_multiplier =
+        player_flag_feel_multiplier(&flag_query, carrying_flag, flag_carry_timers.as_deref());
     let speed_multiplier = player.engine_max_speed_multiplier
         * effect_multiplier
         * carry_multiplier
@@ -126,9 +123,7 @@ pub fn car_movement_system(
         * wall_scrape_multiplier
         * comeback_multiplier
         * front_runner_multiplier
-        * flag_rally_multiplier
-        * chase_resolve_multiplier
-        * flag_escort_multiplier;
+        * flag_feel_multiplier;
     let forward_max_speed = player.forward_max_speed_base * speed_multiplier;
     let backward_max_speed = player.backward_max_speed_base * speed_multiplier;
 
@@ -314,4 +309,42 @@ fn player_chase_resolve_multiplier(
         .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
     let carry_frames = carry_timers.map_or(0, |timers| timers.frames_for(FlagTeam::Blue));
     chase_resolve_speed_multiplier(own_flag_stolen, carrying_flag, carry_frames)
+}
+
+/// Escort resolve the human's empty-handed escorts build while its side hauls the
+/// enemy flag home, hardening the longer the run drags on, or `1.0` when no blue car
+/// holds it (or no match is in progress, so the timers are absent). The human is the
+/// player (blue) side, so the enemy flag is the red flag, held exactly when that flag
+/// has a holder, and the resolve reads the red flag's continuous-carry frame count
+/// (the same count the carrier's own fatigue reads); only an empty-handed car digs in,
+/// mirroring the field, so the shepherded carrier finds none and the urge never speeds
+/// a flag run home.
+fn player_escort_resolve_multiplier(
+    flag_query: &Query<&CtfFlag>,
+    carrying_flag: bool,
+    carry_timers: Option<&FlagCarryTimers>,
+) -> f32 {
+    let we_hold_enemy_flag = flag_query
+        .iter()
+        .any(|flag| flag.team == FlagTeam::Red && flag.holder.is_some());
+    let carry_frames = carry_timers.map_or(0, |timers| timers.frames_for(FlagTeam::Red));
+    escort_resolve_speed_multiplier(we_hold_enemy_flag, carrying_flag, carry_frames)
+}
+
+/// The combined flag-in-flight feel multiplier the human earns from the four levers a
+/// flag in motion arms, mirroring the field's `team_standing_multiplier` fold: the
+/// defensive flag-recovery rally and its time-ramped chase resolve while the human's
+/// own flag is in enemy hands, and the offensive flag escort and its time-ramped
+/// escort resolve while the human hauls the enemy flag home. Each lever excludes the
+/// carrier itself, so none ever speeds a flag run home; folded here so the movement
+/// system reads the whole flag-pressure stack in a single call.
+fn player_flag_feel_multiplier(
+    flag_query: &Query<&CtfFlag>,
+    carrying_flag: bool,
+    carry_timers: Option<&FlagCarryTimers>,
+) -> f32 {
+    player_flag_rally_multiplier(flag_query, carrying_flag)
+        * player_chase_resolve_multiplier(flag_query, carrying_flag, carry_timers)
+        * player_flag_escort_multiplier(flag_query, carrying_flag)
+        * player_escort_resolve_multiplier(flag_query, carrying_flag, carry_timers)
 }

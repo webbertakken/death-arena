@@ -14,6 +14,7 @@ mod chase_resolve;
 mod combat;
 mod comeback;
 mod ctf;
+mod escort_resolve;
 mod flag_escort;
 mod flag_rally;
 mod front_runner;
