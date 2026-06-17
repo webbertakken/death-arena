@@ -482,11 +482,15 @@ fn team_standing_multiplier(
     let rally = flag_rally_speed_multiplier(own_flag_stolen, is_carrier, ai.corner_throttle);
     // On top of the rally, the pack's resolve hardens with the very frames the
     // carrier tires over (the robbed team's own flag's carry count), mirroring the
-    // human, so a long keep-away is squeezed from both ends at once.
+    // human, so a long keep-away is squeezed from both ends at once. A keener
+    // (more gas-committed) driver digs into the resolve harder, a disciplined one
+    // more gently; the neutral all-rounder, like the human, scales by exactly 1.0,
+    // so its resolve is unchanged. The time-ramped mirror of the rally scaling above.
     let chase_resolve = chase_resolve_speed_multiplier(
         own_flag_stolen,
         is_carrier,
         carry_timers.frames_for(FlagTeam::from(team)),
+        ai.corner_throttle,
     );
     // The side rallies its empty-handed cars to escort their own carrier home while one
     // of them holds the enemy flag (the enemy flag is only ever held by this side),

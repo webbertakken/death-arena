@@ -307,7 +307,9 @@ fn player_flag_escort_multiplier(flag_query: &Query<&CtfFlag>, carrying_flag: bo
 /// player (blue) side, so its flag is the blue flag, stolen exactly when that flag
 /// has a holder, and the resolve reads the blue flag's continuous-carry frame count;
 /// only an empty-handed car digs in, mirroring the field, so a double-steal carrier
-/// finds none and the urge never speeds a flag run home.
+/// finds none and the urge never speeds a flag run home. The human has no driving
+/// personality, so it digs into the resolve on the neutral [`MIN_THROTTLE`] commitment
+/// the all-rounder corners on, keeping its urge at the unscaled baseline.
 fn player_chase_resolve_multiplier(
     flag_query: &Query<&CtfFlag>,
     carrying_flag: bool,
@@ -317,7 +319,7 @@ fn player_chase_resolve_multiplier(
         .iter()
         .any(|flag| flag.team == FlagTeam::Blue && flag.holder.is_some());
     let carry_frames = carry_timers.map_or(0, |timers| timers.frames_for(FlagTeam::Blue));
-    chase_resolve_speed_multiplier(own_flag_stolen, carrying_flag, carry_frames)
+    chase_resolve_speed_multiplier(own_flag_stolen, carrying_flag, carry_frames, MIN_THROTTLE)
 }
 
 /// Escort resolve the human's empty-handed escorts build while its side hauls the
