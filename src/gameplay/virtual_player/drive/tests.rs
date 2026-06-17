@@ -375,6 +375,81 @@ fn a_trailing_team_is_not_recalled_to_defend_in_closing_time() {
 }
 
 #[test]
+fn a_second_free_car_shields_the_flag_carriers_flank_from_a_second_pursuer() {
+    // Red hauls the blue flag home, the carrier just south of centre. Two blue
+    // chasers close in: the nearer (west) draws the primary block, so a second free
+    // red car peels off to shield the carrier's flank against the second chaser
+    // (south), interposing on the ram-range ring just south of the carrier. The
+    // flank car sits between the carrier and its northern home base: shielding pulls
+    // it south (dy < 0), while with only one chaser it has no flank to shield and
+    // takes its home-defence fallback to the north (dy > 0). The opposite signs
+    // isolate the new flank-shield behaviour, all within the arena bounds.
+    fn flank_dy(second_pursuer: bool) -> f32 {
+        let mut app = app_with_system();
+
+        let carrier = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, -100.0, 4.0),
+        );
+        // The primary blocker, nearest the western chaser's intercept.
+        spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(-160.0, -50.0, 4.0),
+        );
+        // The flank car under test, north of the carrier, between it and home.
+        let flank = spawn_ai_at(
+            &mut app,
+            vec![Vec2::new(0.0, 2000.0)],
+            Vec3::new(0.0, 100.0, 4.0),
+        );
+
+        // Two blue chasers: west (closest) and, optionally, south (second).
+        let west = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::ZERO]);
+        app.world.get_mut::<Transform>(west).unwrap().translation = Vec3::new(-230.0, -100.0, 4.0);
+        if second_pursuer {
+            let south = spawn_ai_on_team(&mut app, AiTeam::Blue, vec![Vec2::ZERO]);
+            app.world.get_mut::<Transform>(south).unwrap().translation =
+                Vec3::new(0.0, -340.0, 4.0);
+        }
+
+        // Red home sits north; the blue flag is carried by the red carrier, so the
+        // lone chaser's fallback (home defence) lane lies north of the flank car.
+        spawn_flag(
+            &mut app,
+            FlagTeam::Red,
+            Vec2::new(0.0, 500.0),
+            Vec3::new(0.0, 500.0, 4.0),
+            None,
+        );
+        spawn_flag(
+            &mut app,
+            FlagTeam::Blue,
+            Vec2::new(0.0, -500.0),
+            Vec3::new(0.0, -100.0, 4.0),
+            Some(carrier),
+        );
+
+        app.update();
+
+        app.world.get::<Transform>(flank).unwrap().translation.y - 100.0
+    }
+
+    let lone_chaser = flank_dy(false);
+    let second_chaser = flank_dy(true);
+
+    assert!(
+        lone_chaser > 0.1,
+        "with a lone chaser the spare car takes its home-defence fallback to the north: {lone_chaser}"
+    );
+    assert!(
+        second_chaser < -0.1,
+        "a second chaser pulls a spare car back south to shield the carrier's flank: {second_chaser}"
+    );
+}
+
+#[test]
 fn moves_towards_a_distant_waypoint() {
     let mut app = app_with_system();
     // Facing +Y by default, waypoint straight ahead.

@@ -812,6 +812,147 @@ pub fn pincer_partner(
         .map(|candidate| candidate.entity)
 }
 
+/// A teammate free to peel off and shield a friendly flag carrier from a second
+/// pursuer.
+///
+/// The defensive mirror of [`FinishOffCandidate`]: where that lists cars free to
+/// pile onto a kill, this lists cars free to pile onto the *defence* of a fragile
+/// flag carrier.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlankShieldCandidate {
+    pub entity: Entity,
+    pub position: Vec2,
+    pub carries_enemy_flag: bool,
+}
+
+/// Smallest team car count that still spares the carrier and its primary blocker
+/// while a second car peels off to shield the flank: the carrier, the primary
+/// [`DrivingTarget::BlockFlagCarrierPursuer`] blocker the CTF role already sends,
+/// and the flank shield itself.
+///
+/// The defensive mirror of [`PINCER_MIN_TEAM_CARS`]: a flank shield must leave the
+/// carrier's primary protection intact, the same way a pincer must leave a car on
+/// the objective.
+pub const FLANK_SHIELD_MIN_TEAM_CARS: usize = 3;
+
+/// A flank shield must field more cars than a lone block, enforced at compile time,
+/// so peeling a second blocker never strips the carrier's primary protection.
+const _: () = assert!(FLANK_SHIELD_MIN_TEAM_CARS > 2);
+
+/// Picks a second teammate to shield a friendly flag carrier from a second
+/// pursuer, paired with the intercept point on the carrier's ram-range ring, or
+/// `None` when no second pursuer warrants it or no car can join without stripping
+/// the carrier's primary protection.
+///
+/// The defensive mirror of [`pincer_partner`]: where the pincer piles a second
+/// hunter onto a kill to spring the combat gang-up, this piles a second blocker
+/// onto the defence of a fragile flag carrier. A carrier (which bleeds at the
+/// doubled [`crate::gameplay::combat::FLAG_CARRIER_RAM_DAMAGE_PER_FRAME`]) often
+/// draws more than one chaser, yet the [`choose_capture_the_flag_target`] block
+/// role covers only the closest pursuer, so a second runs the carrier down
+/// unopposed. This sends the next free car to interpose on that second pursuer,
+/// reusing the same proven [`block_pursuer_intercept_point`] ring geometry the
+/// primary block already uses, so both blockers meet their pursuer on the
+/// carrier's ram-range ring on its true line of approach.
+///
+/// Stateless and deterministic, mirroring [`pincer_partner`]:
+/// - while an enemy contests the team's own base (see [`closest_home_base_contester`])
+///   no flank shield springs: defending a flag steal at home is more existential
+///   than shielding the carrier's flank, so the [`DrivingTarget::UrgentDefendHomeBase`]
+///   role keeps precedence rather than being overridden by this overlay;
+/// - only the two closest enemy pursuers within [`FLAG_CARRIER_PURSUER_RADIUS`] of
+///   the carrier are considered; with fewer than two the lone pursuer is already
+///   covered by the primary block, so no flank shield springs;
+/// - it reproduces the CTF role's primary-blocker pick (the free non-carrier
+///   nearest the closest pursuer's intercept, with the shared `x`-then-`y`
+///   [`compare_positions`] tie-break) and excludes that car, then sends the free
+///   non-carrier nearest the *second* pursuer's intercept, so the flank blocker is
+///   always a different car from the primary;
+/// - a flag carrier is never pulled off its run, and the team must field at least
+///   [`FLANK_SHIELD_MIN_TEAM_CARS`] cars, so committing a second blocker never
+///   strips the carrier's primary protection.
+#[must_use]
+pub fn carrier_flank_shield(
+    carrier: Vec2,
+    home: Vec2,
+    team: AiTeam,
+    threats: &[ThreatTarget],
+    candidates: &[FlankShieldCandidate],
+) -> Option<(Entity, Vec2)> {
+    if candidates.len() < FLANK_SHIELD_MIN_TEAM_CARS {
+        return None;
+    }
+
+    // A steal at home outranks shielding the run: stand down so the urgent home
+    // defence keeps the car this overlay would otherwise pull.
+    if closest_home_base_contester(team, home, threats).is_some() {
+        return None;
+    }
+
+    let (closest, second) = two_closest_pursuers(team, carrier, threats)?;
+
+    // Reproduce the CTF block role's primary-blocker pick (the free car nearest the
+    // closest pursuer's intercept) so the flank shield excludes it and covers the
+    // second pursuer with a different car.
+    let primary_point = block_pursuer_intercept_point(carrier, closest);
+    let primary = nearest_flank_blocker(candidates, primary_point, None)?;
+
+    let flank_point = block_pursuer_intercept_point(carrier, second);
+    let flank = nearest_flank_blocker(candidates, flank_point, Some(primary))?;
+
+    Some((flank, flank_point))
+}
+
+/// The two enemy pursuers nearest a flag carrier within
+/// [`FLAG_CARRIER_PURSUER_RADIUS`], ordered closest first with the shared
+/// `x`-then-`y` [`compare_positions`] tie-break, or `None` when fewer than two
+/// pursue (a lone pursuer is already covered by the primary block).
+fn two_closest_pursuers(
+    team: AiTeam,
+    carrier: Vec2,
+    threats: &[ThreatTarget],
+) -> Option<(ThreatTarget, ThreatTarget)> {
+    let radius_sq = FLAG_CARRIER_PURSUER_RADIUS * FLAG_CARRIER_PURSUER_RADIUS;
+    let mut pursuers: Vec<ThreatTarget> = threats
+        .iter()
+        .copied()
+        .filter(|threat| {
+            threat.team == team.enemy() && threat.position.distance_squared(carrier) <= radius_sq
+        })
+        .collect();
+    pursuers.sort_by(|a, b| {
+        a.position
+            .distance_squared(carrier)
+            .partial_cmp(&b.position.distance_squared(carrier))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| compare_positions(a.position, b.position))
+    });
+    match pursuers.as_slice() {
+        [closest, second, ..] => Some((*closest, *second)),
+        _ => None,
+    }
+}
+
+/// The free non-carrier nearest `point`, optionally excluding one already-committed
+/// car, with the shared `x`-then-`y` [`compare_positions`] tie-break.
+fn nearest_flank_blocker(
+    candidates: &[FlankShieldCandidate],
+    point: Vec2,
+    exclude: Option<Entity>,
+) -> Option<Entity> {
+    candidates
+        .iter()
+        .filter(|candidate| !candidate.carries_enemy_flag && Some(candidate.entity) != exclude)
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(point)
+                .partial_cmp(&b.position.distance_squared(point))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare_positions(a.position, b.position))
+        })
+        .map(|candidate| candidate.entity)
+}
+
 /// Distance beyond the arena wall the [`finish_off_wall_crush_aim`] target sits,
 /// so a hunter pressing a wall-pinned prey charges firmly *through* it into the
 /// boundary rather than merely up to it.

@@ -3410,6 +3410,255 @@ fn pincer_partner_breaks_ties_deterministically() {
     );
 }
 
+fn flank_shield_candidate(entity: u32, position: Vec2) -> FlankShieldCandidate {
+    FlankShieldCandidate {
+        entity: Entity::from_raw(entity),
+        position,
+        carries_enemy_flag: false,
+    }
+}
+
+fn flank_shield_carrier(entity: u32, position: Vec2) -> FlankShieldCandidate {
+    FlankShieldCandidate {
+        entity: Entity::from_raw(entity),
+        position,
+        carries_enemy_flag: true,
+    }
+}
+
+/// A stationary enemy (blue) pursuer of a red team's flag carrier, so a test's
+/// block point is the static interpose on the ring rather than a lead.
+fn blue_pursuer(position: Vec2) -> ThreatTarget {
+    ThreatTarget {
+        team: AiTeam::Blue,
+        position,
+        velocity: Vec2::ZERO,
+    }
+}
+
+#[test]
+fn carrier_flank_shield_sends_a_second_car_to_the_second_pursuer() {
+    // The carrier sits at the origin with two blue chasers: the nearer one
+    // (east) is the primary block's job, so a second free car peels off to
+    // interpose on the second chaser (north) on the carrier's ram-range ring.
+    let carrier = Vec2::ZERO;
+    let second = blue_pursuer(Vec2::new(0.0, 220.0));
+    let threats = [blue_pursuer(Vec2::new(200.0, 0.0)), second];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(0.0, 300.0)),
+    ];
+
+    assert_eq!(
+        carrier_flank_shield(
+            carrier,
+            Vec2::new(0.0, 1000.0),
+            AiTeam::Red,
+            &threats,
+            &candidates
+        ),
+        Some((
+            Entity::from_raw(3),
+            block_pursuer_intercept_point(carrier, second)
+        ))
+    );
+}
+
+#[test]
+fn carrier_flank_shield_needs_a_second_pursuer() {
+    // A lone chaser is already covered by the primary block, so no flank shield
+    // springs.
+    let carrier = Vec2::ZERO;
+    let threats = [blue_pursuer(Vec2::new(200.0, 0.0))];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(0.0, 300.0)),
+    ];
+
+    assert_eq!(
+        carrier_flank_shield(
+            carrier,
+            Vec2::new(0.0, 1000.0),
+            AiTeam::Red,
+            &threats,
+            &candidates
+        ),
+        None
+    );
+}
+
+#[test]
+fn carrier_flank_shield_spares_the_carriers_primary_protection_with_too_few_cars() {
+    // Only the carrier plus one free car: peeling that car would strip the
+    // carrier's primary block, so no flank shield springs even with two chasers.
+    let carrier = Vec2::ZERO;
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(0.0, 220.0)),
+    ];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+    ];
+
+    assert_eq!(
+        carrier_flank_shield(
+            carrier,
+            Vec2::new(0.0, 1000.0),
+            AiTeam::Red,
+            &threats,
+            &candidates
+        ),
+        None
+    );
+}
+
+#[test]
+fn carrier_flank_shield_never_pulls_the_flag_carrier() {
+    // The carrier sits dead on the ring, nearest both intercepts, yet it keeps
+    // hauling the flag home: a non-carrier is the one peeled off to shield it.
+    let carrier = Vec2::ZERO;
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(0.0, 220.0)),
+    ];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(0.0, 300.0)),
+    ];
+
+    let (entity, _) = carrier_flank_shield(
+        carrier,
+        Vec2::new(0.0, 1000.0),
+        AiTeam::Red,
+        &threats,
+        &candidates,
+    )
+    .expect("a flank shield");
+    assert_ne!(
+        entity,
+        Entity::from_raw(1),
+        "the carrier is never pulled off its run"
+    );
+}
+
+#[test]
+fn carrier_flank_shield_ignores_a_distant_second_pursuer() {
+    // Only one chaser is within pursuer range; the far one is no threat to the
+    // run yet, so no flank shield springs.
+    let carrier = Vec2::ZERO;
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(0.0, FLAG_CARRIER_PURSUER_RADIUS + 50.0)),
+    ];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(0.0, 300.0)),
+    ];
+
+    assert_eq!(
+        carrier_flank_shield(
+            carrier,
+            Vec2::new(0.0, 1000.0),
+            AiTeam::Red,
+            &threats,
+            &candidates
+        ),
+        None
+    );
+}
+
+#[test]
+fn carrier_flank_shield_excludes_the_primary_blocker() {
+    // Both chasers close from the east, so one car is nearest to both
+    // intercepts; it takes the primary block, and the flank goes to the next
+    // car, never the same one twice.
+    let carrier = Vec2::ZERO;
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(210.0, 20.0)),
+    ];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(330.0, 0.0)),
+    ];
+
+    let (entity, _) = carrier_flank_shield(
+        carrier,
+        Vec2::new(0.0, 1000.0),
+        AiTeam::Red,
+        &threats,
+        &candidates,
+    )
+    .expect("a flank shield");
+    assert_eq!(
+        entity,
+        Entity::from_raw(3),
+        "the nearest car blocks the closest chaser; the flank is the next car"
+    );
+}
+
+#[test]
+fn carrier_flank_shield_breaks_ties_deterministically() {
+    // Two free cars sit equidistant from the flank intercept; the shared
+    // x-then-y tie-break settles the pick so it never wavers frame to frame.
+    let carrier = Vec2::ZERO;
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(0.0, 220.0)),
+    ];
+    let flank_point = block_pursuer_intercept_point(carrier, threats[1]);
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(500.0, 0.0)),
+        flank_shield_candidate(3, flank_point + Vec2::new(40.0, 0.0)),
+        flank_shield_candidate(4, flank_point + Vec2::new(-40.0, 0.0)),
+    ];
+
+    let (entity, _) = carrier_flank_shield(
+        carrier,
+        Vec2::new(0.0, 1000.0),
+        AiTeam::Red,
+        &threats,
+        &candidates,
+    )
+    .expect("a flank shield");
+    assert_eq!(
+        entity,
+        Entity::from_raw(4),
+        "equidistant flank candidates settle on the lower x, matching compare_positions"
+    );
+}
+
+#[test]
+fn carrier_flank_shield_stands_down_while_the_home_base_is_contested() {
+    // Two chasers hound the carrier, but an enemy is also sitting on the team's
+    // own base: defending the steal there outranks shielding the run, so the
+    // urgent home defence keeps the car rather than this overlay pulling it.
+    let carrier = Vec2::ZERO;
+    let home = Vec2::new(0.0, 1000.0);
+    let threats = [
+        blue_pursuer(Vec2::new(200.0, 0.0)),
+        blue_pursuer(Vec2::new(0.0, 220.0)),
+        blue_pursuer(home + Vec2::new(0.0, HOME_BASE_CONTEST_RADIUS - 10.0)),
+    ];
+    let candidates = [
+        flank_shield_carrier(1, carrier),
+        flank_shield_candidate(2, Vec2::new(300.0, 0.0)),
+        flank_shield_candidate(3, Vec2::new(0.0, 300.0)),
+    ];
+
+    assert_eq!(
+        carrier_flank_shield(carrier, home, AiTeam::Red, &threats, &candidates),
+        None
+    );
+}
+
 #[test]
 fn wall_crush_aim_drives_a_wall_pinned_prey_into_the_boundary() {
     let half = Vec2::new(1000.0, 600.0);

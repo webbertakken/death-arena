@@ -11,11 +11,12 @@ use crate::gameplay::pickup::{NitroBoosts, Pickup, PickupKind, SabotageEffects};
 use crate::gameplay::player::Player;
 use crate::gameplay::slipstream::{draft_seeking_aim, slipstream_speed_multiplier, LeadingCar};
 use crate::gameplay::virtual_player::ai::{
-    choose_capture_the_flag_target, choose_driving_target, compare_positions, compute_steering,
-    draft_seek_cone, finish_off_aim, finish_off_car, lead_defence_car, next_waypoint,
-    pincer_partner, pit_retreat_car, pit_retreat_home_run_aim, AiTeam, DrivingChoices,
-    DrivingTarget, FinishOffCandidate, FlagTarget, LeadDefenceCandidate, PickupTarget,
-    PitRetreatCandidate, SteeringIntent, ThreatTarget, MIN_THROTTLE,
+    carrier_flank_shield, choose_capture_the_flag_target, choose_driving_target, compare_positions,
+    compute_steering, draft_seek_cone, finish_off_aim, finish_off_car, lead_defence_car,
+    next_waypoint, pincer_partner, pit_retreat_car, pit_retreat_home_run_aim, AiTeam,
+    DrivingChoices, DrivingTarget, FinishOffCandidate, FlagTarget, FlankShieldCandidate,
+    LeadDefenceCandidate, PickupTarget, PitRetreatCandidate, SteeringIntent, ThreatTarget,
+    MIN_THROTTLE,
 };
 use crate::gameplay::virtual_player::discipline::{
     closing_time_pickup_discipline, lead_protection, ClosingTimePickupDiscipline,
@@ -304,10 +305,13 @@ fn confine_to_arena(translation: &mut Vec3) {
 ///
 /// Survival comes first (a battered team's [`pit_retreat_targets`]), then offence
 /// (a healthier team's [`finish_off_targets`]), then closing-time lead defence
-/// (a leading team's [`lead_defence_targets`]). [`resolve_overlay_target`] takes
-/// the first entry that claims a given entity, so an earlier overlay wins when
-/// several would lay claim to the same car. Each overlay overrides the CTF role
-/// the car would otherwise take.
+/// (a leading team's [`lead_defence_targets`]), and finally carrier protection
+/// (a second car shielding a friendly flag carrier's flank, [`flank_shield_targets`]).
+/// [`resolve_overlay_target`] takes the first entry that claims a given entity, so
+/// an earlier overlay wins when several would lay claim to the same car. The flank
+/// shield sits last so survival, the kill press and a closing-time recall all keep
+/// precedence over it; only a car none of those claim is peeled off to shield the
+/// run. Each overlay overrides the CTF role the car would otherwise take.
 fn overlay_targets(
     query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
     flags: &[FlagTarget],
@@ -322,6 +326,7 @@ fn overlay_targets(
             query, flags, threats, integrity, captures, clock,
         ))
         .chain(lead_defence_targets(query, flags, clock, captures))
+        .chain(flank_shield_targets(query, flags, threats))
         .collect()
 }
 
@@ -1144,6 +1149,63 @@ fn lead_defence_targets(
         if let Some(entity) = lead_defence_car(protection.for_team(team), &candidates) {
             let guard = home_lane_guard_point(own_flag.home, enemy_home);
             targets.push((entity, DrivingTarget::DefendHomeBase(guard)));
+        }
+    }
+    targets
+}
+
+/// Resolves which teams peel a second car off to shield a friendly flag carrier's
+/// flank from a second pursuer.
+///
+/// The defensive counterpart to [`finish_off_targets`]' pincer: where the kill
+/// press piles a second hunter onto a victim, this piles a second blocker onto the
+/// defence of a fragile flag carrier. A carrier is found per team as the car
+/// hauling the enemy flag home (the enemy flag's holder, which sits at the carrier);
+/// with none in flight there is no run to shield. When two enemies pursue, the
+/// primary [`DrivingTarget::BlockFlagCarrierPursuer`] CTF role covers only the
+/// closest, so [`carrier_flank_shield`] sends the next free car to interpose on the
+/// second pursuer on the carrier's ram-range ring, reusing the same proven block
+/// geometry. The block role is not coordinated through the CTF assignment here, so
+/// the flank shield does its own picking (excluding the primary blocker it
+/// reproduces). Enemy positions come from the same threat list the defensive roles
+/// use, so the human flag-runner's chasers are shielded against just like a virtual
+/// one's.
+fn flank_shield_targets(
+    query: &Query<(Entity, &mut VirtualPlayer, &mut Transform)>,
+    flags: &[FlagTarget],
+    threats: &[ThreatTarget],
+) -> Vec<(Entity, DrivingTarget)> {
+    let mut targets = Vec::new();
+    for team in [AiTeam::Blue, AiTeam::Red] {
+        let Some(home) = flags
+            .iter()
+            .find(|flag| flag.team == team)
+            .map(|flag| flag.home)
+        else {
+            continue;
+        };
+        // A flag is only ever held by an enemy, so the enemy team's flag being held
+        // means this team is the one hauling it home: its holder sits at the carrier.
+        let Some(carrier) = flags
+            .iter()
+            .find(|flag| flag.team == team.enemy() && flag.holder.is_some())
+            .map(|flag| flag.position)
+        else {
+            continue;
+        };
+        let candidates: Vec<FlankShieldCandidate> = query
+            .iter()
+            .filter(|(_, virtual_player, _)| virtual_player.team == team)
+            .map(|(entity, _, transform)| FlankShieldCandidate {
+                entity,
+                position: transform.translation.xy(),
+                carries_enemy_flag: carries_enemy_flag(entity, team, flags),
+            })
+            .collect();
+        if let Some((entity, point)) =
+            carrier_flank_shield(carrier, home, team, threats, &candidates)
+        {
+            targets.push((entity, DrivingTarget::BlockFlagCarrierPursuer(point)));
         }
     }
     targets
