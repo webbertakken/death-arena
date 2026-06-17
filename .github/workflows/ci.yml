@@ -280,6 +280,9 @@ jobs:
       - name: Check human-baseline commitment (human drives every commitment-scaled lever at MIN_THROTTLE)
         run: bash scripts/check_human_baseline_commitment.sh
 
+      - name: Check field commitment personality (field drives every commitment-scaled lever on its own corner_throttle)
+        run: bash scripts/check_field_commitment_personality.sh
+
       - name: Check effect-multiplier parity (human and field share the timed-effect stack)
         run: bash scripts/check_effect_multiplier_parity.sh
 
