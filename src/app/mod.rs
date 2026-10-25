@@ -1,12 +1,13 @@
+use crate::app::audio::AudioPlugin;
 use crate::app::generic::GenericSystemsPlugin;
 use crate::app::lights::LightingPlugin;
 use crate::app::physics::PhysicsPlugin;
 use crate::ui::UserInterfacePlugin;
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
-use bevy_kira_audio::AudioPlugin;
 use bevy_rapier2d::prelude::*;
 
+pub mod audio;
 pub mod generic;
 pub mod init;
 pub mod lights;

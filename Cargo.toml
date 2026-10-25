@@ -28,7 +28,7 @@ bevy = { version = "0.9.1", default-features = false, features = [
 ] }
 ron = { version = "0.7.1" }
 serde_json = { version = "1.0.149" }
-bevy_kira_audio = { version = "0.13", features = ["ogg", "mp3"] }
+kira = { version = "0.12.5", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis"] }
 bevy_common_assets = { version = "0.4.0", features = ["json"] }
 # tempfix: pinned to the exact fork commit (the head of `bevy-0.9` at pin time),
 # not the moving branch, so a cargo update cannot silently swap the physics engine
