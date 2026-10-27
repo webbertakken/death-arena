@@ -51,7 +51,7 @@ getrandom = { version = "0.2", features = ["js"] }
 rusty-hook = "0.11"
 
 [build-dependencies]
-embed-resource = "1.8.0"
+embed-resource = "3.0.0"
 
 [features]
 dev = []
