@@ -1257,6 +1257,7 @@ dependencies = [
  "rusty-hook",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

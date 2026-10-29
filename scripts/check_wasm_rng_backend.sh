@@ -14,7 +14,8 @@ set -euo pipefail
 #
 # The fix is `getrandom`'s `js` feature, which wires entropy to the browser's Web
 # Crypto API. This guard keeps that configuration from silently regressing: it
-# fails unless Cargo.toml enables `getrandom`'s `js` feature for the wasm target.
+# fails unless Cargo.toml enables the `js` feature of `getrandom` and `uuid` for
+# the wasm target.
 # It is a cheap manifest check (no network, no wasm target install) so it runs in
 # the same guards job as the other manifest guards.
 
@@ -48,4 +49,14 @@ ERROR
   exit 1
 fi
 
-echo "wasm build enables getrandom's js backend (rand works in the browser)."
+if ! grep -Eq '^[[:space:]]*uuid[[:space:]]*=.*features[[:space:]]*=[[:space:]]*\[[^]]*"js"[^]]*\]' "${manifest}"; then
+  cat >&2 <<ERROR
+${manifest} must enable uuid's "js" feature for the wasm target, e.g.:
+  uuid = { version = "1.29", features = ["js"] }
+Bevy creates v4 uuids, and uuid refuses to compile for wasm32-unknown-unknown
+unless a randomness source is named; js routes it to the browser's Web Crypto API.
+ERROR
+  exit 1
+fi
+
+echo "wasm build enables the js backend of getrandom and uuid (randomness works in the browser)."

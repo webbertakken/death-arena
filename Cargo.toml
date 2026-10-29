@@ -6,11 +6,11 @@ publish = false
 authors = ["Webber Takken <webber@takken.io>", "Worempie"]
 exclude = [".git/", ".idea/", "dist/", "build/", "assets/", "credits/"]
 
-# getrandom is pulled in transitively (via uuid) and carries no direct `use`; it
-# is declared only to pin its `js` feature for the wasm build (see the wasm target
-# dependency table below), so cargo-machete must not flag it as unused.
+# getrandom and uuid are pulled in transitively (via bevy) and carry no direct
+# `use`; they are declared only to pin their `js` feature for the wasm build (see
+# the wasm target dependency table below), so cargo-machete must not flag them.
 [package.metadata.cargo-machete]
-ignored = ["getrandom"]
+ignored = ["getrandom", "uuid"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
@@ -41,10 +41,14 @@ bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", rev = "3faba
 # so `rand::random()` panics at runtime, exactly where the arena loader picks an
 # arena the moment a match starts. The `js` feature routes entropy to the
 # browser's Web Crypto API so the live GitHub Pages demo runs instead of crashing.
-# Only a feature pin on a transitively-present crate, hence the cargo-machete
-# ignore below and the scripts/check_wasm_rng_backend.sh guard.
+# uuid (Bevy creates v4 asset and scene ids) refuses to compile for
+# wasm32-unknown-unknown unless a randomness source is named; its `js` feature
+# likewise routes it to Web Crypto.
+# Only feature pins on transitively-present crates, hence the cargo-machete
+# ignore above and the scripts/check_wasm_rng_backend.sh guard.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+uuid = { version = "1.29", features = ["js"] }
 
 [dev-dependencies]
 # run `cargo test` to enable this
