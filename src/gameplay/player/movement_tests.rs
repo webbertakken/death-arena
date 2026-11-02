@@ -568,7 +568,10 @@ mod tests {
             "empty_handed={empty_handed_y}, carrier={carrier_y}"
         );
         assert!(
-            (carrier_y - empty_handed_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
+            empty_handed_y
+                .mul_add(-FLAG_CARRIER_SPEED_MULTIPLIER, carrier_y)
+                .abs()
+                <= 1e-3,
             "carrier should move at the flag-carrier multiplier: \
              empty_handed={empty_handed_y}, carrier={carrier_y}"
         );
@@ -613,7 +616,7 @@ mod tests {
             "open={open_y}, wall={wall_y}"
         );
         assert!(
-            (wall_y - open_y * scrape).abs() <= 1e-3,
+            open_y.mul_add(-scrape, wall_y).abs() <= 1e-3,
             "a wall-jammed human should drive at the scrape multiplier: \
              open={open_y}, wall={wall_y}, scrape={scrape}"
         );
@@ -674,7 +677,7 @@ mod tests {
             "level={level_y}, trailing={trailing_y}"
         );
         assert!(
-            (trailing_y - level_y * catch_up).abs() <= 1e-3,
+            level_y.mul_add(-catch_up, trailing_y).abs() <= 1e-3,
             "a trailing human should drive at the catch-up multiplier: \
              level={level_y}, trailing={trailing_y}, catch_up={catch_up}"
         );
@@ -792,7 +795,7 @@ mod tests {
         assert!(rally > 1.0, "the fixture must actually rally, got {rally}");
         assert!(stolen_y > safe_y, "safe={safe_y}, stolen={stolen_y}");
         assert!(
-            (stolen_y - safe_y * rally).abs() <= 1e-3,
+            safe_y.mul_add(-rally, stolen_y).abs() <= 1e-3,
             "a human whose flag is stolen should drive at the rally multiplier: \
              safe={safe_y}, stolen={stolen_y}, rally={rally}"
         );
@@ -907,7 +910,7 @@ mod tests {
         );
         assert!(escort_y > calm_y, "calm={calm_y}, escort={escort_y}");
         assert!(
-            (escort_y - calm_y * escort_mult).abs() <= 1e-3,
+            calm_y.mul_add(-escort_mult, escort_y).abs() <= 1e-3,
             "a human escorting a teammate's capture should drive at the escort multiplier: \
              calm={calm_y}, escort={escort_y}, escort_mult={escort_mult}"
         );

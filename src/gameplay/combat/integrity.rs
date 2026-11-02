@@ -463,7 +463,10 @@ mod tests {
             flag: Entity::from_raw(5),
             carrier_team: AiTeam::Blue,
         }];
-        assert!(flags_dropped_by_wrecks(&carried, WreckEvents::default()).is_empty());
+        assert_eq!(
+            flags_dropped_by_wrecks(&carried, WreckEvents::default()),
+            Vec::<Entity>::new()
+        );
     }
 
     #[test]

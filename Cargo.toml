@@ -14,11 +14,11 @@ ignored = ["getrandom", "uuid"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-rand = "0.10"
+rand = "0.8"
 log = "0.4.29"
 dotenvy = "0.15.7"
 serde = "1.0.228"
-bevy = { version = "0.20.0", default-features = false, features = [
+bevy = { version = "0.9.1", default-features = false, features = [
   "bevy_asset",
   "bevy_winit",
   "render",
@@ -26,10 +26,10 @@ bevy = { version = "0.20.0", default-features = false, features = [
   "jpeg",
   "x11"
 ] }
-ron = { version = "0.12.0" }
+ron = { version = "0.7.1" }
 serde_json = { version = "1.0.149" }
 kira = { version = "0.12.5", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis"] }
-bevy_common_assets = { version = "0.18.0", features = ["json"] }
+bevy_common_assets = { version = "0.4.0", features = ["json"] }
 # tempfix: pinned to the exact fork commit (the head of `bevy-0.9` at pin time),
 # not the moving branch, so a cargo update cannot silently swap the physics engine
 # under an unchanged codebase. Bumping it is a deliberate, reviewed manifest edit.
@@ -47,7 +47,7 @@ bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", rev = "3faba
 # Only feature pins on transitively-present crates, hence the cargo-machete
 # ignore above and the scripts/check_wasm_rng_backend.sh guard.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.4", features = ["js"] }
+getrandom = { version = "0.2", features = ["js"] }
 uuid = { version = "1.29", features = ["js"] }
 
 [dev-dependencies]

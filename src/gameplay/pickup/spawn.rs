@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn layout_is_not_empty() {
-        assert!(!pickup_layout().is_empty());
+        assert_ne!(pickup_layout(), Vec::<(PickupKind, Vec2)>::new());
     }
 
     #[test]

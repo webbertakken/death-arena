@@ -295,7 +295,9 @@ pub fn pickup_respawn_system(
 mod tests {
     use super::*;
     use crate::gameplay::ctf::{CtfMatchResult, CtfMatchWinner};
-    use crate::gameplay::pickup::{PICKUP_RESPAWN_FRAMES, UTILITY_PICKUP_RESPAWN_FRAMES};
+    use crate::gameplay::pickup::{
+        PendingPickupRespawn, PICKUP_RESPAWN_FRAMES, UTILITY_PICKUP_RESPAWN_FRAMES,
+    };
     use crate::gameplay::virtual_player::ai::AiTeam;
 
     fn test_player() -> Player {
@@ -867,7 +869,10 @@ mod tests {
         );
         assert_eq!(app.world.resource::<Score>().collected, 0);
         assert_eq!(app.world.resource::<Score>().cash, 0);
-        assert!(app.world.resource::<PickupRespawns>().pending.is_empty());
+        assert_eq!(
+            app.world.resource::<PickupRespawns>().pending,
+            Vec::<PendingPickupRespawn>::new()
+        );
     }
 
     #[test]
@@ -879,7 +884,7 @@ mod tests {
         let ready = advance_respawns(&mut respawns);
 
         assert_eq!(ready, vec![(PickupKind::Repair, Vec2::new(-12.0, 34.0))]);
-        assert!(respawns.pending.is_empty());
+        assert_eq!(respawns.pending, Vec::<PendingPickupRespawn>::new());
     }
 
     #[test]
@@ -889,7 +894,7 @@ mod tests {
 
         let ready = advance_respawns(&mut respawns);
 
-        assert!(ready.is_empty());
+        assert_eq!(ready, Vec::<(PickupKind, Vec2)>::new());
         assert_eq!(respawns.pending.len(), 1);
         assert_eq!(
             respawns.pending[0].frames_remaining,
