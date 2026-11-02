@@ -1,4 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>webbertakken/.github:renovate-config"]
+  "extends": ["local>webbertakken/.github:renovate-config"],
+  "customManagers": [
+    {
+      "description": "Keep the dtolnay/rust-toolchain@<version> workflow pins in step with rust-toolchain.toml (scripts/check_toolchain_pin.sh fails CI on any drift)",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["uses: dtolnay/rust-toolchain@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "rust",
+      "datasourceTemplate": "rust-version"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Hold back the Bevy engine family: every Bevy 0.x minor is breaking, and bevy_rapier2d is a fork pinned to Bevy 0.9. bevy_common_assets and ron follow Bevy; rand and getrandom move with it (the wasm entropy pin). They move together in a planned engine migration, not a routine bump",
+      "matchPackageNames": ["bevy", "bevy_common_assets", "ron", "rand", "getrandom"],
+      "enabled": false
+    }
+  ]
 }
