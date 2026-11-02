@@ -528,7 +528,10 @@ fn carrying_the_enemy_flag_slows_a_virtual_player() {
         "free={free_y}, carrier={carrier_y}"
     );
     assert!(
-        (carrier_y - free_y * FLAG_CARRIER_SPEED_MULTIPLIER).abs() <= 1e-3,
+        free_y
+            .mul_add(-FLAG_CARRIER_SPEED_MULTIPLIER, carrier_y)
+            .abs()
+            <= 1e-3,
         "carrier should drive at the flag-carrier multiplier: free={free_y}, carrier={carrier_y}"
     );
 }
@@ -661,7 +664,7 @@ fn grinding_a_wall_scrubs_a_virtual_players_speed() {
         "open={open_y}, wall={wall_y}"
     );
     assert!(
-        (wall_y - open_y * scrape).abs() <= 1e-3,
+        open_y.mul_add(-scrape, wall_y).abs() <= 1e-3,
         "a wall-jammed car should drive at the scrape multiplier: \
              open={open_y}, wall={wall_y}, scrape={scrape}"
     );
@@ -710,7 +713,7 @@ fn a_trailing_teams_catch_up_speeds_a_virtual_player() {
         "level={level_y}, trailing={trailing_y}"
     );
     assert!(
-        (trailing_y - level_y * catch_up).abs() <= 1e-3,
+        level_y.mul_add(-catch_up, trailing_y).abs() <= 1e-3,
         "a trailing team's chaser should drive at the catch-up multiplier: \
              level={level_y}, trailing={trailing_y}, catch_up={catch_up}"
     );

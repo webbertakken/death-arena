@@ -26,8 +26,9 @@
 pub const ARENAS: [&str; 1] = ["textures/church-ctf.2dtf"];
 
 /// The rotation must never be empty, so [`select_arena`]'s modulo can never divide
-/// by zero, enforced at compile time.
-const _: () = assert!(!ARENAS.is_empty());
+/// by zero, enforced at compile time: indexing the first arena of an empty
+/// rotation fails const evaluation.
+const _: &str = ARENAS[0];
 
 /// Picks the arena a match loads from [`ARENAS`], wrapping `roll` across the list.
 ///
@@ -49,7 +50,7 @@ mod tests {
     fn the_rotation_is_never_empty() {
         // The match-start roll divides by this length; an empty rotation would
         // panic at runtime, so the rotation must always offer at least one arena.
-        assert!(!ARENAS.is_empty());
+        assert_ne!(ARENAS.as_slice(), &[] as &[&str]);
     }
 
     #[test]

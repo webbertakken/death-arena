@@ -8,7 +8,7 @@
 # checkout is ready without the manual `rustup` steps in DEVELOPMENT.md.
 # Bumping this version is a deliberate, reviewed step (see the upgrades rule).
 [toolchain]
-channel = "1.95.0"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]
 profile = "minimal"

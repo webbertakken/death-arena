@@ -122,7 +122,7 @@ pub fn load_sprites_from_scene(
         .sprites
         .iter()
         .map(|sprite| -> String {
-            let file_path = format!("textures/{}", &sprite.relative_path);
+            let file_path = format!("textures/{}", sprite.relative_path);
 
             let file_path_without_ext = file_path.split('.').next().unwrap_or("");
             let collider_file_path = format!("{file_path_without_ext}.collider");
