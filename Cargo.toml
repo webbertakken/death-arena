@@ -34,7 +34,7 @@ bevy_common_assets = { version = "0.4.0", features = ["json"] }
 # not the moving branch, so a cargo update cannot silently swap the physics engine
 # under an unchanged codebase. Bumping it is a deliberate, reviewed manifest edit.
 # Guarded by scripts/check_git_dep_pinned.sh.
-bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", rev = "3fabadc0503835caf1e9dc2be1d4da8825046f92", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0"
+bevy_rapier2d = { git = "https://github.com/devil-ira/bevy_rapier", rev = "83975ce0f26171e628a703f9db1c7873343befcc", features = [ "enhanced-determinism", "wasm-bindgen", "debug-render" ] } # version = "0.18.0"
 
 # The browser (wasm32-unknown-unknown) build has no OS entropy source. `rand`
 # pulls entropy through `getrandom`, whose default wasm backend is `Unsupported`,
