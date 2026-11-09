@@ -13,8 +13,8 @@
   ],
   "packageRules": [
     {
-      "description": "Hold back the Bevy engine family: every Bevy 0.x minor is breaking, and bevy_rapier2d is a fork pinned to Bevy 0.9. bevy_common_assets and ron follow Bevy; rand and getrandom move with it (the wasm entropy pin). They move together in a planned engine migration, not a routine bump",
-      "matchPackageNames": ["bevy", "bevy_common_assets", "ron", "rand", "getrandom"],
+      "description": "Hold back the Bevy engine family: every Bevy 0.x minor is breaking, and bevy_rapier2d is a fork pinned to Bevy 0.9 whose default branch lags the pinned commit, so its digest updates are downgrades. bevy_common_assets and ron follow Bevy; rand and getrandom move with it (the wasm entropy pin). They move together in a planned engine migration, not a routine bump",
+      "matchPackageNames": ["bevy", "bevy_rapier2d", "bevy_common_assets", "ron", "rand", "getrandom"],
       "enabled": false
     }
   ]
