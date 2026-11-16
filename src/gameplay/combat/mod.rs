@@ -711,22 +711,17 @@ pub fn ram_damage_system(
         car_teams.push((entity, virtual_player.team));
     }
 
-    let boost = nitro_boosts
-        .as_deref()
-        .map(RamBoost::from_nitro)
-        .unwrap_or_default();
+    let boost = nitro_boosts.as_deref().map_or_default(RamBoost::from_nitro);
     let shield = armour_boosts
         .as_deref()
-        .map(RamShield::from_armour)
-        .unwrap_or_default();
+        .map_or_default(RamShield::from_armour);
     // Read the surge state *before* this frame's wreck is resolved, so only a
     // surge earned by a *prior* kill bites this frame: a team that wrecks an enemy
     // this frame surges from the next one on.
     let surge = wreck_surges
         .as_deref()
         .copied()
-        .map(RamSurge::from_surges)
-        .unwrap_or_default();
+        .map_or_default(RamSurge::from_surges);
     let damage = frame_ram_damage(&cars, boost, surge, shield, BOUNDS / 2.0);
 
     let before = *integrity;

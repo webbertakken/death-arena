@@ -133,7 +133,7 @@ fn front_runner_commitment_scale(corner_throttle: f32) -> f32 {
 const _: () = assert!(
     crate::gameplay::ctf::FLAG_CARRIER_SPEED_MULTIPLIER
         * (1.0 - crate::gameplay::carry_fatigue::CARRY_FATIGUE_MAX_SPEED_PENALTY)
-        * (1.0 - FRONT_RUNNER_MAX_SPEED_PENALTY * FRONT_RUNNER_COMMITMENT_SCALE_MAX)
+        * FRONT_RUNNER_MAX_SPEED_PENALTY.mul_add(-FRONT_RUNNER_COMMITMENT_SCALE_MAX, 1.0)
         > crate::gameplay::combat::MIN_INTEGRITY_SPEED_MULTIPLIER
 );
 
